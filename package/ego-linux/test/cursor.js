@@ -40,10 +40,16 @@ console.log("6. overlay in snapshot:  " + snap.content.includes("ego-agent-curso
 
 // A wheel carries coordinates that default to (0, 0) but moves no pointer:
 // following them would snap the cursor into the corner on every scroll.
+// The move first is not decoration: the snapshot above started a read sweep,
+// which walks the cursor along the page for its own reasons, and this would
+// otherwise measure that instead of the wheel.
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(300);
+const beforeWheel = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
 await page.mouse.wheel(0, 200);
 await page.waitForTimeout(200);
 const afterScroll = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
-console.log("7. cursor held on wheel: " + (afterScroll === transform));
+console.log("7. cursor held on wheel: " + (afterScroll === beforeWheel));
 
 // Press and release are asserted apart, because a click's own press lasts 25ms
 // — the held floor is what makes it visible, not something a test can catch.
@@ -135,10 +141,25 @@ await ego.clearHighlight();
 await page.waitForTimeout(200);
 console.log("22. cleared:             " + ((await bandCount()) === 0));
 
+// Reading is most of what an agent does and it dispatches no input at all, so
+// a sweep is the only thing that tells a watcher what was taken in. It runs
+// itself inside the page, which is why this waits rather than awaits.
+await page.snapshotRaw({ scope: "full_page" });
+await page.waitForTimeout(300);
+console.log("23. says what it reads:  " + (await badgeText()));
+console.log("24. marks the lines:     " + ((await bandCount()) > 0));
+
+// Real input outranks the narration of a read that has already happened —
+// including a move back to where the harness last left the cursor.
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(150);
+const sweepDone = await probe(`document.getElementById('ego-agent-cursor-overlay').__egoSweep.done`);
+console.log("25. input ends the read: " + sweepDone);
+
 // The trail the Spaces panel reads: transitions, not events, so a burst of
 // keystrokes is one entry rather than sixty.
 const trail = await probe(`(() => {
   const log = document.getElementById('ego-agent-cursor-overlay').__egoLog || [];
   return log.map(e => e.text).join(' | ');
 })()`);
-console.log("23. trail:               " + trail);
+console.log("26. trail:               " + trail);

@@ -132,6 +132,27 @@ It is deliberately unable to interfere with the automation it illustrates:
 It *is* drawn into screenshots, which is usually what you want and occasionally
 not: `EGO_LINUX_CURSOR=0` turns it off.
 
+### Watching it read
+
+Snapshotting is most of what an agent does, and it dispatches no input at all —
+so a window where the agent was reading showed a cursor parked in a corner under
+a badge that said "reading". True, but it never said *what*, which is the one
+thing someone watching wants to know.
+
+Every snapshot now starts a **read sweep**: the cursor walks the lines that are
+actually on screen, marking each one as it passes and naming it in the badge
+(`Claude · reading "…"`). The marks are lighter than the highlighter's and fade
+behind the cursor, because reading is constant and its marks should not pile up.
+
+The sweep runs entirely inside the page. A CDP round trip per line would cost
+more than the snapshot it illustrates, and the heredoc that triggered it has
+usually exited before the last line is drawn. It gives up after about two and a
+half seconds, and any real input — a click, a keystroke, the next read, an
+explicit `highlight()` — takes the cursor back from it immediately, mid-line.
+
+It also keeps the state the Spaces overview polls moving, so a space whose agent
+is reading no longer looks like a space whose agent walked away.
+
 ### The highlighter
 
 `ego` is a global inside a heredoc, so the port adds one thing the upstream API
