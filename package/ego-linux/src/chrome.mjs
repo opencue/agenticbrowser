@@ -111,20 +111,39 @@ async function writeBrowserState(state) {
   await writeFile(BROWSER_STATE_FILE, JSON.stringify(state, null, 2));
 }
 
-/** Poll for Chrome's port file; it appears a beat after the process starts. */
-async function waitForPortFile(profileDir, timeoutMs = 20000) {
+/**
+ * Poll for a DevTools endpoint that answers.
+ *
+ * The port file appears a beat after the process starts, and Chrome does not
+ * necessarily write it once: a launch that loses the ProcessSingleton race is
+ * restarted internally, and the process that survives publishes a different
+ * port. Probing whatever the file said first therefore names a port that never
+ * listens — so re-read it on every attempt and keep probing until one answers.
+ */
+export async function waitForEndpoint(profileDir, { timeoutMs = 20000 } = {}) {
   const path = join(profileDir, PORT_FILE);
   const deadline = Date.now() + timeoutMs;
+  let lastPort = null;
   while (Date.now() < deadline) {
+    let port = null;
     try {
-      const [port] = (await readFile(path, "utf8")).split("\n");
-      if (port && port.trim()) return Number(port.trim());
+      const [line] = (await readFile(path, "utf8")).split("\n");
+      port = Number(line.trim()) || null;
     } catch {
       // not written yet
     }
+    if (port) {
+      lastPort = port;
+      const wsUrl = await probe(port);
+      if (wsUrl) return { port, wsUrl };
+    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Chrome did not expose a DevTools port within ${timeoutMs}ms`);
+  throw new Error(
+    lastPort
+      ? `Chrome came up on port ${lastPort} but exposed no WebSocket URL within ${timeoutMs}ms`
+      : `Chrome did not expose a DevTools port within ${timeoutMs}ms`,
+  );
 }
 
 /**
@@ -236,11 +255,7 @@ async function launch({ headless }) {
   });
   child.unref();
 
-  const port = await waitForPortFile(PROFILE_DIR);
-  const wsUrl = await probe(port);
-  if (!wsUrl) {
-    throw new Error(`Chrome came up on port ${port} but exposed no WebSocket URL`);
-  }
+  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR);
   await writeBrowserState({
     port,
     wsUrl,
