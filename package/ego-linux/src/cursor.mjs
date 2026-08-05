@@ -54,6 +54,8 @@ export function createCursorApi(cdp, { listTabs }) {
     placed: false,
     pressed: false,
     typing: false,
+    note: "",
+    highlight: null,
   };
   let dirty = false;
   let pendingPulse = false;
@@ -63,6 +65,9 @@ export function createCursorApi(cdp, { listTabs }) {
   let typingTimer = null;
   let labelX = null;
   let labelY = null;
+  let highlightId = 0;
+
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   function placeAt(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -102,6 +107,8 @@ export function createCursorApi(cdp, { listTabs }) {
           placed: state.placed,
           pressed: state.pressed,
           typing: state.typing,
+          note: state.note,
+          highlight: state.highlight,
           pulse: pendingPulse,
         };
         pendingPulse = false;
@@ -220,6 +227,79 @@ export function createCursorApi(cdp, { listTabs }) {
       schedule();
     },
 
+    /**
+     * Draw a marker over some text, the way you would to explain it.
+     *
+     * `target` is a CSS selector, or the text itself — a string is tried as a
+     * selector first and searched for as text if that finds nothing, so both
+     * `highlight("#total")` and `highlight("free shipping")` do the obvious
+     * thing. `{selector}` or `{text}` forces one.
+     *
+     * The bands are an overlay, never a real selection: selecting text for the
+     * look of it would fight the agent's own work on the page.
+     *
+     * @param {string|{selector?: string, text?: string}} target
+     * @param {{note?: string}} [options] Text to show next to the cursor while drawing.
+     * @returns {Promise<{done: boolean, lines: number}>}
+     */
+    async highlight(target, options = {}) {
+      if (!enabled) return { done: false, lines: 0, reason: "cursor disabled" };
+      const request =
+        typeof target === "string"
+          ? { selector: target, text: target }
+          : { selector: target?.selector || "", text: target?.text || "" };
+
+      let found;
+      try {
+        const sessionId = await sessionForActiveTab();
+        const { result } = await cdp.call(
+          "Runtime.evaluate",
+          {
+            expression: `(${resolveHighlight.toString()})(${JSON.stringify(request)})`,
+            returnByValue: true,
+            awaitPromise: false,
+          },
+          sessionId,
+        );
+        found = result?.value;
+      } catch {
+        return { done: false, lines: 0 };
+      }
+      if (!found || !found.rects?.length) return { done: false, lines: 0 };
+
+      state.note = String(options.note ?? "").slice(0, 120);
+      highlightId += 1;
+      state.highlight = { id: highlightId, rects: found.rects, upTo: -1 };
+
+      // Walk the cursor along each line as its band draws, so the marker looks
+      // drawn rather than pasted. The caller awaits this: it is an explanation,
+      // and an explanation you cannot see happen is just a screenshot.
+      for (let index = 0; index < found.rects.length; index += 1) {
+        const rect = found.rects[index];
+        const baseline = rect.y + rect.height - found.scrollY;
+        state.x = rect.x - found.scrollX;
+        state.y = baseline;
+        state.placed = true;
+        state.highlight.upTo = index;
+        schedule();
+        await wait(Math.round(rect.ms * 0.2));
+        state.x = rect.x + rect.width - found.scrollX;
+        state.y = baseline;
+        schedule();
+        await wait(rect.ms);
+      }
+      return { done: true, lines: found.rects.length };
+    },
+
+    /** Wipe the marker off again. */
+    clearHighlight() {
+      if (!enabled) return { done: false, reason: "cursor disabled" };
+      state.highlight = null;
+      state.note = "";
+      schedule();
+      return { done: true };
+    },
+
     /** Hidden while the space belongs to the user (handOffTaskSpace). */
     hide() {
       if (!enabled) return;
@@ -236,6 +316,69 @@ export function createCursorApi(cdp, { listTabs }) {
       schedule();
     },
   };
+}
+
+/**
+ * Find what to draw the marker over, and measure it line by line.
+ *
+ * Serialized into the page like the renderer. A Range is what gives one box per
+ * *line* rather than one for the whole paragraph — which is the difference
+ * between a pen stroke and a coloured rectangle.
+ */
+function resolveHighlight(request) {
+  let range = null;
+
+  if (request.selector) {
+    let element = null;
+    try {
+      element = document.querySelector(request.selector);
+    } catch {
+      element = null; // a text query is rarely also valid CSS
+    }
+    if (element) {
+      range = document.createRange();
+      range.selectNodeContents(element);
+    }
+  }
+
+  if (!range && request.text) {
+    const needle = request.text.trim().toLowerCase();
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      const parent = node.parentElement;
+      if (!parent || !parent.getClientRects().length) continue;
+      const at = (node.nodeValue || "").toLowerCase().indexOf(needle);
+      if (at === -1) continue;
+      range = document.createRange();
+      range.setStart(node, at);
+      range.setEnd(node, at + needle.length);
+      break;
+    }
+  }
+
+  if (!range) return { rects: [], scrollX: window.scrollX, scrollY: window.scrollY };
+
+  // A marker nobody can see explains nothing, so bring it on screen first.
+  const first = range.getBoundingClientRect();
+  if (first.bottom < 0 || first.top > window.innerHeight) {
+    const anchor = range.startContainer.parentElement;
+    anchor?.scrollIntoView({ block: "center" });
+  }
+
+  const rects = [];
+  for (const rect of range.getClientRects()) {
+    if (rect.width < 2 || rect.height < 2) continue;
+    rects.push({
+      x: rect.left + window.scrollX,
+      y: rect.top + window.scrollY,
+      width: rect.width,
+      height: rect.height,
+      // Long lines take longer to draw, the way a real stroke would.
+      ms: Math.min(700, Math.max(160, Math.round(rect.width * 1.7))),
+    });
+  }
+  return { rects, scrollX: window.scrollX, scrollY: window.scrollY };
 }
 
 /**
@@ -318,6 +461,14 @@ function renderOverlay(payload) {
       // its own, leaving #pointer's transition free to animate agent movement —
       // one element carrying both would make scrolling look rubbery.
       "#layer{position:absolute;left:0;top:0}" +
+      // Marker bands, one per line of text, drawn in page coordinates so they
+      // stay on their words when the page scrolls. Each wipes in from its own
+      // left edge — a pen stroke, not a rectangle appearing.
+      "#bands{position:absolute;left:0;top:0}" +
+      ".band{position:absolute;left:0;top:0;width:0;border-radius:3px;" +
+      "background:linear-gradient(180deg,rgba(217,119,87,.34),rgba(217,119,87,.22));" +
+      "box-shadow:0 0 0 1px rgba(217,119,87,.22);" +
+      "transition:width 260ms cubic-bezier(.33,.9,.5,1)}" +
       "#pointer{position:absolute;left:0;top:0;" +
       "transition:transform 200ms cubic-bezier(.22,.61,.36,1);will-change:transform}" +
       "#ring{position:absolute;left:0;top:0;border:2px solid " +
@@ -358,6 +509,7 @@ function renderOverlay(payload) {
       "svg.shape.on{display:block}" +
       "</style>" +
       '<div id="layer">' +
+      '<div id="bands"></div>' +
       '<div id="ring"></div>' +
       '<div id="pointer">' +
       '<div id="pulse"></div>' +
@@ -448,7 +600,9 @@ function renderOverlay(payload) {
   showShape(shadow, payload.typing ? "beam" : shapeFor(under));
 
   const badge = shadow.getElementById("badge");
-  const detail = payload.typing ? "typing…" : payload.label || describe(subject);
+  const detail = payload.typing
+    ? "typing…"
+    : payload.note || payload.label || describe(subject);
   shadow.getElementById("text").textContent = detail
     ? payload.name + " · " + detail
     : payload.name;
@@ -477,6 +631,38 @@ function renderOverlay(payload) {
       "px," +
       (focused.top + window.scrollY) +
       "px,0)";
+  }
+
+  // Marker bands. Each is created at zero width and given its real width on the
+  // same frame, so the CSS transition draws it on rather than snapping it in.
+  // They are created only as the sweep reaches them, which is what makes the
+  // cursor look like it is doing the drawing.
+  const bands = shadow.getElementById("bands");
+  const marks = payload.highlight ? payload.highlight.rects : [];
+  if (!marks.length) {
+    bands.replaceChildren();
+    bands.__egoId = 0;
+  } else {
+    // A new highlight replaces the old one. Without the generation check the
+    // previous stroke's bands would be reused for it, and the second highlight
+    // of a session would silently draw nothing.
+    if (bands.__egoId !== payload.highlight.id) {
+      bands.replaceChildren();
+      bands.__egoId = payload.highlight.id;
+    }
+    for (let index = 0; index < marks.length; index += 1) {
+      if (index > payload.highlight.upTo || bands.children[index]) continue;
+      const rect = marks[index];
+      const band = document.createElement("div");
+      band.className = "band";
+      band.style.height = rect.height + "px";
+      band.style.transform =
+        "translate3d(" + rect.x + "px," + rect.y + "px,0)";
+      band.style.transitionDuration = rect.ms + "ms";
+      bands.appendChild(band);
+      void band.offsetWidth; // let the zero width land before the real one
+      band.style.width = rect.width + "px";
+    }
   }
 
   if (payload.pulse) {

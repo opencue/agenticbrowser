@@ -79,6 +79,12 @@ export async function createEgoShim({ headless = false } = {}) {
     animationHighlightMouseToPosition: (x, y) => cursor.moveTo(x, y),
     setAgentTaskState: (taskState) => cursor.setTaskState(taskState),
 
+    // Not upstream surface: a Linux-port extension an agent calls directly to
+    // show a human what it is talking about. `ego` is a global in the heredoc,
+    // so this reads as `await ego.highlight("free shipping")`.
+    highlight: (target, options) => cursor.highlight(target, options),
+    clearHighlight: () => cursor.clearHighlight(),
+
     // --- App-lifecycle: no-ops on Linux -------------------------------------
     async getBrowserVersion() {
       const version = await cdp.call("Browser.getVersion");
