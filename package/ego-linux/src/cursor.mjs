@@ -6,8 +6,9 @@ import { createSessionResolver } from "./session.mjs";
  * The native macOS app draws this itself, over the web view; on Linux the page
  * is the only surface the shim controls, so the cursor is a DOM overlay
  * injected into whichever page the harness is currently acting on. It follows
- * every pointer position the harness sends, pulses where it clicks, and carries
- * the agent's current task state as a label.
+ * every pointer position the harness sends, presses and springs back when a
+ * button goes down and up, ripples where it clicks, and carries the agent's
+ * current task state as a label.
  *
  * Two properties keep it from interfering with the automation it illustrates:
  *
@@ -31,6 +32,9 @@ import { createSessionResolver } from "./session.mjs";
 const HOST_ID = "ego-agent-cursor-overlay";
 const ACCENT = "#d97757";
 
+/** How long the pressed look is held, however briefly the button was down. */
+const MIN_PRESS_MS = 130;
+
 export function createCursorApi(cdp, { listTabs }) {
   const enabled = process.env.EGO_LINUX_CURSOR !== "0";
   const name = process.env.EGO_LINUX_CURSOR_NAME || "Claude";
@@ -39,10 +43,19 @@ export function createCursorApi(cdp, { listTabs }) {
     op: "cursor",
   });
 
-  const state = { x: 0, y: 0, label: "", visible: true, placed: false };
+  const state = { x: 0, y: 0, label: "", visible: true, placed: false, pressed: false };
   let dirty = false;
   let pendingPulse = false;
   let inFlight = false;
+  let pressedAt = 0;
+  let releaseTimer = null;
+
+  function placeAt(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    state.x = x;
+    state.y = y;
+    state.placed = true;
+  }
 
   /**
    * Coalesce renders: a drag dispatches mouse moves far faster than a CDP round
@@ -69,6 +82,7 @@ export function createCursorApi(cdp, { listTabs }) {
           accent: ACCENT,
           hostId: HOST_ID,
           visible: state.visible && state.placed,
+          pressed: state.pressed,
           pulse: pendingPulse,
         };
         pendingPulse = false;
@@ -116,16 +130,44 @@ export function createCursorApi(cdp, { listTabs }) {
       return { done: true };
     },
 
-    /** A click landed here: place the cursor and ripple. */
-    pulseAt(x, y) {
+    /** A button went down here: hold the cursor pressed, and ripple. */
+    press(x, y) {
       if (!enabled) return;
-      if (Number.isFinite(x) && Number.isFinite(y)) {
-        state.x = x;
-        state.y = y;
-        state.placed = true;
-      }
+      placeAt(x, y);
+      clearTimeout(releaseTimer);
+      state.pressed = true;
+      pressedAt = Date.now();
       pendingPulse = true;
       schedule();
+    },
+
+    /**
+     * The button came back up. A click's press and release are 25ms apart, which
+     * is too short to read as anything, so the pressed look is held for a floor
+     * of MIN_PRESS_MS. A drag releases long after that floor and springs back at
+     * once.
+     */
+    release(x, y) {
+      if (!enabled) return;
+      placeAt(x, y);
+      if (!state.pressed) {
+        schedule();
+        return;
+      }
+      const remaining = MIN_PRESS_MS - (Date.now() - pressedAt);
+      if (remaining <= 0) {
+        state.pressed = false;
+        schedule();
+        return;
+      }
+      schedule(); // the new position now; the spring back on its own schedule
+      clearTimeout(releaseTimer);
+      releaseTimer = setTimeout(() => {
+        state.pressed = false;
+        schedule();
+      }, remaining);
+      // A heredoc is a short-lived process; never hold it open for a flourish.
+      releaseTimer.unref?.();
     },
 
     /** Hidden while the space belongs to the user (handOffTaskSpace). */
@@ -222,7 +264,14 @@ function renderOverlay(payload) {
       "#pointer{position:absolute;left:0;top:0;" +
       "transition:transform 200ms cubic-bezier(.22,.61,.36,1);will-change:transform}" +
       "#arrow{position:absolute;left:-1px;top:-1px;display:block;" +
+      // Scaled about its own tip, so pressing squashes the arrow without
+      // moving the point it is aiming at. Down is fast and flat; the spring
+      // back overshoots, which is what makes it read as a button release.
+      "transform-origin:2px 2px;" +
+      "transition:transform 190ms cubic-bezier(.34,1.56,.64,1);" +
       "filter:drop-shadow(0 2px 5px rgba(0,0,0,.35))}" +
+      "#pointer.press #arrow{transform:scale(.76);" +
+      "transition:transform 70ms cubic-bezier(.4,0,1,1)}" +
       "#pulse{position:absolute;left:-19px;top:-19px;width:38px;height:38px;" +
       "border-radius:50%;border:2px solid " +
       payload.accent +
@@ -260,6 +309,7 @@ function renderOverlay(payload) {
   const pointer = shadow.getElementById("pointer");
   pointer.style.transform =
     "translate3d(" + payload.x + "px," + payload.y + "px,0)";
+  pointer.classList.toggle("press", Boolean(payload.pressed));
 
   const badge = shadow.getElementById("badge");
   shadow.getElementById("text").textContent = payload.label

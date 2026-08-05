@@ -44,3 +44,15 @@ await page.mouse.wheel(0, 200);
 await page.waitForTimeout(200);
 const afterScroll = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
 console.log("7. cursor held on wheel: " + (afterScroll === transform));
+
+// Press and release are asserted apart, because a click's own press lasts 25ms
+// — the held floor is what makes it visible, not something a test can catch.
+const pressState = () => probe(`${SHADOW}.getElementById('pointer').className`);
+await page.mouse.move(center.x, center.y);
+await page.mouse.down();
+await page.waitForTimeout(80);
+console.log("8. pressed on down:      " + ((await pressState()) === "press"));
+
+await page.mouse.up();
+await page.waitForTimeout(400);
+console.log("9. released on up:       " + ((await pressState()) === ""));
