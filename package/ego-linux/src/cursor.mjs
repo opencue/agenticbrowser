@@ -57,6 +57,10 @@ export function createCursorApi(cdp, { listTabs }) {
     note: "",
     highlight: null,
   };
+  // Where the cursor rests on a page it has only read, never touched.
+  const RESTING_X = 28;
+  const RESTING_Y = 28;
+  let previousLabel = "";
   let dirty = false;
   let pendingPulse = false;
   let inFlight = false;
@@ -142,9 +146,53 @@ export function createCursorApi(cdp, { listTabs }) {
       state.x = x;
       state.y = y;
       state.placed = true;
+      if (state.label === "reading") state.label = "";
       schedule();
       return { done: true };
     },
+
+    /**
+     * The agent is reading the page rather than touching it.
+     *
+     * Reading is most of what an agent does — open a page, snapshot it, decide —
+     * and none of it dispatches a pointer event, so until now the overlay simply
+     * never appeared: watching a session work looked like nothing was happening.
+     * Placing the cursor on the first read gives the badge (which already
+     * breathes) something to attach to, so reading reads as activity.
+     *
+     * The resting spot is only used when no click has placed the cursor yet; a
+     * cursor that has been somewhere stays there, because jumping it to a corner
+     * on every snapshot would lose where the agent actually was.
+     */
+    reading(label = "reading") {
+      if (!enabled) return { done: false, reason: "cursor disabled" };
+      if (!state.placed) {
+        state.x = RESTING_X;
+        state.y = RESTING_Y;
+        state.placed = true;
+      }
+      previousLabel = state.label;
+      if (state.label !== label) state.label = label;
+      schedule();
+      return { done: true };
+    },
+
+    /**
+     * The label persists until a different activity replaces it.
+     *
+     * A snapshot completes in milliseconds, so clearing the label when the read
+     * returned made "reading" flash for less than a frame — the badge just read
+     * "Claude". Leaving it up means the window always says what the agent last
+     * did, which is what makes an idle-looking window legible. moveTo and
+     * pulseAt take it down again when real input arrives.
+     */
+    clearReadingLabel() {
+      if (state.label !== "reading") return;
+      state.label = previousLabel === "reading" ? "" : previousLabel || "";
+      schedule();
+    },
+
+    /** Back ego.setAgentTaskState(label) — the text shown next to the cursor. */
 
     /**
      * Back ego.setAgentTaskState(label).

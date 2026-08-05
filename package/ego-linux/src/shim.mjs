@@ -53,7 +53,17 @@ export async function createEgoShim({ headless = false } = {}) {
     createTab: (url) => taskSpaces.createTabInSelectedSpace(tabs, url),
 
     // --- Observation --------------------------------------------------------
-    snapshot: snapshot.snapshot,
+    // Reading is most of what an agent does, and none of it dispatches pointer
+    // events — so a session that only opened pages and snapshotted them drew no
+    // cursor at all, and looked idle. Showing the read is what makes the window
+    // legible while the agent is thinking rather than clicking.
+    // The label is deliberately left up afterwards: a snapshot returns in
+    // milliseconds, so clearing it on completion made "reading" flash for less
+    // than a frame. moveTo and pulseAt take it down when real input arrives.
+    async snapshot(options) {
+      cursor.reading();
+      return snapshot.snapshot(options);
+    },
 
     // --- Task spaces --------------------------------------------------------
     listTaskSpaces: taskSpaces.listTaskSpaces,
