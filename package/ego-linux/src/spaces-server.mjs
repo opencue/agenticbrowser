@@ -203,11 +203,18 @@ export async function startSpacesServer(shim) {
       return;
     }
 
-    const match = /^\/api\/spaces\/(\d+)\/(use|close)$/.exec(url.pathname);
+    // takeover / stop are the panel's half of the ownership handshake the
+    // native app puts on its Space overlay: stop hands the space back to you
+    // (the agent's cursor goes away), takeover claims it for the agent again.
+    const match = /^\/api\/spaces\/(\d+)\/(use|close|stop|takeover)$/.exec(url.pathname);
     if (request.method === "POST" && match) {
       const id = Number(match[1]);
       if (match[2] === "use") {
         await ego.useTaskSpace(id);
+      } else if (match[2] === "stop") {
+        await ego.handOffTaskSpace(id);
+      } else if (match[2] === "takeover") {
+        await ego.takeOverTaskSpace(id);
       } else {
         await ego.closeTaskSpace(id);
       }

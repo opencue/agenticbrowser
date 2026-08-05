@@ -129,6 +129,19 @@ export const SPACES_HTML = `<!doctype html>
     transition: border-color .16s ease, color .16s ease, background .16s ease;
   }
   .add:hover { border-color: var(--accent); color: var(--accent); background: var(--card); }
+  /* Ownership controls: quiet until the card is hovered, so a grid of spaces
+     stays calm rather than reading as a wall of buttons. */
+  .controls { display: flex; gap: 8px; padding: 0 3px; min-height: 26px; }
+  .ctl {
+    font: inherit; font-size: 12px; line-height: 1;
+    padding: 6px 12px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--card); color: var(--muted);
+    cursor: pointer; opacity: 0;
+    transition: opacity .14s ease, color .14s ease, border-color .14s ease;
+  }
+  .card:hover .ctl, .ctl:focus-visible { opacity: 1; }
+  .ctl:hover { color: var(--text); border-color: var(--accent); }
+  .ctl.primary { color: var(--accent); border-color: rgba(47, 109, 246, .45); }
   .note {
     margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
     color: var(--muted); font-size: 12px; max-width: 62ch;
@@ -241,7 +254,25 @@ function card(space) {
 
   meta.append(name, tag);
 
-  wrap.append(frame, meta);
+  // The ownership handshake, the same pair the native app puts on its Space
+  // overlay: stop hands the space back to you and the agent's cursor goes away;
+  // take over gives it back. Shown on hover so a wall of cards stays calm.
+  const controls = document.createElement("div");
+  controls.className = "controls";
+  const agentOwned = space.ownership === "agent";
+  const action = document.createElement("button");
+  action.className = "ctl" + (agentOwned ? "" : " primary");
+  action.textContent = agentOwned ? "Stop" : "Take over";
+  action.title = agentOwned
+    ? "hand this space back to you — the agent stops driving it"
+    : "let the agent drive this space again";
+  action.addEventListener("click", (event) => {
+    event.stopPropagation();
+    act("/api/spaces/" + space.id + "/" + (agentOwned ? "stop" : "takeover"), "POST");
+  });
+  controls.append(action);
+
+  wrap.append(frame, meta, controls);
   return wrap;
 }
 
