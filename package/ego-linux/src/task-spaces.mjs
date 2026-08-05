@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { agentIdentity } from "./agent-identity.mjs";
@@ -56,6 +57,49 @@ export function createTaskSpacesApi(cdp) {
     return live;
   }
 
+  /**
+   * Re-adopt a space's pages after the browser restarted.
+   *
+   * A space is identified by target ids, and those die with the browser. A
+   * restart therefore wiped every space even though Chrome had restored the
+   * very pages they described — the overview read "No spaces yet" next to a
+   * window full of tabs. Remembered urls are what survive a restart, so they
+   * are what the pages get matched back by.
+   *
+   * Only attempted when EVERY space lost EVERY tab at once, which is the
+   * signature of a restart. Closing one space's tabs by hand leaves the others
+   * alive, and must stay a deletion — otherwise a space would resurrect itself
+   * from any other tab that happened to share its url.
+   */
+  function readoptRestoredPages(state, live) {
+    if (state.spaces.length === 0) return false;
+    if (
+      state.spaces.some((space) => (space.targetIds || []).some((id) => live.has(id)))
+    ) {
+      return false;
+    }
+
+    const claimed = new Set();
+    let changed = false;
+    for (const space of state.spaces) {
+      const wanted = new Set(space.urls || []);
+      if (wanted.size === 0) continue;
+      const matches = [...live.values()].filter(
+        (target) => !claimed.has(target.targetId) && wanted.has(target.url),
+      );
+      if (matches.length === 0) continue;
+      for (const target of matches) claimed.add(target.targetId);
+      space.targetIds = matches.map((target) => target.targetId);
+      // Browser contexts do not outlive the browser. The restored pages are in
+      // the default jar, so the space is no longer isolated and must not keep
+      // claiming a context id that now refers to nothing.
+      if (space.browserContextId) space.browserContextId = null;
+      space.restored = true;
+      changed = true;
+    }
+    return changed;
+  }
+
   /** Drop tabs the user closed, and spaces left with none. */
   async function reconcile(state) {
     const live = await livePageTargets();
@@ -67,7 +111,19 @@ export function createTaskSpacesApi(cdp) {
         space.targetIds = kept;
         changed = true;
       }
+      // Remembered while the pages are alive, so a restart has something to
+      // match them back by.
+      if (kept.length > 0) {
+        const urls = kept.map((id) => live.get(id).url).filter(Boolean);
+        if (urls.join("\n") !== (space.urls || []).join("\n")) {
+          space.urls = urls;
+          changed = true;
+        }
+      }
     }
+
+    if (readoptRestoredPages(state, live)) changed = true;
+
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
       // Losing its last tab is how a space ends when the user closes tabs by
@@ -143,6 +199,26 @@ export function createTaskSpacesApi(cdp) {
    * Returns null if the browser refuses a context, so a space degrades to the
    * previous window-only behaviour rather than failing to open at all.
    */
+  /**
+   * The selected space's context id, read synchronously.
+   *
+   * Sync because its only caller is the transport rewriting an outgoing payload
+   * on its way to the socket, which has nowhere to await. The state file is a
+   * few hundred bytes and the rewrite only fires on Browser.setDownloadBehavior,
+   * so this is not on any hot path.
+   */
+  function selectedContextId() {
+    try {
+      const state = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
+      const space = state.spaces?.find(
+        (candidate) => candidate.id === state.selectedId,
+      );
+      return space?.browserContextId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function disposeContext(browserContextId) {
     await cdp
       .call("Target.disposeBrowserContext", { browserContextId })
@@ -169,6 +245,8 @@ export function createTaskSpacesApi(cdp) {
   }
 
   return {
+    selectedContextId,
+
     async listTaskSpaces() {
       const { state, live } = await reconcile(await readState());
       return { taskSpaces: state.spaces.map((space) => decorate(space, live)) };
@@ -284,7 +362,23 @@ export function createTaskSpacesApi(cdp) {
       const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
       // Open it inside the space's context, so every tab of a space shares that
       // space's jar rather than the first tab being isolated and the rest not.
-      const result = await tabs.createTab(url, space?.browserContextId);
+      let result;
+      try {
+        result = await tabs.createTab(url, space?.browserContextId);
+      } catch (error) {
+        // Browser contexts die with the browser, but the selected space's id
+        // outlives it in the state file. Chrome then rejects the create with
+        // "Failed to find browser context", which used to leave the port unable
+        // to open any tab at all after a restart. Fall back to the default jar
+        // and forget the dead id — the space stops being isolated, which is
+        // already true, rather than stopping working.
+        if (!space?.browserContextId || !/browser context/i.test(String(error?.message))) {
+          throw error;
+        }
+        space.browserContextId = null;
+        space.restored = true;
+        result = await tabs.createTab(url);
+      }
       if (space && result.targetId) {
         space.targetIds.push(result.targetId);
         await writeState(state);

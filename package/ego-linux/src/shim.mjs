@@ -18,6 +18,10 @@ export async function createEgoShim({ headless = false } = {}) {
   const cdp = await connectCdp(wsUrl);
 
   const taskSpaces = createTaskSpacesApi(cdp);
+  // Downloads are armed per browser context, and a space owns one — so the
+  // harness's context-less setDownloadBehavior has to be aimed at the space the
+  // agent is actually in. See aimDownloadsAtCurrentSpace in transport.mjs.
+  cdp.setDownloadContext(() => taskSpaces.selectedContextId());
   const tabs = createTabsApi(cdp, { port });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
@@ -29,9 +33,14 @@ export async function createEgoShim({ headless = false } = {}) {
     // coordinates to (0, 0) — following those would snap the cursor into the
     // corner on every scroll.
     if (params.type === "mouseWheel") return;
-    if (params.type === "mousePressed") cursor.pulseAt(params.x, params.y);
+    if (params.type === "mousePressed") cursor.press(params.x, params.y);
+    else if (params.type === "mouseReleased") cursor.release(params.x, params.y);
     else cursor.moveTo(params.x, params.y);
   });
+
+  // Typing is the one action with nothing to watch: fill() dispatches no pointer
+  // event at all, so without this a whole form fills itself with no explanation.
+  cdp.watchKeys(() => cursor.typed());
 
   const ego = {
     // --- CDP transport: exact passthrough -----------------------------------

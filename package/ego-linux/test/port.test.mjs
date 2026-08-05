@@ -119,6 +119,25 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /5\. click still landed:\s+clicked/, "the click reached the element");
     assert.match(out, /6\. overlay in snapshot:\s+false/, "the overlay is absent from the agent's snapshot");
     assert.match(out, /7\. cursor held on wheel:\s+true/, "a scroll does not drag the cursor to (0, 0)");
+
+    // The pressed look tracks the button, not a fixed animation: it holds for as
+    // long as the button is down, and lets go when it comes up.
+    assert.match(out, /8\. pressed on down:\s+true/, "the cursor holds pressed while the button is down");
+    assert.match(out, /9\. released on up:\s+true/, "and springs back once it is released");
+
+    // It marks an element, so it is anchored to the page rather than the screen.
+    assert.match(out, /10\. travels with page:\s+true/, "the cursor scrolls with the element it is on");
+
+    // Shape and label both come from whatever sits under the cursor.
+    assert.match(out, /11\. hand over a link:\s+hand/, "a link gets the hand, as the page itself asks");
+    assert.match(out, /12\. names what it is on:\s+Claude · Go to nav target/, "the badge names it unprompted");
+    assert.match(out, /13\. beam over a field:\s+beam/, "a text field gets the beam");
+
+    // fill() dispatches no pointer event at all, so this is the action that
+    // would otherwise happen with nothing on screen to explain it.
+    assert.match(out, /14\. says it is typing:\s+Claude · typing…/, "typing is announced");
+    assert.match(out, /15\. marks the field:\s+on/, "and the field being typed into is ringed");
+    assert.match(out, /16\. lets go when done:\s+true/, "the ring clears once the keystrokes stop");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {

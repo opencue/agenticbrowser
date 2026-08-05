@@ -252,8 +252,11 @@ Two suites, and they must be run one at a time — both drive a browser.
 **`npm test` (this package)** drives the real CLI headless against a local
 fixture: navigation, snapshot content, refs resolving to coordinates,
 synthesised clicks landing on elements, locator fills, two-level iframe
-piercing, screenshots, and task-space lifecycle. It uses a throwaway profile and
-state dir, so it never touches a browser your agent sessions are using.
+piercing, screenshots, the agent cursor, and task-space lifecycle. It also
+starts a real Spaces server and asserts its routes, its cross-origin refusal,
+and that a click by a separate agent process shows up as activity on the card.
+It uses a throwaway profile and state dir, so it never touches a browser your
+agent sessions are using.
 
 **Upstream's real-browser e2e suite** (`cd ../ego-browser && npm run e2e`, with
 `ego-browser` on PATH) is the real measure: 45 cases, ~520 assertions, driving
