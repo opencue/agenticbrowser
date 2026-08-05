@@ -160,8 +160,16 @@ export async function startSpacesServer(shim) {
 
     if (request.method === "GET" && url.pathname === "/api/spaces") {
       const { taskSpaces = [] } = await ego.listTaskSpaces();
-      const { tabs = [] } = await ego.listTabs();
-      const byTarget = new Map(tabs.map((tab) => [tab.targetId, tab]));
+      // Deliberately NOT ego.listTabs(): that is scoped to the selected space,
+      // which is right for an agent (it should only see its own tabs) and wrong
+      // for an overview of every space — every non-selected card would report
+      // zero tabs, no title and no thumbnail. The panel needs the whole browser.
+      const { targetInfos = [] } = await cdp.call("Target.getTargets");
+      const byTarget = new Map(
+        targetInfos
+          .filter((target) => target.type === "page")
+          .map((target) => [target.targetId, target]),
+      );
 
       const spaces = await Promise.all(
         taskSpaces.map(async (space) => {
