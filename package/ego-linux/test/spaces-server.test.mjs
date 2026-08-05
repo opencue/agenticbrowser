@@ -128,7 +128,10 @@ describe("Spaces overview server", () => {
 
     // Nothing has acted in it, so there is nothing to report and no reason to zoom.
     assert.equal(space.activity, null);
-    assert.notDeepEqual(jpegSize(space.thumbnail), FOLLOW_CROP);
+    assert.ok(
+      jpegSize(space.thumbnail).width > FOLLOW_CROP.width,
+      "an idle card shows the whole page, not a crop",
+    );
   });
 
   it("reports what an agent is doing, and crops the card to where it works", async () => {
@@ -170,8 +173,14 @@ describe("Spaces overview server", () => {
   });
 
   it("closes a space and forgets it", async () => {
-    const { body: before } = await api("/api/spaces");
-    const target = before.spaces.find((candidate) => candidate.name === "idle space");
+    // Creates its own rather than reusing another case's, so this still means
+    // something when run alone through --test-name-pattern.
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "closeable space" }),
+    });
+    const target = created.space;
 
     const closed = await api(`/api/spaces/${target.id}/close`, { method: "POST" });
     assert.equal(closed.status, 200);
