@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, readlink, writeFile, rm } from "node:fs/promises";
+import { access, mkdir, readdir, readFile, readlink, writeFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 
@@ -17,6 +17,10 @@ const BINARY_CANDIDATES = [
 
 // Chrome writes the negotiated port here once the DevTools endpoint is live.
 const PORT_FILE = "DevToolsActivePort";
+
+// Shared by the launch args and the orphan reaper that reads them back out of
+// /proc — if the two spellings drifted, the reaper would match nothing.
+const PROFILE_FLAG = "--user-data-dir=";
 
 /** Window class shared with the desktop entry's StartupWMClass. */
 export const WM_CLASS = "ego-lite-linux";
@@ -176,6 +180,64 @@ async function ownsOurProfile(pid, profileDir) {
 }
 
 /**
+ * Terminate ego browsers whose profile directory no longer exists.
+ *
+ * A harness that points EGO_LINUX_PROFILE (or XDG_DATA_HOME) at a scratch tree
+ * gets a browser of its own, and browsers are spawned detached so they outlive
+ * whatever started them. A harness that deletes its scratch tree without
+ * stopping its browser first leaves that browser running against a profile
+ * nobody can reach: ensureBrowser() tracks one browser per state file, so the
+ * orphan is invisible to it and simply accumulates — hundreds of MB per stale
+ * run, for as long as the machine stays up.
+ *
+ * A missing profile directory is the unambiguous signal. Chrome cannot function
+ * without it, so such a browser is already dead weight rather than someone's
+ * live session. Our own profile is created before this runs, which keeps the
+ * browser we are about to launch — and any other live one — out of scope.
+ *
+ * @returns {Promise<number>} How many orphans were signalled.
+ */
+export async function reapOrphanedBrowsers() {
+  let entries;
+  try {
+    entries = await readdir("/proc");
+  } catch {
+    return 0; // no procfs to walk; nothing to reap
+  }
+
+  let reaped = 0;
+  await Promise.all(
+    entries
+      .filter((entry) => /^\d+$/.test(entry))
+      .map(async (pid) => {
+        let argv;
+        try {
+          argv = (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0");
+        } catch {
+          return; // exited under us, or another user's process
+        }
+        // Renderers and helpers inherit --user-data-dir but carry --type=;
+        // signalling the browser process takes its children with it anyway.
+        if (!argv.includes(`--class=${WM_CLASS}`)) return;
+        if (argv.some((arg) => arg.startsWith("--type="))) return;
+
+        const flag = argv.find((arg) => arg.startsWith(PROFILE_FLAG));
+        if (!flag) return;
+        const profileDir = flag.slice(PROFILE_FLAG.length);
+        if (profileDir === PROFILE_DIR || (await exists(profileDir))) return;
+
+        try {
+          process.kill(Number(pid), "SIGTERM");
+          reaped += 1;
+        } catch {
+          // already gone, or not ours to signal
+        }
+      }),
+  );
+  return reaped;
+}
+
+/**
  * Clear the profile lock before launching.
  *
  * Chrome's SingletonLock is a symlink named `<host>-<pid>`; a browser that dies
@@ -218,6 +280,8 @@ async function clearProfileLock(profileDir) {
 async function launch({ headless }) {
   const binary = await resolveBinary();
   await mkdir(PROFILE_DIR, { recursive: true });
+  // Ours now exists, so it cannot be mistaken for an orphan below.
+  await reapOrphanedBrowsers();
   await neutralizeZoom(PROFILE_DIR);
   await clearProfileLock(PROFILE_DIR);
   // A stale port file would be read as this launch's port.
@@ -225,7 +289,7 @@ async function launch({ headless }) {
 
   const args = [
     ...LAUNCH_FLAGS,
-    `--user-data-dir=${PROFILE_DIR}`,
+    `${PROFILE_FLAG}${PROFILE_DIR}`,
     "--remote-debugging-port=0",
     ...(headless ? ["--headless=new"] : []),
     "about:blank",
