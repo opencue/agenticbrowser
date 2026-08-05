@@ -91,6 +91,7 @@ function createCastPool(cdp) {
   // no cast and each attach — the loser's session then leaks, attached and
   // acking frames nobody reads.
   const opening = new Map();
+  let closed = false;
 
   cdp.onShimEvent("Page.screencastFrame", (params, sessionId) => {
     for (const cast of casts.values()) {
@@ -112,6 +113,13 @@ function createCastPool(cdp) {
       flatten: true,
     });
     cdp.claimSession(sessionId);
+    if (closed) {
+      // The pool was torn down while this attach was in flight. Adding the entry
+      // now would leave a claimed session that nothing will ever detach.
+      cdp.releaseSession(sessionId);
+      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      throw new Error("cast pool is closed");
+    }
     const cast = { sessionId, frame: null, seq: 0 };
     casts.set(targetId, cast);
     try {
@@ -147,7 +155,9 @@ function createCastPool(cdp) {
       const existing = casts.get(targetId);
       if (existing) return existing;
       const inFlight = opening.get(targetId);
-      if (inFlight) return inFlight;
+      // Same contract as the first caller: a broken stream yields null, never a
+      // rejection a caller has to remember to catch.
+      if (inFlight) return inFlight.catch(() => null);
 
       const attempt = open(targetId).finally(() => opening.delete(targetId));
       opening.set(targetId, attempt);
@@ -169,6 +179,7 @@ function createCastPool(cdp) {
     },
 
     closeAll() {
+      closed = true;
       // Detach first. Releasing alone stops the shim claiming the session while
       // Chrome is still streaming to it, so the frames in flight would be
       // forwarded to the harness — the exact leak the claim exists to prevent.
