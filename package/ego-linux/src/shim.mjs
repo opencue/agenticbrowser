@@ -45,6 +45,12 @@ export async function createEgoShim({ headless = false } = {}) {
   // event at all, so without this a whole form fills itself with no explanation.
   cdp.watchKeys(() => cursor.typed());
 
+  // A space that has ever loaded a real page is never "opened and never used",
+  // however blank its tab looks between navigations.
+  cdp.watchNavigation(() => {
+    void taskSpaces.noteContent().catch(() => {});
+  });
+
   const ego = {
     // --- CDP transport: exact passthrough -----------------------------------
     sendCDPMessage: (payload) => cdp.sendRaw(payload),

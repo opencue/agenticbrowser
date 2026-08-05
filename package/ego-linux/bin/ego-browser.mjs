@@ -20,6 +20,7 @@ import {
   CHROME_CONFIG_CANDIDATES,
   PROFILE_DIR,
   SPACES_STATE_FILE,
+  TASK_SPACE_FILE,
   STATE_DIR,
 } from "../src/paths.mjs";
 import { createEgoShim } from "../src/shim.mjs";
@@ -223,6 +224,15 @@ async function pruneSpaces() {
   const shim = await createEgoShim({ headless: status.headless === true });
   try {
     const { taskSpaces = [] } = await shim.ego.listTaskSpaces();
+    // The selected space is the one an agent is working in right now, and its
+    // tab is about:blank for a moment on every navigation. Closing it would
+    // take the agent's context out from under it mid-task.
+    let selectedId = null;
+    try {
+      ({ selectedId = null } = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8")));
+    } catch {
+      // No state file means no selection to protect.
+    }
     const { targetInfos = [] } = await shim.cdp.call("Target.getTargets");
     const byTarget = new Map(targetInfos.map((target) => [target.targetId, target]));
 
@@ -230,9 +240,15 @@ async function pruneSpaces() {
     for (const space of taskSpaces) {
       const tabs = (space.targetIds || []).map((id) => byTarget.get(id)).filter(Boolean);
       if (tabs.length === 0) continue;
+      if (space.id === selectedId) continue;
+      if (space.lastContentAt) continue;
       if (!tabs.every((target) => target.url === "about:blank")) continue;
-      await shim.ego.closeTaskSpace(space.id).catch(() => {});
-      closed += 1;
+      await shim.ego.closeTaskSpace(space.id).then(
+        () => {
+          closed += 1;
+        },
+        () => {},
+      );
     }
     process.stdout.write(
       closed === 0

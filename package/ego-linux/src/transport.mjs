@@ -35,6 +35,7 @@ export async function connectCdp(wsUrl) {
   let attachedTargetId = null;
   let mouseWatcher = null;
   let keyWatcher = null;
+  let navWatcher = null;
   let downloadContextResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
@@ -54,6 +55,11 @@ export async function connectCdp(wsUrl) {
         // Typing is the one thing an agent does that leaves no trace until the
         // text appears. Both paths matter: keystrokes and fill()'s bulk insert.
         keyWatcher?.(message.params || {});
+      } else if (message.method === "Page.navigate" && message.params?.url) {
+        // Whether a space ever held a real page can only be seen as it happens:
+        // a tab is about:blank again the moment it navigates away, so polling
+        // its url later cannot tell "never used" from "between pages".
+        if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
       } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
@@ -218,6 +224,11 @@ export async function connectCdp(wsUrl) {
     /** Observe the harness's keyboard input, on the same read-only terms. */
     watchKeys(handler) {
       keyWatcher = handler;
+    },
+
+    /** Observe navigations to real pages, on the same read-only terms. */
+    watchNavigation(handler) {
+      navWatcher = handler;
     },
 
     /** The shim's own request/response calls. */
