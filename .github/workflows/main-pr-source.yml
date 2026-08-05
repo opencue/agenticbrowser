@@ -7,6 +7,11 @@ on:
 
 jobs:
   require-dev-source:
+    # Upstream's dev→main branch policy. This fork works on feature branches
+    # straight into main (dev and main have long diverged here), so the check
+    # only applies on the upstream repository — on the fork it skips instead
+    # of failing every PR and drowning real CI signal in structural red.
+    if: github.repository == 'citrolabs/ego-lite'
     runs-on: ubuntu-latest
     steps:
       - name: Require dev branch
