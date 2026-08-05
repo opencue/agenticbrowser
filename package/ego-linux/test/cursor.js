@@ -163,3 +163,49 @@ const trail = await probe(`(() => {
   return log.map(e => e.text).join(' | ');
 })()`);
 console.log("26. trail:               " + trail);
+
+// The cursor marks the element it is working on, so a long scroll carries it
+// off the screen entirely — and the window went blank while the agent worked.
+// The badge is what stays behind, docked to the edge and pointing back at it.
+await page.evaluate("document.body.style.minHeight = '3000px'");
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(250);
+await page.evaluate("window.scrollTo(0, 1400)");
+await page.waitForTimeout(250);
+const docked = JSON.parse(
+  await probe(`(() => {
+    const badge = ${SHADOW}.getElementById('badge').getBoundingClientRect();
+    const arrow = ${SHADOW}.getElementById('arrow').getBoundingClientRect();
+    return JSON.stringify({
+      gone: arrow.bottom < 0,
+      onScreen:
+        badge.top >= 0 && badge.left >= 0 &&
+        badge.bottom <= innerHeight && badge.right <= innerWidth,
+      hint: ${SHADOW}.getElementById('hint').textContent,
+      // Being in the right place is not the same as being drawn there. The
+      // pointer is a composited layer sitting at a page coordinate, and one
+      // scrolled out of view is not rasterised at all — a badge parented to it
+      // measures perfectly and paints nothing.
+      independent: !${SHADOW}.getElementById('pointer')
+        .contains(${SHADOW}.getElementById('badge')),
+    });
+  })()`),
+);
+console.log("27. cursor leaves view:  " + docked.gone);
+console.log("28. badge stays in it:   " + docked.onScreen);
+console.log("29. and points back:     " + docked.hint);
+console.log("30. drawn independently: " + docked.independent);
+
+// A nudge between two fields and a jump across the page should not take the
+// same time; one duration for both made the first crawl and the second snap.
+await page.evaluate("window.scrollTo(0, 0)");
+await page.waitForTimeout(250);
+const moveFor = async (x, y) => {
+  await page.mouse.move(x, y);
+  await page.waitForTimeout(80);
+  return parseInt(await probe(`${SHADOW}.getElementById('pointer').style.transitionDuration`), 10);
+};
+await moveFor(center.x, center.y);
+const near = await moveFor(center.x + 6, center.y);
+const far = await moveFor(30, 30);
+console.log("31. motion scales:       " + (near < far) + ` (${near}ms vs ${far}ms)`);

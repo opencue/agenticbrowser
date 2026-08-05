@@ -159,6 +159,16 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /26\. trail:.*typed into Your name/, "named by the field's own label, not its placeholder");
     assert.match(out, /26\. trail:.*highlighted explaining this/, "so is a highlight, by its note");
     assert.match(out, /26\. trail:.*read Helper e2e fixture/, "and a read, by what it started on");
+
+    // Anchored to its element, the cursor rides a long scroll off the screen —
+    // which used to leave the window blank while the agent was still working.
+    assert.match(out, /27\. cursor leaves view:\s+true/, "a long scroll carries the cursor off screen");
+    assert.match(out, /28\. badge stays in it:\s+true/, "but the badge stays legible");
+    assert.match(out, /29\. and points back:\s+↑/, "pointing back the way the cursor went");
+    // Measuring in the right place is not proof of being drawn there: a badge
+    // parented to the off-screen pointer passes check 28 and paints nothing.
+    assert.match(out, /30\. drawn independently:\s+true/, "and does not depend on the off-screen pointer layer");
+    assert.match(out, /31\. motion scales:\s+true/, "a nudge and a jump do not take the same time");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {
