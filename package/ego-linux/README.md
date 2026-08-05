@@ -218,28 +218,34 @@ that space's page. A space that cannot get a context, and any space created
 before contexts existed, falls back to the window-only behaviour described
 below.
 
-Spaces deliberately do **not** get their own browser window, though that was the
-first design. Headless Chrome does not render tabs in background windows, so
-`document.elementFromPoint` returned null for any page in a non-foreground
-window. That broke hit-testing, which in turn tripped the harness's input
-fallback (`driver/pointer.ts` `finishDragProbe`) into re-synthesising drags that
-had already landed — the canvas cases variously failed or counted double
-strokes. One window with tracked tab sets fixed all of it.
+`listTabs` is scoped to the selected space, as it is in the native app. That was
+dropped once and has been restored, because the reason it failed is gone:
+membership used to be inferred from which window a tab landed in, and
+`Target.createTarget` accepts no window id, so every heuristic tried (MRU
+ordering, "the tab the harness is attached to", "the tab we just created")
+either hid a tab the harness still held — `switchTab` then failed with "target
+not found" — or leaked one space's tabs into another's list. A context answers
+the question outright: `Target.getTargets` reports each target's
+`browserContextId`, and a tab opened for a space is created in that context.
+Spaces without one fall back to their tracked target ids.
+
+A context-backed space **does** get its own browser window, not by choice: a
+target in a non-default context cannot share a window with the default one. That
+reverses the earlier design, which deliberately used a single window because
+headless Chrome does not render tabs in background windows —
+`document.elementFromPoint` returned null there, which broke hit-testing and
+tripped the harness's input fallback (`driver/pointer.ts` `finishDragProbe`)
+into re-synthesising drags that had already landed, so the canvas cases failed
+or counted double strokes. Re-measured with contexts in place: 43/45, all three
+canvas cases passing. That flake is load-sensitive, so one clean run is evidence
+rather than proof — but contexts did not obviously bring it back.
 
 **What does not work:**
 
-- *Two spaces logged into the same site as different users.* They share one
-  cookie jar.
-- *A per-space `listTabs`.* The native app lists only the selected Space's tabs;
-  here `listTabs` is browser-wide. This is not an unfinished feature — CDP's
-  `Target.createTarget` accepts no window id, so a tab opened for a space can
-  land in a different window and the space-to-tab mapping drifts. Three
-  heuristics were tried and measured against the upstream e2e suite (MRU
-  ordering, "the tab the harness is attached to", "the tab we just created").
-  Each traded one failure for another: hiding a tab the harness still held made
-  `switchTab` fail with "target not found"; keeping it visible leaked one
-  space's tabs into another's list. Reporting every page tab is stable and
-  honest, so that is what it does.
+- *Live shared login state.* The seeded jar is a point-in-time copy, so logging
+  into a site inside one space does not appear in the others.
+- *Storage beyond cookies.* `localStorage`, IndexedDB and service workers are
+  not seeded, so a site holding its token outside cookies lands logged out.
 
 Ownership is advisory here. The native bridge enforces the user-control boundary
 inside the app; nothing on Linux can stop an agent from driving a window the

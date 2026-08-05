@@ -302,6 +302,25 @@ export function createTaskSpacesApi(cdp) {
      * space with a context the browser also enforces membership, but the id
      * list stays authoritative so context-less spaces behave identically.
      */
+    /**
+     * What listTabs() should show: the selected space's tabs.
+     *
+     * A browser context identifies membership exactly, so it is preferred. The
+     * tracked target ids cover spaces that have no context — the fallback path,
+     * and spaces re-adopted after a restart, whose context died with the
+     * browser.
+     */
+    async selectedScope() {
+      const state = await readState();
+      if (!state.selectedId) return null;
+      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      if (!space) return null;
+      return {
+        browserContextId: space.browserContextId || null,
+        targetIds: new Set(space.targetIds || []),
+      };
+    },
+
     async createTabInSelectedSpace(tabs, url) {
       const state = await readState();
       const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
