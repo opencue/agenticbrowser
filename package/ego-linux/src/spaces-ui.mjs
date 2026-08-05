@@ -146,6 +146,16 @@ export const SPACES_HTML = `<!doctype html>
     margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
     color: var(--muted); font-size: 12px; max-width: 62ch;
   }
+  /* What the space actually did, so a card that has gone quiet still says
+     something. Reads newest first, like a log. */
+  .trail { display: flex; flex-direction: column; gap: 2px; padding: 2px 3px 0; }
+  .trail div {
+    display: flex; gap: 7px; color: var(--muted); font-size: 11.5px;
+    overflow: hidden; white-space: nowrap;
+  }
+  .trail div span:first-child { overflow: hidden; text-overflow: ellipsis; }
+  .trail div span:last-child { flex: none; opacity: .72; }
+  .trail div:first-child { color: var(--text); opacity: .82; }
   .empty-state { color: var(--muted); padding: 40px 0; }
 </style>
 </head>
@@ -273,7 +283,33 @@ function card(space) {
   controls.append(action);
 
   wrap.append(frame, meta, controls);
+  if (space.trail?.length) wrap.append(trail(space.trail));
   return wrap;
+}
+
+/** Rough, human ages: nobody reads a card to the second. */
+function ago(ms) {
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return seconds + "s ago";
+  const minutes = Math.round(seconds / 60);
+  return minutes < 60 ? minutes + "m ago" : Math.round(minutes / 60) + "h ago";
+}
+
+/** What the space actually did, newest first. */
+function trail(entries) {
+  const list = document.createElement("div");
+  list.className = "trail";
+  for (const entry of entries) {
+    const row = document.createElement("div");
+    const what = document.createElement("span");
+    what.textContent = entry.text;
+    const when = document.createElement("span");
+    when.textContent = ago(entry.ageMs);
+    row.append(what, when);
+    list.append(row);
+  }
+  return list;
 }
 
 function addCard() {

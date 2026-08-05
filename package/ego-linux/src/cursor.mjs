@@ -452,6 +452,12 @@ function probeOverlay(hostId) {
     label: state.label || "",
     name: state.name || "",
     ageMs: Date.now() - state.at,
+    // Newest last, ages rather than timestamps: the reader is in another
+    // process and has no business trusting this page's clock.
+    trail: (host.__egoLog || []).map((entry) => ({
+      text: entry.text,
+      ageMs: Date.now() - entry.at,
+    })),
     // A screenshot clip is in page coordinates; hand back what converts it.
     scrollX: window.scrollX,
     scrollY: window.scrollY,
@@ -664,6 +670,25 @@ function renderOverlay(payload) {
     (flipX ? "translateX(calc(-100% - 40px))" : "") +
     (flipY ? " translateY(-60px)" : "");
 
+  // A short trail of what happened, kept in the page for the same reason the
+  // cursor's position is: the Spaces panel runs in another process and this is
+  // the only state the two share. Recorded on transitions, so a burst of
+  // keystrokes is one entry rather than sixty.
+  const log = host.__egoLog || (host.__egoLog = []);
+  const remember = (text) => {
+    if (!text) return;
+    if (log.length && log[log.length - 1].text === text) return;
+    log.push({ text, at: Date.now() });
+    if (log.length > 6) log.shift();
+  };
+  if (payload.pulse) remember("clicked " + (describe(subject) || "the page"));
+  if (payload.typing && !previous?.typing) {
+    remember("typed into " + (describe(document.activeElement) || "a field"));
+  }
+  if (payload.highlight && payload.highlight.id !== previous?.highlightId) {
+    remember("highlighted " + (payload.note || "a passage"));
+  }
+
   // Typing has no pointer to follow, so the field being typed into is what the
   // overlay marks instead — otherwise text simply appears with nothing to say
   // where it came from.
@@ -729,6 +754,8 @@ function renderOverlay(payload) {
     pageY,
     label: detail,
     name: payload.name,
+    typing: Boolean(payload.typing),
+    highlightId: payload.highlight ? payload.highlight.id : 0,
     at: Date.now(),
   };
 
@@ -756,6 +783,9 @@ function renderOverlay(payload) {
     if (!element) return "";
     const candidates = [
       element.getAttribute("aria-label"),
+      // A form control's own <label> beats its placeholder: "typed into Your
+      // name" reads like a sentence, "typed into type a name" does not.
+      element.labels?.[0]?.textContent,
       element.getAttribute("alt"),
       element.getAttribute("placeholder"),
       element.getAttribute("title"),

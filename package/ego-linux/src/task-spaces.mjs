@@ -7,16 +7,17 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 /**
  * Task spaces, emulated as tracked sets of tabs.
  *
- * FIDELITY NOTE — this is the one part of the native surface that cannot be
- * reproduced faithfully. The app's Space is isolated *and* inherits your login
- * state. On stock Chromium those two pull apart:
+ * The app's Space is isolated *and* inherits your login state. On stock Chromium
+ * those two properties look like they pull apart:
  *
  *   Target.createBrowserContext -> real isolation, but a blank cookie jar
  *   sharing the default profile -> your real logins, but no isolation
  *
- * Login inheritance wins, because that is what agent tasks actually depend on.
- * A space therefore owns its tabs and its ownership state, but shares one cookie
- * jar with every other space.
+ * They don't: the empty jar can be filled. A space owns a browser context seeded
+ * from the default jar at creation, so it gets both — see createSeededContext
+ * below and docs/isolation-with-inherited-logins.md. The seed is a point-in-time
+ * copy, not live shared state, and a space that fails to get a context falls
+ * back to the shared default jar.
  *
  * Spaces deliberately do NOT get their own browser window. That was the first
  * design, and it was measurably worse: a headless Chrome does not render tabs in

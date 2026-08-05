@@ -159,6 +159,12 @@ describe("Spaces overview server", () => {
       FOLLOW_CROP,
       "an active card is cropped to its cursor, not the whole page",
     );
+
+    // The trail travels the same way and outlives the activity window, so a
+    // space that has gone quiet still says what it did.
+    assert.ok(space.trail?.length, "the card carries a trail of what happened");
+    assert.match(space.trail[0].text, /^clicked /, "newest first");
+    assert.ok(space.trail[0].ageMs >= 0, "aged, not timestamped");
   });
 
   it("refuses a cross-origin caller", async () => {
