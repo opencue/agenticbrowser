@@ -39,6 +39,7 @@ Linux-only commands:
   --status                  show the backing browser's connection state
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
+  --prune-spaces            close spaces that hold nothing but about:blank
   --stop                    stop the backing browser
   --import-chrome-profile   copy your real Chrome profile in, to inherit logins
   --install-desktop-entry   add it to your app launcher, with an icon
@@ -202,6 +203,48 @@ async function openSpaces() {
   return 0;
 }
 
+/**
+ * Sweep spaces that hold nothing but about:blank.
+ *
+ * The automatic sweep in reconcile only touches spaces stamped with a creation
+ * time, so it cannot reach the drift left behind before that existed — and a
+ * user staring at twenty empty windows wants them gone now, not in two minutes.
+ * Explicitly invoked, so it ignores age and asks no questions.
+ */
+async function pruneSpaces() {
+  // Maintenance must never be the thing that opens a browser. Forcing a headed
+  // launch here meant running the sweep on a quiet machine started a visible
+  // window — producing exactly the empty windows it exists to clear.
+  const status = await browserStatus();
+  if (!status.running) {
+    process.stdout.write("no backing browser is running; nothing to prune\n");
+    return 0;
+  }
+  const shim = await createEgoShim({ headless: status.headless === true });
+  try {
+    const { taskSpaces = [] } = await shim.ego.listTaskSpaces();
+    const { targetInfos = [] } = await shim.cdp.call("Target.getTargets");
+    const byTarget = new Map(targetInfos.map((target) => [target.targetId, target]));
+
+    let closed = 0;
+    for (const space of taskSpaces) {
+      const tabs = (space.targetIds || []).map((id) => byTarget.get(id)).filter(Boolean);
+      if (tabs.length === 0) continue;
+      if (!tabs.every((target) => target.url === "about:blank")) continue;
+      await shim.ego.closeTaskSpace(space.id).catch(() => {});
+      closed += 1;
+    }
+    process.stdout.write(
+      closed === 0
+        ? "no empty spaces to close\n"
+        : `closed ${closed} empty ${closed === 1 ? "space" : "spaces"}\n`,
+    );
+  } finally {
+    shim.close();
+  }
+  return 0;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -227,6 +270,9 @@ async function main() {
   }
   if (argv[0] === "--import-chrome-profile") {
     return importChromeProfile();
+  }
+  if (argv[0] === "--prune-spaces") {
+    return pruneSpaces();
   }
   if (argv[0] === "--spaces") {
     return openSpaces();
