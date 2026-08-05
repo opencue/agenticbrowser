@@ -525,8 +525,24 @@ function renderOverlay(payload) {
 
   let host = document.getElementById(payload.hostId);
   if (!payload.visible) {
-    if (host) host.remove();
+    // Handing the space back is a departure, not a disappearance, so the cursor
+    // fades instead of blinking out. The state the Spaces overview polls goes
+    // immediately though: the agent has let go, whatever the pixels still say.
+    if (host && !host.__egoLeaving) {
+      host.__egoLeaving = true;
+      host.__egoState = null;
+      if (host.__egoSweep) host.__egoSweep.done = true;
+      host.style.opacity = "0";
+      setTimeout(() => host.remove(), 220);
+    }
     return;
+  }
+
+  // A host on its way out is not one to reuse: its opacity is already bound for
+  // zero, and a taken-over space would inherit the fade meant for the handoff.
+  if (host && host.__egoLeaving) {
+    host.remove();
+    host = null;
   }
 
   if (!host) {
@@ -538,7 +554,11 @@ function renderOverlay(payload) {
     // that, which is what keeps elementFromPoint blind to the overlay.
     host.style.cssText =
       "all:initial;position:fixed;left:0;top:0;width:0;height:0;" +
-      "z-index:2147483647;pointer-events:none;";
+      "z-index:2147483647;pointer-events:none;" +
+      // Arrives and leaves under its own power. The agent taking a page over is
+      // an event worth seeing, and a cursor that pops into existence reads as a
+      // rendering glitch rather than as something showing up.
+      "opacity:0;transition:opacity 200ms ease;";
     const shadow = host.attachShadow({ mode: "closed" });
     shadow.innerHTML =
       "<style>" +
@@ -585,12 +605,28 @@ function renderOverlay(payload) {
       "#pulse.on{animation:ego-pulse 500ms ease-out}" +
       "@keyframes ego-pulse{from{transform:scale(.2);opacity:.9}" +
       "to{transform:scale(1);opacity:0}}" +
-      "#badge{position:absolute;left:20px;top:22px;display:flex;align-items:center;" +
+      // Positioned by transform alone, in the page coordinates #layer works in.
+      "#badge{position:absolute;left:0;top:0;display:flex;align-items:center;" +
       "gap:7px;max-width:300px;padding:5px 11px 5px 9px;border-radius:999px;" +
-      "background:rgba(24,24,27,.94);color:#fff;box-sizing:border-box;" +
+      "background:rgba(24,24,27,.72);color:#fff;box-sizing:border-box;" +
+      // Frosted rather than flat: the badge sits over arbitrary pages, and one
+      // that lets its background through belongs to the page it is labelling
+      // instead of hovering over it as a second opaque card.
+      "-webkit-backdrop-filter:blur(14px) saturate(1.5);" +
+      "backdrop-filter:blur(14px) saturate(1.5);" +
+      "border:1px solid rgba(255,255,255,.09);letter-spacing:.01em;" +
       "font:500 12px/1.35 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;" +
-      "box-shadow:0 8px 22px rgba(0,0,0,.3);transition:transform 200ms ease}" +
-      "#text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      "box-shadow:0 8px 24px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.2);" +
+      "transition:transform 200ms ease}" +
+      // Docked, the badge is holding still against a moving page: every scroll
+      // event rewrites its offset, and a transition would chase each one.
+      "#badge.docked{transition:none}" +
+      // Which way the cursor went, when it is no longer on screen to point at.
+      "#hint{flex:none;opacity:.7;font-size:11px}" +
+      "#hint:empty{display:none}" +
+      "#text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+      "animation:ego-fade 220ms ease}" +
+      "@keyframes ego-fade{from{opacity:.3}to{opacity:1}}" +
       "#dot{flex:none;width:7px;height:7px;border-radius:50%;background:" +
       payload.accent +
       ";animation:ego-breathe 1.7s ease-in-out infinite}" +
@@ -624,8 +660,15 @@ function renderOverlay(payload) {
       '<path d="M1.6 1 H7.4 M4.5 1 V19.4 M1.6 19.4 H7.4" stroke="' +
       payload.accent +
       '" stroke-width="2" stroke-linecap="round" fill="none"/></svg>' +
-      '<div id="badge"><span id="dot"></span><span id="text"></span></div>' +
       "</div>" +
+      // A sibling of #pointer rather than a child of it. The badge has to stay
+      // readable exactly when the cursor has scrolled out of view, and a child
+      // of something parked far off screen is at the mercy of whether that
+      // layer gets drawn at all. Still inside #layer, though: everything the
+      // overlay draws shares one coordinate space, and a screenshot treats the
+      // whole subtree alike only while that stays true.
+      '<div id="badge"><span id="dot"></span><span id="hint"></span>' +
+      '<span id="text"></span></div>' +
       "</div>";
     host.__egoShadow = shadow;
 
@@ -637,6 +680,11 @@ function renderOverlay(payload) {
         layer.style.transform =
           "translate3d(" + -window.scrollX + "px," + -window.scrollY + "px,0)";
       }
+      // Staying glued to its element means riding that element off the screen,
+      // and a long scroll leaves the window showing nothing at all. The cursor
+      // keeps its place; the badge is what has to remain readable.
+      const at = host.__egoState;
+      if (at) placeBadge(at.pageX - window.scrollX, at.pageY - window.scrollY);
     };
     // hide() removes the host but leaves the realm standing, so a hide/show
     // cycle would stack a listener per show, each closing over a dead root.
@@ -647,10 +695,17 @@ function renderOverlay(payload) {
     window.__egoCursorSync = sync;
     host.__egoSync = sync;
     parent.appendChild(host);
+    void host.offsetWidth; // let opacity:0 land, or there is nothing to fade from
+    host.style.opacity = "1";
   }
 
   const shadow = host.__egoShadow;
   if (!shadow) return;
+
+  // Looked up before the first sync rather than where they are first drawn:
+  // sync() places the badge too, and it runs on the line below.
+  const badge = shadow.getElementById("badge");
+  const hint = shadow.getElementById("hint");
 
   host.__egoSync?.();
 
@@ -692,7 +747,15 @@ function renderOverlay(payload) {
     pointer.style.transitionDuration = "";
     pointer.style.transitionTimingFunction = "";
   }
-  if (!sweeping) pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
+  if (!sweeping) {
+    // One fixed duration for every move made a nudge between two fields crawl
+    // and a jump across the page look like a teleport. Scaling it to the
+    // distance is what a hand on a mouse does: near is quick, far takes a beat.
+    const far = previous ? Math.hypot(pageX - previous.pageX, pageY - previous.pageY) : 0;
+    pointer.style.transitionDuration =
+      Math.round(Math.min(420, Math.max(90, far * 0.45))) + "ms";
+    pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
+  }
   pointer.classList.toggle("press", Boolean(payload.pressed));
 
   // What the cursor is over decides both its shape and, when the agent has not
@@ -704,13 +767,10 @@ function renderOverlay(payload) {
     : null;
   showShape(shadow, payload.typing ? "beam" : shapeFor(under));
 
-  const badge = shadow.getElementById("badge");
   const detail = payload.typing
     ? "typing…"
     : payload.note || payload.label || describe(subject);
-  shadow.getElementById("text").textContent = detail
-    ? payload.name + " · " + detail
-    : payload.name;
+  setBadgeText(detail ? payload.name + " · " + detail : payload.name);
 
   placeBadge(viewX, viewY);
 
@@ -861,8 +921,7 @@ function renderOverlay(payload) {
       pointer.style.transitionDuration = "100ms";
       pointer.style.transform =
         "translate3d(" + line.x + "px," + baseline + "px,0)";
-      shadow.getElementById("text").textContent =
-        payload.name + " · reading “" + snip(line.text) + "”";
+      setBadgeText(payload.name + " · reading “" + snip(line.text) + "”");
       placeBadge(line.x - window.scrollX, baseline - window.scrollY);
 
       setTimeout(() => {
@@ -970,14 +1029,67 @@ function renderOverlay(payload) {
   }
 
   /**
-   * Flip the badge back over the cursor near the viewport edges, so the label is
-   * never the thing that gets clipped off screen. Viewport coordinates, not page
-   * ones: what matters is where it currently sits on screen.
+   * The label, swapped without a jump cut.
+   *
+   * Written synchronously — anything reading the badge sees the new text on the
+   * next tick, and only the fade is deferred. The animation is restarted by hand
+   * because a swap arriving mid-fade would otherwise inherit whatever opacity
+   * the last one had reached and never brighten.
+   */
+  function setBadgeText(next) {
+    const text = shadow.getElementById("text");
+    if (text.textContent === next) return;
+    text.textContent = next;
+    text.style.animation = "none";
+    void text.offsetWidth;
+    text.style.animation = "";
+  }
+
+  /**
+   * Where the label goes, in viewport coordinates: what matters is where the
+   * cursor currently sits on screen, not where on the page it is marking.
+   *
+   * Near an edge the badge flips back over the cursor, so the label is never the
+   * thing that gets clipped. Past the edge — the cursor scrolled out of view
+   * entirely — it stops following and docks, because a label that leaves with
+   * the cursor tells a watcher nothing about what is still happening.
    */
   function placeBadge(atX, atY) {
-    badge.style.transform =
-      (atX + 340 > window.innerWidth ? "translateX(calc(-100% - 40px))" : "") +
-      (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
+    const outY = atY < 4 ? "↑" : atY > window.innerHeight - 4 ? "↓" : "";
+    const outX = atX < 4 ? "←" : atX > window.innerWidth - 4 ? "→" : "";
+    // Vertical first: pages scroll that way, so it is the direction that
+    // actually carries the cursor off screen.
+    const away = outY || outX;
+    hint.textContent = away;
+
+    // #layer already carries -scroll, so a viewport target has to be written
+    // back into page coordinates to survive it.
+    const toPage = (x, y) =>
+      "translate(" +
+      Math.round(x + window.scrollX) +
+      "px," +
+      Math.round(y + window.scrollY) +
+      "px)";
+
+    if (!away) {
+      // Trailing the cursor at the offset it used to sit at as a child of it,
+      // then flipped back over it near an edge so the label is never the thing
+      // that gets clipped.
+      badge.classList.remove("docked");
+      badge.style.transform =
+        toPage(atX + 20, atY + 22) +
+        (atX + 340 > window.innerWidth ? " translateX(calc(-100% - 40px))" : "") +
+        (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
+      return;
+    }
+
+    // Parked against the edge the cursor left by, and held there while the page
+    // keeps moving under it.
+    const width = badge.offsetWidth || 240;
+    const dockX = Math.min(Math.max(atX, 12), Math.max(12, window.innerWidth - width - 12));
+    const dockY = Math.min(Math.max(atY, 12), Math.max(12, window.innerHeight - 40));
+    badge.classList.add("docked");
+    badge.style.transform = toPage(dockX, dockY);
   }
 
   /** The page's own cursor for this element is the honest source of shape. */

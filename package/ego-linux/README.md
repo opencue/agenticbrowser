@@ -153,6 +153,32 @@ explicit `highlight()` — takes the cursor back from it immediately, mid-line.
 It also keeps the state the Spaces overview polls moving, so a space whose agent
 is reading no longer looks like a space whose agent walked away.
 
+### Watching it scroll
+
+The cursor is anchored to the page rather than the screen, because it marks the
+element the agent is working on and has to travel with it. The cost is that a
+long scroll carries it out of the viewport entirely, and the window went blank
+while the agent was still working.
+
+The cursor still goes; the **badge stays**, docked against the edge the cursor
+left by with an arrow pointing after it (`↑ Claude · checking the button`). It
+holds still while the page keeps moving under it, and glides back to the cursor
+when the cursor comes back into view. Scroll position is not something a CDP
+round trip announces, so this is driven by the overlay's own `scroll` listener —
+which also means it works for the `scrollIntoView` every `click()` does, not just
+for an explicit `page.wheel()`.
+
+One limit worth knowing: a docked badge is for the window, not for screenshots.
+`Page.captureScreenshot` renders the overlay in page coordinates without the
+scroll offset — a pre-existing quirk, visible on any scrolled page — so a badge
+docked at the top of a viewport scrolled far down falls outside the captured
+frame. Nothing is lost that used to be there: before, the cursor was off screen
+and the screenshot showed nothing either.
+
+Cursor movement is also timed by distance now, between a 90ms nudge and a 420ms
+glide, rather than every move taking the same 200ms whether it crossed the page
+or two fields.
+
 ### The highlighter
 
 `ego` is a global inside a heredoc, so the port adds one thing the upstream API
