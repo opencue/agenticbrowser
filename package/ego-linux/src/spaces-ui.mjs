@@ -344,7 +344,7 @@ async function refresh() {
     }
 
     note.textContent = spaces.length
-      ? "Spaces share one cookie jar on this Linux port, so they inherit your logins but are not isolated from each other."
+      ? "Each space gets its own cookie jar, seeded from your logins when it is created."
       : "";
   } catch (error) {
     note.textContent = "cannot reach the browser: " + error.message;

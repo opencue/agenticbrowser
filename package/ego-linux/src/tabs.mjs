@@ -72,8 +72,14 @@ export function createTabsApi(cdp, { port }) {
       };
     },
 
-    async createTab(url = "about:blank") {
-      const { targetId } = await cdp.call("Target.createTarget", { url });
+    // browserContextId places the tab in a task space's own cookie jar; without
+    // one the tab lands in the default context, which is the pre-context
+    // behaviour and still correct for spaces that have no context.
+    async createTab(url = "about:blank", browserContextId = undefined) {
+      const { targetId } = await cdp.call("Target.createTarget", {
+        url,
+        ...(browserContextId ? { browserContextId } : {}),
+      });
       if (!targetId) throw new Error("Target.createTarget returned no targetId");
       // Make it the active tab, matching the native behaviour where a freshly
       // created tab is the one the agent goes on to act on.
