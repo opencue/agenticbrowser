@@ -134,7 +134,7 @@ describe("Spaces overview server", () => {
     );
   });
 
-  it("reports what an agent is doing, and crops the card to where it works", async () => {
+  it("reports what an agent is doing, and where on the card it is working", async () => {
     await runScript(`
       await taskSpaces.useOrCreate("busy space");
       await page.goto(process.env.FIXTURE_URL);
@@ -154,11 +154,22 @@ describe("Spaces overview server", () => {
     assert.equal(space.activity?.label, "counting clicks");
     assert.ok(space.activity.ageMs >= 0 && space.activity.ageMs < 30000);
 
-    assert.deepEqual(
-      jpegSize(space.thumbnail),
-      FOLLOW_CROP,
-      "an active card is cropped to its cursor, not the whole page",
+    // Frames now arrive by screencast, which delivers the whole viewport and
+    // cannot crop. The card zooms to the cursor itself, so what the server has
+    // to supply is where the cursor is — as a fraction of the viewport, which
+    // survives whatever size the frame happens to be.
+    const { fx, fy } = space.activity;
+    assert.ok(
+      typeof fx === "number" && fx >= 0 && fx <= 1,
+      "the cursor's horizontal position travels with the card",
     );
+    assert.ok(
+      typeof fy === "number" && fy >= 0 && fy <= 1,
+      "the cursor's vertical position travels with the card",
+    );
+
+    const size = jpegSize(space.thumbnail);
+    assert.ok(size && size.width > 0 && size.height > 0, "a frame is served");
 
     // The trail travels the same way and outlives the activity window, so a
     // space that has gone quiet still says what it did.
