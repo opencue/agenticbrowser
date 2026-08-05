@@ -118,6 +118,40 @@ export function createTaskSpacesApi(cdp) {
     }
   }
 
+  /**
+   * Give a space its own cookie jar, pre-filled with the user's.
+   *
+   * Target.createBrowserContext isolates for real, but starts empty — which on
+   * its own would log the agent out of everything, so this port used to take a
+   * bare window instead and accept a shared jar. Seeding the new context from
+   * the default jar gets both properties at once: measurements and the two
+   * reproducible experiments are in docs/isolation-with-inherited-logins.md.
+   *
+   * These calls carry no sessionId, so the transport sends them at the browser
+   * level, which is where browserContextId is accepted.
+   *
+   * Returns null if the browser refuses a context, so a space degrades to the
+   * previous window-only behaviour rather than failing to open at all.
+   */
+  async function createSeededContext() {
+    let browserContextId;
+    try {
+      ({ browserContextId } = await cdp.call("Target.createBrowserContext", {}));
+    } catch {
+      return null;
+    }
+    if (!browserContextId) return null;
+    try {
+      const { cookies } = await cdp.call("Storage.getCookies", {});
+      if (cookies?.length) {
+        await cdp.call("Storage.setCookies", { browserContextId, cookies });
+      }
+    } catch {
+      // An unseeded context is still a usable space, just a logged-out one.
+    }
+    return browserContextId;
+  }
+
   return {
     async listTaskSpaces() {
       const { state, live } = await reconcile(await readState());
@@ -126,8 +160,10 @@ export function createTaskSpacesApi(cdp) {
 
     async createTaskSpace(name) {
       const state = await readState();
+      const browserContextId = await createSeededContext();
       const { targetId } = await cdp.call("Target.createTarget", {
         url: "about:blank",
+        ...(browserContextId ? { browserContextId } : {}),
       });
       await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
 
@@ -137,6 +173,7 @@ export function createTaskSpacesApi(cdp) {
         name: String(name ?? `task ${state.nextId}`),
         ownership: "agent",
         createdBy: "agent",
+        browserContextId,
         targetIds: [targetId],
       };
       state.spaces.push(space);
@@ -199,6 +236,12 @@ export function createTaskSpacesApi(cdp) {
       for (const targetId of space.targetIds) {
         await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
       }
+      if (space.browserContextId) {
+        // Also drops the space's cookie jar, which is the point of having one.
+        await cdp.call("Target.disposeBrowserContext", {
+          browserContextId: space.browserContextId,
+        }).catch(() => {});
+      }
       state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
       if (state.selectedId === space.id) state.selectedId = null;
       await writeState(state);
@@ -213,14 +256,18 @@ export function createTaskSpacesApi(cdp) {
 
     /**
      * Open a tab and attribute it to the selected space, so completing that
-     * space closes the tabs it opened. Tracking the ids we create is exact —
-     * unlike inferring membership from which window a tab landed in, which CDP
-     * gives no way to control (Target.createTarget takes no window id).
+     * space closes the tabs it opened. Membership is tracked by the ids we
+     * create rather than inferred from which window a tab landed in, which CDP
+     * gives no way to control (Target.createTarget takes no window id). For a
+     * space with a context the browser also enforces membership, but the id
+     * list stays authoritative so context-less spaces behave identically.
      */
     async createTabInSelectedSpace(tabs, url) {
-      const result = await tabs.createTab(url);
       const state = await readState();
       const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      // Open it inside the space's context, so every tab of a space shares that
+      // space's jar rather than the first tab being isolated and the rest not.
+      const result = await tabs.createTab(url, space?.browserContextId);
       if (space && result.targetId) {
         space.targetIds.push(result.targetId);
         await writeState(state);
