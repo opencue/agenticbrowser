@@ -45,6 +45,14 @@ const LAUNCH_FLAGS = [
   // viewport — a 1280px window lays out as 853px — so page content the agent
   // expects on screen falls below the fold.
   "--force-device-scale-factor=1",
+  // "Chrome didn't shut down correctly — Restore pages?" on every launch. The
+  // graceful Browser.close in stopBrowser() is what stops *earning* that bubble,
+  // and on a profile this launcher created it is enough: exit_type flips to
+  // Normal. On a profile taken from --import-chrome-profile it does not — Chrome
+  // rewrites Preferences on the way out but leaves exit_type Crashed, measured
+  // both headless and windowed. Why is unresolved, so the bubble is suppressed
+  // outright rather than left to a condition that does not hold on real profiles.
+  "--hide-crash-restore-bubble",
   // Give the agent browser its own window class. Without it the window carries
   // Chrome's, so the desktop groups it under the ordinary Chrome icon: it never
   // appears as its own running app and the launcher icon cannot raise it.
@@ -368,11 +376,78 @@ export async function ensureBrowser({ headless = false } = {}) {
   return launch({ headless });
 }
 
+/**
+ * Ask the browser to close itself, over CDP.
+ *
+ * SIGTERM is recorded by Chrome as a crash: the profile keeps `exit_type:
+ * "Crashed"`, and every later launch greets the user with "Chrome didn't shut
+ * down correctly — Restore pages?". Browser.close is the graceful path, so the
+ * profile records a clean exit and there is nothing left to restore.
+ */
+async function closeBrowserGracefully(port, timeoutMs = 5000) {
+  const wsUrl = await probe(port);
+  if (!wsUrl) return false;
+
+  return new Promise((resolve) => {
+    let socket = null;
+    let sent = false;
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+        // already closing
+      }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch {
+      finish(false);
+      return;
+    }
+    socket.onopen = () => {
+      sent = true;
+      socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+    };
+    // Chrome answers and then drops the socket as it goes away; whichever lands
+    // first means the request was taken. A close *before* the request went out
+    // is a failed connection, not a shutdown.
+    socket.onmessage = () => finish(true);
+    socket.onclose = () => finish(sent);
+    socket.onerror = () => finish(false);
+  });
+}
+
+/** Wait for a pid to disappear — a browser still exiting still holds the profile lock. */
+async function waitForProcessExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 /** Terminate the backing browser and forget it. */
 export async function stopBrowser() {
   const state = await readBrowserState();
   let stopped = false;
-  if (state?.pid) {
+
+  if (state?.port) stopped = await closeBrowserGracefully(state.port);
+  if (stopped && state?.pid) await waitForProcessExit(state.pid);
+
+  // The blunt instrument, only when the browser did not take the polite request.
+  if (!stopped && state?.pid) {
     try {
       process.kill(state.pid, "SIGTERM");
       stopped = true;
@@ -380,9 +455,11 @@ export async function stopBrowser() {
       // already gone
     }
   }
+
   await rm(BROWSER_STATE_FILE, { force: true });
   // A SIGTERMed Chrome does not always release its profile lock, which would
-  // block the next launch.
+  // block the next launch. After a graceful close there is nothing left to
+  // clear, and this is a no-op.
   await clearProfileLock(PROFILE_DIR);
   return stopped;
 }
