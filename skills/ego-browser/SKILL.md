@@ -10,7 +10,9 @@ metadata:
 > **This is the Linux port**, not the macOS app: the same harness over a stock
 > Chromium via CDP. See `references/install.md`. Two behavioural differences from
 > the macOS app: `browser.listTabs()` is browser-wide rather than per task space,
-> and task spaces share one cookie jar.
+> and a space's login state is a copy of yours taken when the space is created —
+> spaces are isolated from each other, but a login made inside one does not
+> appear in the others, and non-cookie storage is not carried.
 
 # ego-browser
 

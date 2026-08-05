@@ -121,7 +121,7 @@ work.
 | `getBrowserVersion` | `Browser.getVersion` | Exact. |
 | `upgradeBrowser`, `animationHighlightMouseToPosition` | no-ops | App-lifecycle and cosmetic; nothing to do on Linux. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below. |
-| the 9 task-space methods | one Chrome window per space | **Degraded by construction.** See below. |
+| the 9 task-space methods | a seeded browser context per space | **Isolated, with inherited logins.** The seeded jar is a copy, not live shared state. See below. |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -146,16 +146,31 @@ built from the same underlying facts.
 ### Task spaces
 
 A native Space is isolated *and* inherits your login state. On stock Chromium
-those two properties pull apart:
+those two properties look like they pull apart:
 
 - `Target.createBrowserContext` → real isolation, but an empty cookie jar
 - a separate window → your real logins, but no isolation
 
-Login inheritance wins, because that is what agent tasks actually depend on. A
-space owns a tracked set of tabs plus its ownership state (`agent` /
+They don't, because the empty jar can be filled. A space now owns a browser
+context that is seeded from the default jar when the space is created, so it
+gets both: cookies written in one space are invisible in every other and in the
+default jar, while the logins you already had are there from the start. Closing
+the space disposes the context, which drops that jar with it. Measurements and
+two reproducible experiments are in
+[`docs/isolation-with-inherited-logins.md`](../../docs/isolation-with-inherited-logins.md);
+seeding a real 2038-cookie profile costs ~105 ms, once per space.
+
+What this is *not* is live shared state: the seeded jar is a point-in-time copy,
+so logging into a site inside one space does not appear in the others, and
+`localStorage`, IndexedDB and service workers are not carried at all — a site
+holding its token outside cookies will still land logged out.
+
+A space also owns a tracked set of tabs plus its ownership state (`agent` /
 `agentDelegatedToUser` / `user`), with working `switch` / `claim` / `handOff` /
 `takeOver` / `complete` semantics; switching to a space puts the agent back on
-that space's page.
+that space's page. A space that cannot get a context, and any space created
+before contexts existed, falls back to the window-only behaviour described
+below.
 
 Spaces deliberately do **not** get their own browser window, though that was the
 first design. Headless Chrome does not render tabs in background windows, so
