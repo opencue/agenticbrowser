@@ -18,6 +18,10 @@ export async function createEgoShim({ headless = false } = {}) {
   const cdp = await connectCdp(wsUrl);
 
   const taskSpaces = createTaskSpacesApi(cdp);
+  // Downloads are armed per browser context, and a space owns one — so the
+  // harness's context-less setDownloadBehavior has to be aimed at the space the
+  // agent is actually in. See aimDownloadsAtCurrentSpace in transport.mjs.
+  cdp.setDownloadContext(() => taskSpaces.selectedContextId());
   const tabs = createTabsApi(cdp, { port });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });

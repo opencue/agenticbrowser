@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
 import { agentIdentity } from "./agent-identity.mjs";
@@ -143,6 +144,26 @@ export function createTaskSpacesApi(cdp) {
    * Returns null if the browser refuses a context, so a space degrades to the
    * previous window-only behaviour rather than failing to open at all.
    */
+  /**
+   * The selected space's context id, read synchronously.
+   *
+   * Sync because its only caller is the transport rewriting an outgoing payload
+   * on its way to the socket, which has nowhere to await. The state file is a
+   * few hundred bytes and the rewrite only fires on Browser.setDownloadBehavior,
+   * so this is not on any hot path.
+   */
+  function selectedContextId() {
+    try {
+      const state = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
+      const space = state.spaces?.find(
+        (candidate) => candidate.id === state.selectedId,
+      );
+      return space?.browserContextId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   async function disposeContext(browserContextId) {
     await cdp
       .call("Target.disposeBrowserContext", { browserContextId })
@@ -169,6 +190,8 @@ export function createTaskSpacesApi(cdp) {
   }
 
   return {
+    selectedContextId,
+
     async listTaskSpaces() {
       const { state, live } = await reconcile(await readState());
       return { taskSpaces: state.spaces.map((space) => decorate(space, live)) };
