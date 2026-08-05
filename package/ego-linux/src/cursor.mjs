@@ -394,7 +394,13 @@ function renderOverlay(payload) {
           "translate3d(" + -window.scrollX + "px," + -window.scrollY + "px,0)";
       }
     };
+    // hide() removes the host but leaves the realm standing, so a hide/show
+    // cycle would stack a listener per show, each closing over a dead root.
+    if (window.__egoCursorSync) {
+      window.removeEventListener("scroll", window.__egoCursorSync);
+    }
     window.addEventListener("scroll", sync, { passive: true });
+    window.__egoCursorSync = sync;
     host.__egoSync = sync;
     parent.appendChild(host);
   }
