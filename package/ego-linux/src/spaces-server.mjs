@@ -87,6 +87,10 @@ const CAST = { format: "jpeg", quality: 55, maxWidth: 960, maxHeight: 600 };
 
 function createCastPool(cdp) {
   const casts = new Map();
+  // Opening is async, so two concurrent polls for the same tab would each find
+  // no cast and each attach — the loser's session then leaks, attached and
+  // acking frames nobody reads.
+  const opening = new Map();
 
   cdp.onShimEvent("Page.screencastFrame", (params, sessionId) => {
     for (const cast of casts.values()) {
@@ -95,10 +99,11 @@ function createCastPool(cdp) {
       cast.seq += 1;
       break;
     }
-    // Chrome stops sending frames until each one is acknowledged.
-    cdp
-      .call("Page.screencastFrameAck", { sessionId: params.sessionId }, sessionId)
-      .catch(() => {});
+    // Chrome stops sending frames until each one is acknowledged. The frame's
+    // own sequence number is confusingly also called sessionId in the event
+    // payload; it is unrelated to the CDP session the ack is sent on.
+    const frameSeq = params.sessionId;
+    cdp.call("Page.screencastFrameAck", { sessionId: frameSeq }, sessionId).catch(() => {});
   });
 
   async function open(targetId) {
@@ -109,7 +114,17 @@ function createCastPool(cdp) {
     cdp.claimSession(sessionId);
     const cast = { sessionId, frame: null, seq: 0 };
     casts.set(targetId, cast);
-    await cdp.call("Page.startScreencast", { ...CAST, everyNthFrame: 1 }, sessionId);
+    try {
+      await cdp.call("Page.startScreencast", { ...CAST, everyNthFrame: 1 }, sessionId);
+    } catch (error) {
+      // Leaving the entry behind would serve a blank card forever: every later
+      // poll would find it, skip open(), and read from a stream that is not
+      // running.
+      casts.delete(targetId);
+      cdp.releaseSession(sessionId);
+      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      throw error;
+    }
     // The first frame only arrives once the page next paints, which on a static
     // page can be never — so prime the cache with one shot rather than show an
     // empty card until something happens to move.
@@ -129,15 +144,14 @@ function createCastPool(cdp) {
   return {
     /** The newest frame for this tab, opening a stream for it on first ask. */
     async frameFor(targetId) {
-      let cast = casts.get(targetId);
-      if (!cast) {
-        try {
-          cast = await open(targetId);
-        } catch {
-          return null;
-        }
-      }
-      return cast;
+      const existing = casts.get(targetId);
+      if (existing) return existing;
+      const inFlight = opening.get(targetId);
+      if (inFlight) return inFlight;
+
+      const attempt = open(targetId).finally(() => opening.delete(targetId));
+      opening.set(targetId, attempt);
+      return attempt.catch(() => null);
     },
 
     sessionFor(targetId) {
@@ -155,7 +169,13 @@ function createCastPool(cdp) {
     },
 
     closeAll() {
-      for (const cast of casts.values()) cdp.releaseSession(cast.sessionId);
+      // Detach first. Releasing alone stops the shim claiming the session while
+      // Chrome is still streaming to it, so the frames in flight would be
+      // forwarded to the harness — the exact leak the claim exists to prevent.
+      for (const cast of casts.values()) {
+        cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
+        cdp.releaseSession(cast.sessionId);
+      }
       casts.clear();
     },
   };
