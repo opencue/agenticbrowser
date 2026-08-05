@@ -38,6 +38,10 @@ export async function createEgoShim({ headless = false } = {}) {
     else cursor.moveTo(params.x, params.y);
   });
 
+  // Typing is the one action with nothing to watch: fill() dispatches no pointer
+  // event at all, so without this a whole form fills itself with no explanation.
+  cdp.watchKeys(() => cursor.typed());
+
   const ego = {
     // --- CDP transport: exact passthrough -----------------------------------
     sendCDPMessage: (payload) => cdp.sendRaw(payload),

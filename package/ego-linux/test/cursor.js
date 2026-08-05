@@ -56,3 +56,52 @@ console.log("8. pressed on down:      " + ((await pressState()) === "press"));
 await page.mouse.up();
 await page.waitForTimeout(400);
 console.log("9. released on up:       " + ((await pressState()) === ""));
+
+// The cursor marks the element it is working on, so it has to travel with that
+// element when the page scrolls — not stay pinned to the screen.
+const onScreen = () =>
+  probe(`(() => {
+    const r = ${SHADOW}.getElementById('arrow').getBoundingClientRect();
+    return Math.round(r.top);
+  })()`);
+// The fixture is shorter than the viewport, so give it somewhere to scroll to.
+await page.evaluate("document.body.style.minHeight = '2400px'");
+const beforeScroll = await onScreen();
+await page.evaluate("window.scrollTo(0, 220)");
+await page.waitForTimeout(250);
+const afterScrollTop = await onScreen();
+console.log(
+  "10. travels with page:   " +
+    (Math.abs(beforeScroll - afterScrollTop - 220) <= 2) +
+    ` (${beforeScroll} -> ${afterScrollTop})`,
+);
+await page.evaluate("window.scrollTo(0, 0)");
+await page.waitForTimeout(250);
+
+// The shape and the label both come from whatever is under the cursor.
+const shownShape = () =>
+  probe(`[...${SHADOW}.querySelectorAll('svg.shape.on')].map(s => s.id).join()`);
+const badgeText = () => probe(`${SHADOW}.getElementById('text').textContent`);
+
+// A plain <button> is `cursor: default` in every browser — the link is what
+// actually asks for a hand, and the overlay follows the page rather than
+// inventing its own idea of what looks clickable.
+const link = await page.elementCenter("loc=css:a");
+await page.mouse.move(link.x, link.y);
+await page.waitForTimeout(200);
+console.log("11. hand over a link:    " + (await shownShape()));
+console.log("12. names what it is on: " + (await badgeText()));
+
+const field = await page.elementCenter("loc=css:#name-input");
+await page.mouse.move(field.x, field.y);
+await page.waitForTimeout(200);
+console.log("13. beam over a field:   " + (await shownShape()));
+
+// fill() dispatches no pointer event, so this is the one action that would
+// otherwise happen entirely unannounced.
+await page.locator("#name-input").fill("Ada");
+await page.waitForTimeout(200);
+console.log("14. says it is typing:   " + (await badgeText()));
+console.log("15. marks the field:     " + (await probe(`${SHADOW}.getElementById('ring').className`)));
+await page.waitForTimeout(1000);
+console.log("16. lets go when done:   " + (await probe(`${SHADOW}.getElementById('ring').className`) === ""));
