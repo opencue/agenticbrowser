@@ -119,6 +119,11 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /5\. click still landed:\s+clicked/, "the click reached the element");
     assert.match(out, /6\. overlay in snapshot:\s+false/, "the overlay is absent from the agent's snapshot");
     assert.match(out, /7\. cursor held on wheel:\s+true/, "a scroll does not drag the cursor to (0, 0)");
+
+    // The pressed look tracks the button, not a fixed animation: it holds for as
+    // long as the button is down, and lets go when it comes up.
+    assert.match(out, /8\. pressed on down:\s+true/, "the cursor holds pressed while the button is down");
+    assert.match(out, /9\. released on up:\s+true/, "and springs back once it is released");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {

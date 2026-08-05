@@ -29,7 +29,8 @@ export async function createEgoShim({ headless = false } = {}) {
     // coordinates to (0, 0) — following those would snap the cursor into the
     // corner on every scroll.
     if (params.type === "mouseWheel") return;
-    if (params.type === "mousePressed") cursor.pulseAt(params.x, params.y);
+    if (params.type === "mousePressed") cursor.press(params.x, params.y);
+    else if (params.type === "mouseReleased") cursor.release(params.x, params.y);
     else cursor.moveTo(params.x, params.y);
   });
 
