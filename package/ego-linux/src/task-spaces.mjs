@@ -69,6 +69,15 @@ export function createTaskSpacesApi(cdp) {
     }
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
+      // Losing its last tab is how a space ends when the user closes tabs by
+      // hand, so its context has to go the same way closeTaskSpace disposes
+      // one. Dropping the record alone would strand a live context holding a
+      // full copy of the seeded cookie jar until the browser restarts.
+      for (const space of state.spaces) {
+        if (space.targetIds.length === 0 && space.browserContextId) {
+          await disposeContext(space.browserContextId);
+        }
+      }
       state.spaces = surviving;
       changed = true;
     }
@@ -133,6 +142,12 @@ export function createTaskSpacesApi(cdp) {
    * Returns null if the browser refuses a context, so a space degrades to the
    * previous window-only behaviour rather than failing to open at all.
    */
+  async function disposeContext(browserContextId) {
+    await cdp
+      .call("Target.disposeBrowserContext", { browserContextId })
+      .catch(() => {});
+  }
+
   async function createSeededContext() {
     let browserContextId;
     try {
@@ -161,10 +176,17 @@ export function createTaskSpacesApi(cdp) {
     async createTaskSpace(name) {
       const state = await readState();
       const browserContextId = await createSeededContext();
-      const { targetId } = await cdp.call("Target.createTarget", {
-        url: "about:blank",
-        ...(browserContextId ? { browserContextId } : {}),
-      });
+      let targetId;
+      try {
+        ({ targetId } = await cdp.call("Target.createTarget", {
+          url: "about:blank",
+          ...(browserContextId ? { browserContextId } : {}),
+        }));
+      } catch (err) {
+        // Nothing will ever reference this context if the space fails to open.
+        if (browserContextId) await disposeContext(browserContextId);
+        throw err;
+      }
       await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
 
       const space = {
@@ -238,9 +260,7 @@ export function createTaskSpacesApi(cdp) {
       }
       if (space.browserContextId) {
         // Also drops the space's cookie jar, which is the point of having one.
-        await cdp.call("Target.disposeBrowserContext", {
-          browserContextId: space.browserContextId,
-        }).catch(() => {});
+        await disposeContext(space.browserContextId);
       }
       state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
       if (state.selectedId === space.id) state.selectedId = null;
