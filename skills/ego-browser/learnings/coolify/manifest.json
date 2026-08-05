@@ -1,0 +1,88 @@
+{
+  "id": "coolify",
+  "name": "Coolify Cloud (fleet deploys)",
+  "domains": ["app.coolify.io", "coolify.io"],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "open_dashboard": {
+      "description": "Open the Coolify Cloud dashboard and report whether the session is authenticated (unauthenticated sessions are redirected to /login).",
+      "path": "tools/open-dashboard.js",
+      "callable": "openDashboard",
+      "args": {},
+      "returns": {
+        "type": "object",
+        "description": "{ authenticated: boolean, url: string } — authenticated=false means the login page is showing; hand off to the user to log in once, the session persists in the profile."
+      }
+    },
+    "list_applications": {
+      "description": "List every application on the Coolify instance with its deploy status — via the token API, no dashboard scraping.",
+      "path": "tools/list-applications.js",
+      "callable": "listApplications",
+      "args": {
+        "instance": {
+          "type": "string",
+          "required": false,
+          "description": "Named instance from ~/.config/coolify/config.json; defaults to the default instance."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ count: number, applications: [{ uuid, name, fqdn, status }] }"
+      }
+    },
+    "app_status": {
+      "description": "Detailed status of one application, addressed by uuid or by (partial) name.",
+      "path": "tools/app-status.js",
+      "callable": "appStatus",
+      "args": {
+        "app": {
+          "type": "string",
+          "required": true,
+          "description": "Application uuid, or a name substring that matches exactly one application."
+        },
+        "instance": {
+          "type": "string",
+          "required": false,
+          "description": "Named instance from ~/.config/coolify/config.json; defaults to the default instance."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ uuid, name, status, fqdn, git_repository, git_branch, build_pack, updated_at } or { error, matches } when the name is ambiguous."
+      }
+    },
+    "running_deployments": {
+      "description": "Deployments currently running or queued on the instance.",
+      "path": "tools/running-deployments.js",
+      "callable": "runningDeployments",
+      "args": {
+        "instance": {
+          "type": "string",
+          "required": false,
+          "description": "Named instance from ~/.config/coolify/config.json; defaults to the default instance."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ count: number, deployments: array } — empty when nothing is deploying."
+      }
+    },
+    "list_servers": {
+      "description": "Fleet health at a glance: every server with reachability and usability flags.",
+      "path": "tools/list-servers.js",
+      "callable": "listServers",
+      "args": {
+        "instance": {
+          "type": "string",
+          "required": false,
+          "description": "Named instance from ~/.config/coolify/config.json; defaults to the default instance."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ count: number, servers: [{ uuid, name, ip, is_reachable, is_usable }] }"
+      }
+    }
+  },
+  "browserTools": {}
+}
