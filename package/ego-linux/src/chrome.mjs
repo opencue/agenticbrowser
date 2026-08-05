@@ -52,6 +52,24 @@ const LAUNCH_FLAGS = [
   `--class=${WM_CLASS}`,
 ];
 
+/**
+ * Is this directory *provably* absent?
+ *
+ * exists() answers "could I stat it", collapsing every failure into false —
+ * which is fine for picking a browser binary and dangerous for deciding whether
+ * to kill a process. A transient ESTALE on NFS, an EIO, or a FUSE timeout would
+ * read as "profile gone" and take a live browser down with it. Only ENOENT is
+ * evidence of absence; anything else means "assume it is there".
+ */
+async function definitelyGone(path) {
+  try {
+    await access(path, constants.F_OK);
+    return false;
+  } catch (error) {
+    return error?.code === "ENOENT";
+  }
+}
+
 async function exists(path) {
   try {
     await access(path, constants.F_OK);
@@ -224,7 +242,8 @@ export async function reapOrphanedBrowsers() {
         const flag = argv.find((arg) => arg.startsWith(PROFILE_FLAG));
         if (!flag) return;
         const profileDir = flag.slice(PROFILE_FLAG.length);
-        if (profileDir === PROFILE_DIR || (await exists(profileDir))) return;
+        if (profileDir === PROFILE_DIR) return;
+        if (!(await definitelyGone(profileDir))) return;
 
         try {
           process.kill(Number(pid), "SIGTERM");
