@@ -101,6 +101,46 @@ export function createTaskSpacesApi(cdp) {
     return changed;
   }
 
+  /**
+   * Close spaces that were opened and never used.
+   *
+   * A context-backed space cannot share a window with the default context, so
+   * every space is its own window, and every space starts life as a single
+   * about:blank tab. Anything that creates spaces in bulk — the e2e suite, a
+   * crashed run, an agent that gave up — therefore leaves a drift of empty
+   * windows across the desktop, which is what users actually notice.
+   *
+   * Only a space that is not selected, has *never* held a real page, holds
+   * nothing but about:blank, and has had a grace period to receive its first
+   * one is swept. "Never held a page" is the load-bearing condition: a tab is
+   * momentarily about:blank on every navigation, so judging by the current url
+   * alone would delete a working space mid-goto.
+   */
+  const ABANDONED_AFTER_MS = 120000;
+
+  async function pruneAbandoned(state, live) {
+    const doomed = state.spaces.filter((space) => {
+      if (space.id === state.selectedId) return false;
+      // Ever held a real page => not abandoned, only between pages.
+      if (space.lastContentAt) return false;
+      if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS) return false;
+      const tabs = (space.targetIds || []).map((id) => live.get(id)).filter(Boolean);
+      if (tabs.length === 0) return false;
+      return tabs.every((target) => target.url === "about:blank");
+    });
+    if (doomed.length === 0) return false;
+
+    for (const space of doomed) {
+      for (const targetId of space.targetIds) {
+        await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+      }
+      if (space.browserContextId) await disposeContext(space.browserContextId);
+    }
+    const gone = new Set(doomed.map((space) => space.id));
+    state.spaces = state.spaces.filter((space) => !gone.has(space.id));
+    return true;
+  }
+
   /** Drop tabs the user closed, and spaces left with none. */
   async function reconcile(state) {
     const live = await livePageTargets();
@@ -116,6 +156,13 @@ export function createTaskSpacesApi(cdp) {
       // match them back by.
       if (kept.length > 0) {
         const urls = kept.map((id) => live.get(id).url).filter(Boolean);
+        // A space that has ever held a real page is never "opened and never
+        // used", however blank it looks right now — a tab is momentarily
+        // about:blank on every navigation.
+        if (!space.lastContentAt && urls.some((url) => url !== "about:blank")) {
+          space.lastContentAt = Date.now();
+          changed = true;
+        }
         if (urls.join("\n") !== (space.urls || []).join("\n")) {
           space.urls = urls;
           changed = true;
@@ -124,6 +171,7 @@ export function createTaskSpacesApi(cdp) {
     }
 
     if (readoptRestoredPages(state, live)) changed = true;
+    if (await pruneAbandoned(state, live)) changed = true;
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
@@ -248,6 +296,21 @@ export function createTaskSpacesApi(cdp) {
   return {
     selectedContextId,
 
+    /**
+     * Remember that the selected space received a real page.
+     *
+     * This is what keeps a working space out of the abandoned sweep: its tab is
+     * about:blank again on every navigation, so the current url can never tell
+     * "never used" apart from "between pages". Recorded once, never cleared.
+     */
+    async noteContent() {
+      const state = await readState();
+      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      if (!space || space.lastContentAt) return;
+      space.lastContentAt = Date.now();
+      await writeState(state);
+    },
+
     async listTaskSpaces() {
       const { state, live } = await reconcile(await readState());
       return { taskSpaces: state.spaces.map((space) => decorate(space, live)) };
@@ -273,6 +336,7 @@ export function createTaskSpacesApi(cdp) {
         id: state.nextId,
         taskId: state.nextId,
         name: String(name ?? `task ${state.nextId}`),
+        createdAt: Date.now(),
         ownership: "agent",
         createdBy: "agent",
         // Which agent profile opened it — the overview's right-hand label.
