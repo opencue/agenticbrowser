@@ -45,6 +45,9 @@ Linux-only commands:
   --import-chrome-profile   copy your real Chrome profile in, to inherit logins
   --install-desktop-entry   add it to your app launcher, with an icon
   --headless                run the backing browser headless (first launch only)
+                            EGO_LINUX_HEADLESS=1 makes that the default, so the
+                            agent window never opens over your work; --open
+                            still gives you a visible one when you want it
 `;
 
 async function importChromeProfile() {
@@ -332,7 +335,15 @@ async function main() {
     return 0;
   }
 
-  const headless = argv.includes("--headless");
+  // EGO_LINUX_HEADLESS is for a machine whose owner does not want the agent
+  // window in front of their work. The harness needs a page target to attach to,
+  // so a visible browser always shows a window — headless is the only way to be
+  // driven without one. --headless still works per run, and --open still trades
+  // a headless browser for a visible one on demand.
+  const envHeadless = !["", "0", "false", "no"].includes(
+    (process.env.EGO_LINUX_HEADLESS ?? "").toLowerCase(),
+  );
+  const headless = argv.includes("--headless") || envHeadless;
   const rest = argv.filter((arg) => arg !== "--headless");
 
   // `--sdk-path <file>` selects which harness bundle to run. Upstream's real

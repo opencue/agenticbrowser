@@ -370,6 +370,10 @@ async function launch({ headless }) {
     `${PROFILE_FLAG}${PROFILE_DIR}`,
     "--remote-debugging-port=0",
     ...(headless ? ["--headless=new"] : []),
+    // The harness attaches its CDP session to the active tab and fails with
+    // "no active tab to attach session" when there is none, so the browser has
+    // to come up holding one. --no-startup-window was tried here and breaks
+    // every page operation for that reason.
     "about:blank",
   ];
   const child = spawn(binary, args, {
