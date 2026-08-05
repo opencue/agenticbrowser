@@ -7,8 +7,8 @@ import { createSessionResolver } from "./session.mjs";
  * is the only surface the shim controls, so the cursor is a DOM overlay
  * injected into whichever page the harness is currently acting on. It follows
  * every pointer position the harness sends, presses and springs back when a
- * button goes down and up, ripples where it clicks, and carries the agent's
- * current task state as a label.
+ * button goes down and up, ripples where it clicks, sweeps the lines it reads,
+ * and carries the agent's current task state as a label.
  *
  * Two properties keep it from interfering with the automation it illustrates:
  *
@@ -56,6 +56,7 @@ export function createCursorApi(cdp, { listTabs }) {
     typing: false,
     note: "",
     highlight: null,
+    read: null,
   };
   // Where the cursor rests on a page it has only read, never touched.
   const RESTING_X = 28;
@@ -70,8 +71,18 @@ export function createCursorApi(cdp, { listTabs }) {
   let labelX = null;
   let labelY = null;
   let highlightId = 0;
+  let readId = 0;
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * A read sweep narrates the snapshot that started it, so any real input makes
+   * it stale. Dropping the read from the payload is how the page is told to stop
+   * — the sweep owns the cursor only while the id it began with keeps arriving.
+   */
+  function endRead() {
+    state.read = null;
+  }
 
   function placeAt(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -113,6 +124,7 @@ export function createCursorApi(cdp, { listTabs }) {
           typing: state.typing,
           note: state.note,
           highlight: state.highlight,
+          read: state.read,
           pulse: pendingPulse,
         };
         pendingPulse = false;
@@ -142,7 +154,13 @@ export function createCursorApi(cdp, { listTabs }) {
     moveTo(x, y) {
       if (!enabled) return { done: false, reason: "cursor disabled" };
       if (!Number.isFinite(x) || !Number.isFinite(y)) return { done: false };
-      if (state.placed && state.x === x && state.y === y) return { done: true };
+      // A redundant move is normally worth nothing, but a read sweep has walked
+      // the cursor away from where the harness last put it — so moving back to
+      // that same point is a real move, and the one that ends the sweep.
+      if (state.placed && state.x === x && state.y === y && !state.read) {
+        return { done: true };
+      }
+      endRead();
       state.x = x;
       state.y = y;
       state.placed = true;
@@ -163,6 +181,13 @@ export function createCursorApi(cdp, { listTabs }) {
      * The resting spot is only used when no click has placed the cursor yet; a
      * cursor that has been somewhere stays there, because jumping it to a corner
      * on every snapshot would lose where the agent actually was.
+     *
+     * The badge alone said the agent was reading but never *what*, which is the
+     * one thing a person watching wants to know — so each read also carries an
+     * id, and the page runs a sweep for it: the cursor travels the lines that
+     * are actually on screen, marking each as it passes. The sweep is driven
+     * from inside the page, because a round trip per line would cost more than
+     * the snapshot it illustrates.
      */
     reading(label = "reading") {
       if (!enabled) return { done: false, reason: "cursor disabled" };
@@ -173,6 +198,8 @@ export function createCursorApi(cdp, { listTabs }) {
       }
       previousLabel = state.label;
       if (state.label !== label) state.label = label;
+      readId += 1;
+      state.read = { id: readId };
       schedule();
       return { done: true };
     },
@@ -219,6 +246,7 @@ export function createCursorApi(cdp, { listTabs }) {
     /** A button went down here: hold the cursor pressed, and ripple. */
     press(x, y) {
       if (!enabled) return;
+      endRead();
       placeAt(x, y);
       clearTimeout(releaseTimer);
       state.pressed = true;
@@ -235,6 +263,7 @@ export function createCursorApi(cdp, { listTabs }) {
      */
     release(x, y) {
       if (!enabled) return;
+      endRead();
       placeAt(x, y);
       if (!state.pressed) {
         schedule();
@@ -265,6 +294,7 @@ export function createCursorApi(cdp, { listTabs }) {
      */
     typed() {
       if (!enabled) return;
+      endRead();
       clearTimeout(typingTimer);
       typingTimer = setTimeout(() => {
         state.typing = false;
@@ -315,6 +345,9 @@ export function createCursorApi(cdp, { listTabs }) {
       }
       if (!found || !found.rects?.length) return { done: false, lines: 0 };
 
+      // An explicit marker replaces the automatic sweep: both drive the cursor,
+      // and the agent's own explanation is the one worth watching.
+      endRead();
       state.note = String(options.note ?? "").slice(0, 120);
       highlightId += 1;
       state.highlight = { id: highlightId, rects: found.rects, upTo: -1 };
@@ -523,6 +556,11 @@ function renderOverlay(payload) {
       "background:linear-gradient(180deg,rgba(217,119,87,.34),rgba(217,119,87,.22));" +
       "box-shadow:0 0 0 1px rgba(217,119,87,.22);" +
       "transition:width 260ms cubic-bezier(.33,.9,.5,1)}" +
+      // A read band is the same stroke, lighter and temporary: reading is
+      // constant, so its marks fade behind the cursor instead of piling up the
+      // way a deliberate highlight does.
+      ".band.read{background:linear-gradient(180deg,rgba(217,119,87,.3),rgba(217,119,87,.16));" +
+      "box-shadow:none;transition-property:width,opacity;transition-timing-function:linear}" +
       "#pointer{position:absolute;left:0;top:0;" +
       "transition:transform 200ms cubic-bezier(.22,.61,.36,1);will-change:transform}" +
       "#ring{position:absolute;left:0;top:0;border:2px solid " +
@@ -640,8 +678,21 @@ function renderOverlay(payload) {
   const viewX = pageX - window.scrollX;
   const viewY = pageY - window.scrollY;
 
+  // A read sweep drives the cursor from inside the page, line by line, so a
+  // render belonging to the same read must not drag it back to where the sweep
+  // began. Anything else — a click, a keystroke, the next read — ends it.
   const pointer = shadow.getElementById("pointer");
-  pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
+  const running = host.__egoSweep;
+  const readId = payload.read ? payload.read.id : 0;
+  const sweeping = Boolean(running) && running.id === readId && !running.done;
+  if (running && !running.done && !sweeping) {
+    // Cut off mid-line. Hand the pointer back with the timing it had before the
+    // sweep borrowed it, or the next real move animates like a read.
+    running.done = true;
+    pointer.style.transitionDuration = "";
+    pointer.style.transitionTimingFunction = "";
+  }
+  if (!sweeping) pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
   pointer.classList.toggle("press", Boolean(payload.pressed));
 
   // What the cursor is over decides both its shape and, when the agent has not
@@ -661,14 +712,7 @@ function renderOverlay(payload) {
     ? payload.name + " · " + detail
     : payload.name;
 
-  // Flip the badge back over the cursor near the viewport edges, so the label
-  // is never the thing that gets clipped off screen. Viewport coordinates, not
-  // page ones: what matters is where it currently sits on screen.
-  const flipX = viewX + 340 > window.innerWidth;
-  const flipY = viewY + 70 > window.innerHeight;
-  badge.style.transform =
-    (flipX ? "translateX(calc(-100% - 40px))" : "") +
-    (flipY ? " translateY(-60px)" : "");
+  placeBadge(viewX, viewY);
 
   // A short trail of what happened, kept in the page for the same reason the
   // cursor's position is: the Spaces panel runs in another process and this is
@@ -713,8 +757,12 @@ function renderOverlay(payload) {
   const bands = shadow.getElementById("bands");
   const marks = payload.highlight ? payload.highlight.rects : [];
   if (!marks.length) {
-    bands.replaceChildren();
-    bands.__egoId = 0;
+    // A sweep in flight puts its own bands in here; only a render that ended it
+    // is entitled to wipe them.
+    if (!sweeping) {
+      bands.replaceChildren();
+      bands.__egoId = 0;
+    }
   } else {
     // A new highlight replaces the old one. Without the generation check the
     // previous stroke's bands would be reused for it, and the second highlight
@@ -758,6 +806,179 @@ function renderOverlay(payload) {
     highlightId: payload.highlight ? payload.highlight.id : 0,
     at: Date.now(),
   };
+
+  // Last, so everything the sweep reaches for — the log, the badge, the state
+  // it keeps fresh — already exists by the time it runs.
+  if (readId && (!running || running.id !== readId)) startReadSweep(readId);
+
+  /**
+   * Reading, made watchable.
+   *
+   * Snapshotting is most of what an agent does and it dispatches no input at
+   * all, so a window where the agent was reading showed a cursor parked in a
+   * corner under a badge that said "reading" — true, but never *what*. The
+   * sweep walks the cursor along the lines that are actually on screen, marking
+   * each as it passes and naming it in the badge, so someone watching can
+   * follow what the agent took in.
+   *
+   * It runs entirely inside the page: a round trip per line would cost more
+   * than the snapshot it illustrates, and the heredoc that triggered it has
+   * usually exited before the last line is drawn. That also means it must give
+   * up on its own — the sweep object is the only handle anything has on it.
+   */
+  function startReadSweep(id) {
+    const sweep = { id, done: false };
+    host.__egoSweep = sweep;
+    const lines = readableLines();
+    if (!lines.length) {
+      sweep.done = true;
+      return;
+    }
+    remember("read " + snip(lines[0].text));
+
+    let index = 0;
+    let spent = 0;
+
+    const step = () => {
+      if (sweep.done) return;
+      // A budget rather than a line count: reading is constant, and a sweep
+      // still going when the agent acts again would only ever be interrupted.
+      if (index >= lines.length || spent > 2400) {
+        sweep.done = true;
+        pointer.style.transitionDuration = "";
+        pointer.style.transitionTimingFunction = "";
+        return;
+      }
+      const line = lines[index];
+      index += 1;
+      const scanMs = Math.min(360, Math.max(130, Math.round(line.width * 0.8)));
+      spent += scanMs + 110;
+      const baseline = line.y + line.height - 2;
+
+      // Onto the start of the line first, then along it: the two legs are what
+      // make it read as following the words rather than sliding to a spot.
+      pointer.style.transitionTimingFunction = "ease-out";
+      pointer.style.transitionDuration = "100ms";
+      pointer.style.transform =
+        "translate3d(" + line.x + "px," + baseline + "px,0)";
+      shadow.getElementById("text").textContent =
+        payload.name + " · reading “" + snip(line.text) + "”";
+      placeBadge(line.x - window.scrollX, baseline - window.scrollY);
+
+      setTimeout(() => {
+        if (sweep.done) return;
+        pointer.style.transitionTimingFunction = "linear";
+        pointer.style.transitionDuration = scanMs + "ms";
+        pointer.style.transform =
+          "translate3d(" + (line.x + line.width) + "px," + baseline + "px,0)";
+
+        const band = document.createElement("div");
+        band.className = "band read";
+        band.style.height = line.height + "px";
+        band.style.transform = "translate3d(" + line.x + "px," + line.y + "px,0)";
+        band.style.transitionDuration = scanMs + "ms";
+        bands.appendChild(band);
+        void band.offsetWidth; // let the zero width land before the real one
+        band.style.width = line.width + "px";
+        setTimeout(() => {
+          band.style.opacity = "0";
+          setTimeout(() => band.remove(), scanMs + 60);
+        }, scanMs + 320);
+
+        // Keep the state the Spaces overview polls moving: a card whose agent is
+        // reading should not look like a card whose agent walked away.
+        host.__egoState.pageX = line.x + line.width;
+        host.__egoState.pageY = baseline;
+        host.__egoState.label = "reading " + snip(line.text);
+        host.__egoState.at = Date.now();
+
+        setTimeout(step, scanMs + 10);
+      }, 110);
+    };
+
+    step();
+  }
+
+  /**
+   * The lines of text actually on screen, in reading order.
+   *
+   * Line boxes rather than elements: a Range hands back one rect per line, which
+   * is what lets the cursor travel a paragraph the way a reader does. Only the
+   * first few rects of any one node, so a long paragraph cannot spend the whole
+   * sweep while the rest of the page goes unread.
+   */
+  function readableLines() {
+    const root = document.body;
+    if (!root) return [];
+    const found = [];
+    // Measuring is what costs, and an agent scrolled halfway down a long page
+    // has thousands of text nodes above it that can never be swept. Dropping a
+    // container that is entirely off screen drops everything inside it in one
+    // test — but only when it has a box of its own to judge by, since an empty
+    // rect (display:contents, a zero-height wrapper) says nothing about the
+    // children. The count is the backstop for what pruning cannot reach.
+    let measured = 0;
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+          const box = node.getBoundingClientRect();
+          const offScreen = box.bottom < 4 || box.top > window.innerHeight - 4;
+          if (box.width > 0 && box.height > 0 && offScreen) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_SKIP; // an element is not a line; its text is
+        },
+      },
+    );
+    while (found.length < 12 && measured < 400 && walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+      if (text.length < 12) continue;
+      const parent = node.parentElement;
+      if (!parent || parent.closest("script,style,noscript,svg")) continue;
+      measured += 1;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      let taken = 0;
+      for (const rect of range.getClientRects()) {
+        if (taken >= 3 || found.length >= 12) break;
+        if (rect.width < 80 || rect.height < 9 || rect.height > 96) continue;
+        if (rect.bottom < 4 || rect.top > window.innerHeight - 4) continue;
+        taken += 1;
+        found.push({
+          x: rect.left + window.scrollX,
+          y: rect.top + window.scrollY,
+          width: rect.width,
+          height: rect.height,
+          text,
+        });
+      }
+    }
+    // Document order is close to reading order but not the same thing under
+    // absolute positioning, and a cursor that jumps back up the page reads as a
+    // glitch rather than as reading.
+    return found.sort((a, b) => a.y - b.y || a.x - b.x);
+  }
+
+  /** Short enough for a badge that is drawn into every screenshot. */
+  function snip(text) {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    return value.length > 44 ? value.slice(0, 43) + "…" : value;
+  }
+
+  /**
+   * Flip the badge back over the cursor near the viewport edges, so the label is
+   * never the thing that gets clipped off screen. Viewport coordinates, not page
+   * ones: what matters is where it currently sits on screen.
+   */
+  function placeBadge(atX, atY) {
+    badge.style.transform =
+      (atX + 340 > window.innerWidth ? "translateX(calc(-100% - 40px))" : "") +
+      (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
+  }
 
   /** The page's own cursor for this element is the honest source of shape. */
   function shapeFor(element) {
