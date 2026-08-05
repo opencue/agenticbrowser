@@ -69,6 +69,10 @@ export async function connectCdp(wsUrl) {
         // Emulation resizes the page's viewport, never the OS window — so a
         // mobile layout renders as a narrow strip inside a desktop-sized window.
         viewportWatcher?.(message.params || {});
+      } else if (message.method === "Emulation.clearDeviceMetricsOverride") {
+        // Explicitly the other half: leaving emulation has to put the window
+        // back, or it stays phone-shaped for the rest of the session.
+        viewportWatcher?.({ width: 0, height: 0 });
       } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {

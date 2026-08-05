@@ -11,6 +11,9 @@ function fakeCdp() {
     async call(method, params) {
       calls.push({ method, params });
       if (method === "Browser.getWindowForTarget") return { windowId: 7 };
+      if (method === "Browser.getWindowBounds") {
+        return { bounds: { left: 20, top: 40, width: 1280, height: 900 } };
+      }
       return {};
     },
     bounds() {
@@ -39,11 +42,58 @@ describe("createWindowFit", () => {
     assert.equal(cdp.bounds(), null, "the window is already that size");
   });
 
-  it("ignores a cleared override", async () => {
+  it("does nothing for a cleared override it never shrank", async () => {
     const cdp = fakeCdp();
     // clearDeviceMetricsOverride arrives as a 0x0 set on some paths.
     await createWindowFit(cdp).follow({ width: 0, height: 0 }, "T1");
-    assert.equal(cdp.bounds(), null, "back to the real window means leave the window be");
+    assert.equal(cdp.bounds(), null, "there is no earlier size to go back to");
+  });
+
+  it("puts the window back when the emulation is cleared", async () => {
+    const cdp = fakeCdp();
+    const fit = createWindowFit(cdp);
+    await fit.follow({ width: 390, height: 844 }, "T1");
+    await fit.follow({ width: 0, height: 0 }, "T1");
+
+    const resizes = cdp.calls.filter((c) => c.method === "Browser.setWindowBounds");
+    assert.equal(resizes.length, 2, "shrunk, then restored");
+    assert.equal(resizes[1].params.bounds.width, 1280, "back to the size it had before");
+    assert.equal(resizes[1].params.bounds.height, 900);
+  });
+
+  it("puts the window back when emulation returns to desktop", async () => {
+    const cdp = fakeCdp();
+    const fit = createWindowFit(cdp);
+    await fit.follow({ width: 390, height: 844 }, "T1");
+    await fit.follow({ width: 1280, height: 800 }, "T1");
+
+    const resizes = cdp.calls.filter((c) => c.method === "Browser.setWindowBounds");
+    assert.equal(resizes[1].params.bounds.width, 1280, "a phone window does not outlive the phone viewport");
+  });
+
+  it("retries a resize that failed", async () => {
+    let failNext = true;
+    const calls = [];
+    const flaky = {
+      async call(method, params) {
+        if (method === "Browser.setWindowBounds" && failNext) {
+          failNext = false;
+          throw new Error("compositor said no");
+        }
+        calls.push({ method, params });
+        if (method === "Browser.getWindowForTarget") return { windowId: 7 };
+        if (method === "Browser.getWindowBounds") {
+          return { bounds: { left: 0, top: 0, width: 1280, height: 900 } };
+        }
+        return {};
+      },
+    };
+    const fit = createWindowFit(flaky);
+    await fit.follow({ width: 390, height: 844 }, "T1");
+    await fit.follow({ width: 390, height: 844 }, "T1");
+
+    const resizes = calls.filter((c) => c.method === "Browser.setWindowBounds");
+    assert.equal(resizes.length, 1, "the second attempt is not skipped as a duplicate");
   });
 
   it("refuses a sliver Chrome would clamp anyway", async () => {
