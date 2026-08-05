@@ -94,12 +94,15 @@ async function captureCard(cdp, targetId) {
         activity: active
           ? { name: cursor.name, label: cursor.label, ageMs: Math.round(cursor.ageMs) }
           : null,
+        // The trail outlives the activity window: what a space did five minutes
+        // ago is exactly what you want to know about one that has gone quiet.
+        trail: cursor?.trail?.slice(-3).reverse() ?? [],
       };
     } finally {
       await cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
     }
   } catch {
-    return { thumbnail: null, activity: null };
+    return { thumbnail: null, activity: null, trail: [] };
   }
 }
 
@@ -177,7 +180,7 @@ export async function startSpacesServer(shim) {
           const lead = live[0];
           const card = lead
             ? await captureCard(cdp, lead)
-            : { thumbnail: null, activity: null };
+            : { thumbnail: null, activity: null, trail: [] };
           return {
             id: space.id,
             name: space.name,
@@ -189,6 +192,7 @@ export async function startSpacesServer(shim) {
             url: lead ? byTarget.get(lead).url : "",
             thumbnail: card.thumbnail,
             activity: card.activity,
+            trail: card.trail,
           };
         }),
       );

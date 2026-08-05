@@ -146,6 +146,12 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /20\. band matches text:\s+[0-2],[0-2]/, "the band sits on the text, within 2px");
     assert.match(out, /21\. miss draws nothing:\s+true/, "text that is not there draws nothing");
     assert.match(out, /22\. cleared:\s+true/, "and it can be wiped off again");
+
+    // The trail the Spaces panel reads back. One entry per transition: the
+    // fill() above sent dozens of key events and must appear once.
+    assert.match(out, /23\. trail:.*clicked Increment counter/, "a click is recorded by what it hit");
+    assert.match(out, /23\. trail:.*typed into Your name/, "named by the field's own label, not its placeholder");
+    assert.match(out, /23\. trail:.*highlighted explaining this/, "so is a highlight, by its note");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {

@@ -134,3 +134,11 @@ console.log("21. miss draws nothing:  " + (miss.done === false && miss.lines ===
 await ego.clearHighlight();
 await page.waitForTimeout(200);
 console.log("22. cleared:             " + ((await bandCount()) === 0));
+
+// The trail the Spaces panel reads: transitions, not events, so a burst of
+// keystrokes is one entry rather than sixty.
+const trail = await probe(`(() => {
+  const log = document.getElementById('ego-agent-cursor-overlay').__egoLog || [];
+  return log.map(e => e.text).join(' | ');
+})()`);
+console.log("23. trail:               " + trail);
