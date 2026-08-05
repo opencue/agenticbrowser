@@ -46,10 +46,31 @@ Linux-only commands:
 |---|---|
 | `ego-browser --status` | connection state of the backing browser |
 | `ego-browser --open` | open the shared agent browser window |
+| `ego-browser --spaces` | open the Spaces overview panel |
 | `ego-browser --stop` | terminate the backing browser and clear its profile lock |
 | `ego-browser --import-chrome-profile` | copy your real Chrome profile in, so agent tasks inherit your logins |
 | `ego-browser --install-desktop-entry` | add it to your app launcher, with an icon |
 | `ego-browser --headless` | run the backing browser headless (first launch only) |
+
+### The Spaces panel
+
+`ego-browser --spaces` opens an overview of every task space: one card each, with
+a live screenshot of the space's page, its name, its owner, and its tab count.
+Clicking a card switches to that space, `×` closes it, `+` creates one.
+
+Upstream draws this inside the browser's own chrome, replacing the tab strip.
+That is not reachable from outside a Chromium fork — Chrome 137 removed the
+`--load-extension` switch, and the CDP `Extensions` domain answers
+"Method not available", so nothing can inject UI into the browser frame. (A
+Chromium-based browser that still honours `--load-extension`, such as Brave,
+*can* load one — verified on this machine — which would additionally allow
+native tab groups as space markers.)
+
+What is reachable on stock Chrome is an `--app` window: no tab strip, no
+toolbar, its own `app_id`. That is what the panel uses, so it reads as part of
+the browser rather than a web page in a tab. A small loopback HTTP server backs
+it, reading and writing the same task-space state file the CLI uses — the
+overview and the agent can never disagree about which spaces exist.
 
 ### App launcher entry
 
@@ -85,7 +106,57 @@ onboarding step.
 
 Environment overrides: `EGO_LINUX_CHROME` (browser binary),
 `EGO_LINUX_PROFILE` (profile dir), `EGO_LINUX_CDP_URL` (attach to an
-already-running DevTools endpoint instead of launching).
+already-running DevTools endpoint instead of launching), `EGO_LINUX_CURSOR=0`
+(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (rename it from "Claude").
+
+### The agent's cursor
+
+Watch the agent's window and you see a cursor move, click and carry a label of
+what it is currently doing — the same "something else is driving this" signal
+the native app draws over its web view. On Linux the page is the only surface
+the shim controls, so the cursor is a DOM overlay injected into the page the
+harness is acting on (`src/cursor.mjs`), fed by the pointer coordinates the
+harness sends.
+
+It is deliberately unable to interfere with the automation it illustrates:
+
+- the host element is `pointer-events: none`, so `document.elementFromPoint`
+  never returns it. That is load-bearing, not cosmetic — the harness's wheel and
+  drag fallbacks hit-test with `elementFromPoint`, and an overlay that answered
+  those probes would swallow input meant for the page;
+- it lives in a closed shadow root, keeping it out of the agent's own snapshot
+  and out of reach of page CSS;
+- every render is fire-and-forget and swallows its errors, so a page that
+  refuses the injection or navigates mid-flight can never fail an action.
+
+It *is* drawn into screenshots, which is usually what you want and occasionally
+not: `EGO_LINUX_CURSOR=0` turns it off.
+
+### The highlighter
+
+`ego` is a global inside a heredoc, so the port adds one thing the upstream API
+has no equivalent for — a marker the agent draws to show you what it is talking
+about:
+
+```js
+await ego.highlight('free shipping', { note: 'this is the bit that changed' })
+await ego.highlight('#total', { note: 'and this is the total' })
+await ego.clearHighlight()
+```
+
+A string is tried as a CSS selector first and searched for as page text if that
+finds nothing, so both forms above do the obvious thing; `{selector}` or `{text}`
+forces one. Off-screen text is scrolled into view first — a marker nobody can see
+explains nothing.
+
+It resolves to a `Range`, which is what gives **one band per line** instead of
+one box around a whole paragraph: the difference between a pen stroke and a
+coloured rectangle. Each band wipes in from its own left edge while the cursor
+travels along it, and the call resolves when the stroke finishes, so an agent can
+narrate at the speed a human reads.
+
+It never makes a real selection. Selecting text for the look of it would fight
+the agent's own work on the page.
 
 ### What the launcher normalises, and why
 
@@ -119,9 +190,10 @@ work.
 | `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses, so this is a passthrough, not a translation. |
 | `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools HTTP endpoint's most-recently-used ordering stands in. It also tracks tabs the user switches to by hand. |
 | `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser`, `animationHighlightMouseToPosition` | no-ops | App-lifecycle and cosmetic; nothing to do on Linux. |
+| `upgradeBrowser` | no-op | App lifecycle; the user's own Chrome updates itself. |
+| `animationHighlightMouseToPosition`, `setAgentTaskState` | a DOM overlay injected into the page | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below. |
-| the 9 task-space methods | one Chrome window per space | **Degraded by construction.** See below. |
+| the 9 task-space methods | a seeded browser context per space | **Isolated, with inherited logins.** The seeded jar is a copy, not live shared state. See below. |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -146,39 +218,60 @@ built from the same underlying facts.
 ### Task spaces
 
 A native Space is isolated *and* inherits your login state. On stock Chromium
-those two properties pull apart:
+those two properties look like they pull apart:
 
 - `Target.createBrowserContext` → real isolation, but an empty cookie jar
 - a separate window → your real logins, but no isolation
 
-Login inheritance wins, because that is what agent tasks actually depend on. A
-space owns a tracked set of tabs plus its ownership state (`agent` /
+They don't, because the empty jar can be filled. A space now owns a browser
+context that is seeded from the default jar when the space is created, so it
+gets both: cookies written in one space are invisible in every other and in the
+default jar, while the logins you already had are there from the start. Closing
+the space disposes the context, which drops that jar with it. Measurements and
+two reproducible experiments are in
+[`docs/isolation-with-inherited-logins.md`](../../docs/isolation-with-inherited-logins.md);
+seeding a real 2038-cookie profile costs ~105 ms, once per space.
+
+What this is *not* is live shared state: the seeded jar is a point-in-time copy,
+so logging into a site inside one space does not appear in the others, and
+`localStorage`, IndexedDB and service workers are not carried at all — a site
+holding its token outside cookies will still land logged out.
+
+A space also owns a tracked set of tabs plus its ownership state (`agent` /
 `agentDelegatedToUser` / `user`), with working `switch` / `claim` / `handOff` /
 `takeOver` / `complete` semantics; switching to a space puts the agent back on
-that space's page.
+that space's page. A space that cannot get a context, and any space created
+before contexts existed, falls back to the window-only behaviour described
+below.
 
-Spaces deliberately do **not** get their own browser window, though that was the
-first design. Headless Chrome does not render tabs in background windows, so
-`document.elementFromPoint` returned null for any page in a non-foreground
-window. That broke hit-testing, which in turn tripped the harness's input
-fallback (`driver/pointer.ts` `finishDragProbe`) into re-synthesising drags that
-had already landed — the canvas cases variously failed or counted double
-strokes. One window with tracked tab sets fixed all of it.
+`listTabs` is scoped to the selected space, as it is in the native app. That was
+dropped once and has been restored, because the reason it failed is gone:
+membership used to be inferred from which window a tab landed in, and
+`Target.createTarget` accepts no window id, so every heuristic tried (MRU
+ordering, "the tab the harness is attached to", "the tab we just created")
+either hid a tab the harness still held — `switchTab` then failed with "target
+not found" — or leaked one space's tabs into another's list. A context answers
+the question outright: `Target.getTargets` reports each target's
+`browserContextId`, and a tab opened for a space is created in that context.
+Spaces without one fall back to their tracked target ids.
+
+A context-backed space **does** get its own browser window, not by choice: a
+target in a non-default context cannot share a window with the default one. That
+reverses the earlier design, which deliberately used a single window because
+headless Chrome does not render tabs in background windows —
+`document.elementFromPoint` returned null there, which broke hit-testing and
+tripped the harness's input fallback (`driver/pointer.ts` `finishDragProbe`)
+into re-synthesising drags that had already landed, so the canvas cases failed
+or counted double strokes. Re-measured with contexts in place: 43/45, all three
+canvas cases passing. That flake is load-sensitive, so one clean run is evidence
+rather than proof — but contexts did not obviously bring it back.
 
 **What does not work:**
 
-- *Two spaces logged into the same site as different users.* They share one
-  cookie jar.
-- *A per-space `listTabs`.* The native app lists only the selected Space's tabs;
-  here `listTabs` is browser-wide. This is not an unfinished feature — CDP's
-  `Target.createTarget` accepts no window id, so a tab opened for a space can
-  land in a different window and the space-to-tab mapping drifts. Three
-  heuristics were tried and measured against the upstream e2e suite (MRU
-  ordering, "the tab the harness is attached to", "the tab we just created").
-  Each traded one failure for another: hiding a tab the harness still held made
-  `switchTab` fail with "target not found"; keeping it visible leaked one
-  space's tabs into another's list. Reporting every page tab is stable and
-  honest, so that is what it does.
+- *Live shared login state.* The seeded jar is a point-in-time copy, so logging
+  into a site inside one space does not appear in the others.
+- *Storage beyond cookies.* `localStorage`, IndexedDB and service workers are
+  not seeded, so a site holding its token outside cookies lands logged out.
 
 Ownership is advisory here. The native bridge enforces the user-control boundary
 inside the app; nothing on Linux can stop an agent from driving a window the
@@ -191,8 +284,11 @@ Two suites, and they must be run one at a time — both drive a browser.
 **`npm test` (this package)** drives the real CLI headless against a local
 fixture: navigation, snapshot content, refs resolving to coordinates,
 synthesised clicks landing on elements, locator fills, two-level iframe
-piercing, screenshots, and task-space lifecycle. It uses a throwaway profile and
-state dir, so it never touches a browser your agent sessions are using.
+piercing, screenshots, the agent cursor, and task-space lifecycle. It also
+starts a real Spaces server and asserts its routes, its cross-origin refusal,
+and that a click by a separate agent process shows up as activity on the card.
+It uses a throwaway profile and state dir, so it never touches a browser your
+agent sessions are using.
 
 **Upstream's real-browser e2e suite** (`cd ../ego-browser && npm run e2e`, with
 `ego-browser` on PATH) is the real measure: 45 cases, ~520 assertions, driving

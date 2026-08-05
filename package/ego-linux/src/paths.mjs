@@ -17,6 +17,7 @@ export const STATE_DIR = join(
 
 export const PROFILE_DIR = process.env.EGO_LINUX_PROFILE || join(DATA_DIR, "profile");
 export const BROWSER_STATE_FILE = join(STATE_DIR, "browser.json");
+export const SPACES_STATE_FILE = join(STATE_DIR, "spaces-server.json");
 export const TASK_SPACE_FILE = join(STATE_DIR, "task-spaces.json");
 
 /** Where a stock Chrome keeps the profile we can import logins from. */

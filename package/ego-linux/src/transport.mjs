@@ -33,12 +33,34 @@ export async function connectCdp(wsUrl) {
   let closed = false;
   let activeTargetId = null;
   let attachedTargetId = null;
+  let mouseWatcher = null;
+  let keyWatcher = null;
+  let navWatcher = null;
+  let downloadContextResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
     try {
       const message = JSON.parse(payload);
-      if (message.method === "Target.activateTarget" && message.params?.targetId) {
+      if (message.method === "Input.dispatchMouseEvent") {
+        // Where the agent's pointer actually is. The harness announces intent
+        // through ego.animationHighlightMouseToPosition, but only these carry
+        // the drag path and the press itself, which is what the cursor overlay
+        // needs to look like a hand on the mouse rather than a teleport.
+        mouseWatcher?.(message.params || {});
+      } else if (
+        message.method === "Input.dispatchKeyEvent" ||
+        message.method === "Input.insertText"
+      ) {
+        // Typing is the one thing an agent does that leaves no trace until the
+        // text appears. Both paths matter: keystrokes and fill()'s bulk insert.
+        keyWatcher?.(message.params || {});
+      } else if (message.method === "Page.navigate" && message.params?.url) {
+        // Whether a space ever held a real page can only be seen as it happens:
+        // a tab is about:blank again the moment it navigates away, so polling
+        // its url later cannot tell "never used" from "between pages".
+        if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
+      } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
         // ensureSession() attaches to whatever the harness considers current —
@@ -124,6 +146,38 @@ export async function connectCdp(wsUrl) {
     );
   });
 
+  /**
+   * Point the harness's download setup at the space the agent is working in.
+   *
+   * Browser.setDownloadBehavior with no browserContextId configures the DEFAULT
+   * context. That was right when a task space was a plain window, but a space
+   * now owns its own context — so the harness's call, which cannot know that,
+   * would arm downloads on a context nothing is downloading in. No
+   * Page.downloadWillBegin ever fires and page.waitForEvent("download") hangs
+   * until it times out.
+   *
+   * Rewriting on the way out keeps the harness unmodified and keeps the
+   * download path the harness chose, which download.path() then reads from.
+   */
+  function aimDownloadsAtCurrentSpace(payload) {
+    if (!downloadContextResolver) return payload;
+    if (!payload.includes("Browser.setDownloadBehavior")) return payload;
+    try {
+      const message = JSON.parse(payload);
+      if (message.method !== "Browser.setDownloadBehavior") return payload;
+      if (message.params?.browserContextId) return payload;
+      const browserContextId = downloadContextResolver();
+      if (!browserContextId) return payload;
+      return JSON.stringify({
+        ...message,
+        params: { ...message.params, browserContextId },
+      });
+    } catch {
+      // A payload we cannot parse is one we have no business rewriting.
+      return payload;
+    }
+  }
+
   function assertOpen() {
     if (closed || socket.readyState !== WebSocket.OPEN) {
       throw new Error("CDP channel is not open");
@@ -135,7 +189,15 @@ export async function connectCdp(wsUrl) {
     sendRaw(payload) {
       assertOpen();
       noteActivation(payload);
-      socket.send(payload);
+      socket.send(aimDownloadsAtCurrentSpace(payload));
+    },
+
+    /**
+     * Tell the transport which browser context downloads should be armed for.
+     * Set by the shim to the selected task space; see the rewrite below.
+     */
+    setDownloadContext(resolver) {
+      downloadContextResolver = resolver;
     },
 
     /**
@@ -149,6 +211,25 @@ export async function connectCdp(wsUrl) {
 
     /** The target the harness's own CDP session is attached to, or null. */
     attachedHint: () => attachedTargetId,
+
+    /**
+     * Observe the harness's mouse input as it goes out. Read-only: the callback
+     * runs before the send and its errors are swallowed by noteActivation's
+     * catch, so a watcher can never hold up or fail an action.
+     */
+    watchMouse(handler) {
+      mouseWatcher = handler;
+    },
+
+    /** Observe the harness's keyboard input, on the same read-only terms. */
+    watchKeys(handler) {
+      keyWatcher = handler;
+    },
+
+    /** Observe navigations to real pages, on the same read-only terms. */
+    watchNavigation(handler) {
+      navWatcher = handler;
+    },
 
     /** The shim's own request/response calls. */
     call(method, params = {}, sessionId = undefined) {

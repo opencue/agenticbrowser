@@ -67,23 +67,41 @@ Be precise about the difference from native, because it is not nothing:
 - **Seeding cost scales with the jar**, ~105 ms at 2038 cookies. Per space, at
   creation, this is unlikely to matter — but it is not free.
 
-## Suggested implementation
+## Implementation
 
-In `package/ego-linux/src/task-spaces.mjs`, when creating a space:
+Implemented in `package/ego-linux/src/task-spaces.mjs` (`createSeededContext`).
+Creating a space now does:
 
-1. `Target.createBrowserContext` → keep `browserContextId` in the space record.
+1. `Target.createBrowserContext` → `browserContextId`, stored on the space record.
 2. `Storage.getCookies` (browser level, unscoped) → the default jar.
 3. `Storage.setCookies` (browser level, with `browserContextId`) → seed it.
-4. `Target.createTarget` with `browserContextId` for the space's tabs.
-5. `Target.disposeBrowserContext` when the space is closed.
+4. `Target.createTarget` with `browserContextId`, for the space's first tab and
+   every later one (`tabs.createTab` takes the id).
+5. `Target.disposeBrowserContext` on close, which drops the space's jar with it.
 
-Step 3 needs a browser-level escape hatch in the shim's CDP routing, since
-`Storage` is not in the promoted set today.
+No change was needed in the shim's CDP routing: `transport.mjs`'s `call()` omits
+`sessionId` unless given one, so these already go out at the browser level. The
+restriction is in the *harness's* `cdp()` helper, which promotes only `Target`
+and `Browser` — which is why this looks impossible from a heredoc but is
+straightforward from inside the shim.
 
-This also makes `browser.listTabs()` filterable per space for free: targets
-created in a context report that context, which is the other documented Linux
-divergence.
+A space that fails to get a context keeps the previous window-only behaviour
+rather than failing to open, and spaces created before this change have no
+context id and are treated the same way — so upgrading strands nothing.
 
-Migration note: existing spaces have no context id. Treat a missing id as
-"window-only space" and keep the current behaviour for them, so upgrading does
-not strand live spaces.
+### Verified
+
+Against an isolated instance (`XDG_DATA_HOME` / `XDG_STATE_HOME` redirected):
+
+- a cookie present in the default jar before a space is created is visible
+  inside that space — logins are inherited;
+- a cookie written in space A is not visible in space B, and switching back to A
+  still shows A's own — spaces are isolated from each other, not just from the
+  default jar;
+- neither reaches the default jar;
+- open contexts go 2 → 4 → 2 across create/close, so nothing leaks;
+- the port's own suite still passes 3/3, task-space lifecycle included.
+
+Per-space `browser.listTabs()` is now also reachable — targets report the
+context they were created in — but is left alone here, since it is a separate
+documented divergence and this change is already load-bearing.
