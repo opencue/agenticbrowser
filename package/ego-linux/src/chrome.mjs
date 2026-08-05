@@ -45,13 +45,12 @@ const LAUNCH_FLAGS = [
   // viewport — a 1280px window lays out as 853px — so page content the agent
   // expects on screen falls below the fold.
   "--force-device-scale-factor=1",
-  // "Chrome didn't shut down correctly — Restore pages?" on every launch. The
-  // graceful Browser.close in stopBrowser() is what stops *earning* that bubble,
-  // and on a profile this launcher created it is enough: exit_type flips to
-  // Normal. On a profile taken from --import-chrome-profile it does not — Chrome
-  // rewrites Preferences on the way out but leaves exit_type Crashed, measured
-  // both headless and windowed. Why is unresolved, so the bubble is suppressed
-  // outright rather than left to a condition that does not hold on real profiles.
+  // "Chrome didn't shut down correctly — Restore pages?". Two things keep it
+  // away, covering different halves: the graceful Browser.close in stopBrowser()
+  // stops the profile *earning* the mark, and clearStaleCrashMark() clears a
+  // mark it already carries, which a clean exit alone never does. This flag is
+  // the backstop for what neither covers — a browser killed by something outside
+  // this launcher, between one launch's clear and the next.
   "--hide-crash-restore-bubble",
   // Give the agent browser its own window class. Without it the window carries
   // Chrome's, so the desktop groups it under the ordinary Chrome icon: it never
@@ -214,6 +213,38 @@ async function neutralizeZoom(profileDir) {
   }
 }
 
+/**
+ * Clear a stale crash mark before launching.
+ *
+ * Chrome stamps `profile.exit_type` "Crashed" while it runs and rewrites it to
+ * "Normal" on a graceful exit — but only if it did not *start* out marked. Once
+ * a profile carries the mark, Chrome keeps it until someone answers the
+ * "Restore pages?" prompt, and in an agent browser nobody ever does. So a single
+ * ungraceful kill marks a profile permanently: every later launch opens with the
+ * prompt, and even a clean Browser.close leaves the mark exactly where it was.
+ *
+ * Established by bisecting a marked profile's Preferences against a fresh one,
+ * top-level keys first and then within `profile`, down to this single key: seed
+ * "Crashed" and the next clean stop still reads "Crashed"; seed anything else
+ * and it reads "Normal".
+ *
+ * The mark exists to protect a human's tabs. This profile has none worth
+ * restoring — the agent opens what it needs — so clearing it costs nothing.
+ */
+export async function clearStaleCrashMark(profileDir) {
+  const path = join(profileDir, "Default", "Preferences");
+  try {
+    const prefs = JSON.parse(await readFile(path, "utf8"));
+    if (!prefs.profile || prefs.profile.exit_type === "Normal") return false;
+    prefs.profile = { ...prefs.profile, exit_type: "Normal" };
+    await writeFile(path, JSON.stringify(prefs));
+    return true;
+  } catch {
+    // A fresh profile has no Preferences file yet; nothing to clear.
+    return false;
+  }
+}
+
 /** Whether a pid is a browser running against our own profile directory. */
 async function ownsOurProfile(pid, profileDir) {
   try {
@@ -329,6 +360,7 @@ async function launch({ headless }) {
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
   await neutralizeZoom(PROFILE_DIR);
+  await clearStaleCrashMark(PROFILE_DIR);
   await clearProfileLock(PROFILE_DIR);
   // A stale port file would be read as this launch's port.
   await rm(join(PROFILE_DIR, PORT_FILE), { force: true });
