@@ -12,7 +12,7 @@
  * also tracks tabs the user switches to by hand.
  */
 
-export function createTabsApi(cdp, { port }) {
+export function createTabsApi(cdp, { port, getScope }) {
   async function mruOrder() {
     if (!port) return null;
     try {
@@ -30,18 +30,37 @@ export function createTabsApi(cdp, { port }) {
   return {
     async listTabs() {
       const { targetInfos = [] } = await cdp.call("Target.getTargets");
-      // NOT scoped to the selected task space. The native app lists only the
-      // selected Space's tabs; that cannot be reproduced faithfully here,
-      // because Target.createTarget takes no windowId — a tab opened for a
-      // space can land in another window, and the space->tab mapping drifts.
-      // Every heuristic tried (MRU order, "the tab the harness is attached to",
-      // "the tab we just created") either hid a tab the harness still held, so
-      // switchTab failed with "target not found", or leaked one space's tabs
-      // into another's list. Listing every page tab is the honest, stable
-      // behaviour. See README.md.
-      const pages = targetInfos.filter(
+      let pages = targetInfos.filter(
         (target) => target.type === "page" && !target.url.startsWith("devtools://"),
       );
+
+      // Scoped to the selected space, the way the native app lists only the
+      // selected Space's tabs.
+      //
+      // This was dropped once, for good reason: membership used to be inferred
+      // from which window a tab landed in, and Target.createTarget takes no
+      // window id — so every heuristic either hid a tab the harness still held
+      // ("switchTab: target not found") or leaked one space's tabs into
+      // another's list. Browser-context-backed spaces removed the guesswork:
+      // Target.getTargets reports each target's browserContextId, and a tab
+      // opened for a space is created in that context, so membership is now a
+      // fact rather than an inference.
+      //
+      // Spaces without a context — the fallback path, and spaces re-adopted
+      // after a restart — fall back to the tracked target ids, which are exact
+      // for tabs the shim opened.
+      const scope = getScope ? await getScope() : null;
+      if (scope) {
+        const scoped = pages.filter((target) =>
+          scope.browserContextId
+            ? target.browserContextId === scope.browserContextId
+            : scope.targetIds.has(target.targetId),
+        );
+        // Never hand back an empty list: a space mid-navigation, or one whose
+        // only tab the user just closed, must not look like a browser with no
+        // tabs at all.
+        if (scoped.length > 0) pages = scoped;
+      }
 
       const order = await mruOrder();
       if (order) {
