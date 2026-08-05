@@ -1,0 +1,83 @@
+{
+  "id": "medusa-admin",
+  "name": "Medusa Admin (self-hosted shops)",
+  "domains": [
+    "admin.teherguminet.hu",
+    "admin.marva.hu",
+    "admin.lifted.hu",
+    "admin.compastor.hu",
+    "admin.kolarortopedia.hu",
+    "admin.koronakert.hu",
+    "admin.webu.hu"
+  ],
+  "notes": ["notes/overview.md"],
+  "nodeTools": {
+    "open_admin": {
+      "description": "Open a shop's Medusa admin and report whether the session is authenticated (unauthenticated sessions are redirected to /app/login).",
+      "path": "tools/open-admin.js",
+      "callable": "openAdmin",
+      "args": {
+        "domain": {
+          "type": "string",
+          "required": true,
+          "description": "Admin domain, e.g. admin.teherguminet.hu"
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ authenticated: boolean, url: string } — authenticated=false means the login page is showing; hand off to the user to log in once, the session persists in the profile."
+      }
+    }
+  },
+  "browserTools": {
+    "whoami": {
+      "description": "Check the admin session from the page context. Run on any page of the admin origin.",
+      "path": "browser-tools/whoami.js",
+      "args": {},
+      "returns": {
+        "type": "object",
+        "description": "{ authenticated: boolean, email: string|null }"
+      }
+    },
+    "list_orders": {
+      "description": "List recent orders via the admin API from the authenticated page context — no DOM scraping, no snapshot needed.",
+      "path": "browser-tools/list-orders.js",
+      "args": {
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "description": "Max orders to return (default 20, cap 100)."
+        },
+        "offset": {
+          "type": "integer",
+          "required": false,
+          "description": "Pagination offset (default 0)."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ count: number, orders: [{ id, display_id, email, total, currency_code, payment_status, fulfillment_status, created_at }] } or { error, status } when the API rejects the call."
+      }
+    },
+    "search_products": {
+      "description": "Search products by title/handle via the admin API from the authenticated page context.",
+      "path": "browser-tools/search-products.js",
+      "args": {
+        "query": {
+          "type": "string",
+          "required": true,
+          "description": "Search text matched against product title and handle."
+        },
+        "limit": {
+          "type": "integer",
+          "required": false,
+          "description": "Max products to return (default 20, cap 100)."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ count: number, products: [{ id, title, handle, status, variants: number }] } or { error, status } when the API rejects the call."
+      }
+    }
+  }
+}
