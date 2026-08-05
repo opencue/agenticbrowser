@@ -40,6 +40,7 @@ export async function connectCdp(wsUrl) {
   const shimEvents = new Map();
   let keyWatcher = null;
   let navWatcher = null;
+  let viewportWatcher = null;
   let downloadContextResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
@@ -64,6 +65,10 @@ export async function connectCdp(wsUrl) {
         // a tab is about:blank again the moment it navigates away, so polling
         // its url later cannot tell "never used" from "between pages".
         if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
+      } else if (message.method === "Emulation.setDeviceMetricsOverride") {
+        // Emulation resizes the page's viewport, never the OS window — so a
+        // mobile layout renders as a narrow strip inside a desktop-sized window.
+        viewportWatcher?.(message.params || {});
       } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
@@ -254,6 +259,11 @@ export async function connectCdp(wsUrl) {
     /** Handle one CDP event method arriving on a claimed session. */
     onShimEvent(method, handler) {
       shimEvents.set(method, handler);
+    },
+
+    /** Observe viewport emulation, on the same read-only terms. */
+    watchViewport(handler) {
+      viewportWatcher = handler;
     },
 
     /** Observe navigations to real pages, on the same read-only terms. */

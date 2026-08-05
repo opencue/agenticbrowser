@@ -4,6 +4,7 @@ import { createTabsApi } from "./tabs.mjs";
 import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
 import { createCursorApi } from "./cursor.mjs";
+import { createWindowFit } from "./window-fit.mjs";
 
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
@@ -47,6 +48,13 @@ export async function createEgoShim({ headless = false } = {}) {
 
   // A space that has ever loaded a real page is never "opened and never used",
   // however blank its tab looks between navigations.
+  // A phone-width emulation in a desktop-width window shows a strip of site
+  // beside a band of empty chrome; the window follows the viewport instead.
+  const windowFit = createWindowFit(cdp);
+  cdp.watchViewport((metrics) => {
+    void windowFit.follow(metrics, cdp.attachedHint()).catch(() => {});
+  });
+
   cdp.watchNavigation(() => {
     void taskSpaces.noteContent().catch(() => {});
   });
