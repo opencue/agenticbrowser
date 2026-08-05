@@ -46,10 +46,31 @@ Linux-only commands:
 |---|---|
 | `ego-browser --status` | connection state of the backing browser |
 | `ego-browser --open` | open the shared agent browser window |
+| `ego-browser --spaces` | open the Spaces overview panel |
 | `ego-browser --stop` | terminate the backing browser and clear its profile lock |
 | `ego-browser --import-chrome-profile` | copy your real Chrome profile in, so agent tasks inherit your logins |
 | `ego-browser --install-desktop-entry` | add it to your app launcher, with an icon |
 | `ego-browser --headless` | run the backing browser headless (first launch only) |
+
+### The Spaces panel
+
+`ego-browser --spaces` opens an overview of every task space: one card each, with
+a live screenshot of the space's page, its name, its owner, and its tab count.
+Clicking a card switches to that space, `×` closes it, `+` creates one.
+
+Upstream draws this inside the browser's own chrome, replacing the tab strip.
+That is not reachable from outside a Chromium fork — Chrome 137 removed the
+`--load-extension` switch, and the CDP `Extensions` domain answers
+"Method not available", so nothing can inject UI into the browser frame. (A
+Chromium-based browser that still honours `--load-extension`, such as Brave,
+*can* load one — verified on this machine — which would additionally allow
+native tab groups as space markers.)
+
+What is reachable on stock Chrome is an `--app` window: no tab strip, no
+toolbar, its own `app_id`. That is what the panel uses, so it reads as part of
+the browser rather than a web page in a tab. A small loopback HTTP server backs
+it, reading and writing the same task-space state file the CLI uses — the
+overview and the agent can never disagree about which spaces exist.
 
 ### App launcher entry
 
@@ -85,7 +106,31 @@ onboarding step.
 
 Environment overrides: `EGO_LINUX_CHROME` (browser binary),
 `EGO_LINUX_PROFILE` (profile dir), `EGO_LINUX_CDP_URL` (attach to an
-already-running DevTools endpoint instead of launching).
+already-running DevTools endpoint instead of launching), `EGO_LINUX_CURSOR=0`
+(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (rename it from "Claude").
+
+### The agent's cursor
+
+Watch the agent's window and you see a cursor move, click and carry a label of
+what it is currently doing — the same "something else is driving this" signal
+the native app draws over its web view. On Linux the page is the only surface
+the shim controls, so the cursor is a DOM overlay injected into the page the
+harness is acting on (`src/cursor.mjs`), fed by the pointer coordinates the
+harness sends.
+
+It is deliberately unable to interfere with the automation it illustrates:
+
+- the host element is `pointer-events: none`, so `document.elementFromPoint`
+  never returns it. That is load-bearing, not cosmetic — the harness's wheel and
+  drag fallbacks hit-test with `elementFromPoint`, and an overlay that answered
+  those probes would swallow input meant for the page;
+- it lives in a closed shadow root, keeping it out of the agent's own snapshot
+  and out of reach of page CSS;
+- every render is fire-and-forget and swallows its errors, so a page that
+  refuses the injection or navigates mid-flight can never fail an action.
+
+It *is* drawn into screenshots, which is usually what you want and occasionally
+not: `EGO_LINUX_CURSOR=0` turns it off.
 
 ### What the launcher normalises, and why
 
@@ -119,7 +164,8 @@ work.
 | `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses, so this is a passthrough, not a translation. |
 | `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools HTTP endpoint's most-recently-used ordering stands in. It also tracks tabs the user switches to by hand. |
 | `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser`, `animationHighlightMouseToPosition` | no-ops | App-lifecycle and cosmetic; nothing to do on Linux. |
+| `upgradeBrowser` | no-op | App lifecycle; the user's own Chrome updates itself. |
+| `animationHighlightMouseToPosition`, `setAgentTaskState` | a DOM overlay injected into the page | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below. |
 | the 9 task-space methods | one Chrome window per space | **Degraded by construction.** See below. |
 

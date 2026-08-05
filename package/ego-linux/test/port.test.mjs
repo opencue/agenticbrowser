@@ -107,6 +107,20 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /9\. screenshot:\s+\/.*\.png/, "screenshot round trips to a file");
   });
 
+  it("draws the agent's cursor without disturbing the page it acts on", async () => {
+    const out = await runScript(join(HERE, "cursor.js"));
+
+    assert.match(out, /1\. overlay present:\s+true/, "the overlay is injected on a click");
+    assert.match(out, /2\. cursor tracks click:\s+true/, "the cursor sits where the click landed");
+    assert.match(out, /3\. badge text:\s+Claude · counting/, "the task state label is shown");
+
+    // The overlay must stay invisible to everything the harness relies on.
+    assert.match(out, /4\. hit test at cursor:\s+click-button/, "elementFromPoint still sees the page");
+    assert.match(out, /5\. click still landed:\s+clicked/, "the click reached the element");
+    assert.match(out, /6\. overlay in snapshot:\s+false/, "the overlay is absent from the agent's snapshot");
+    assert.match(out, /7\. cursor held on wheel:\s+true/, "a scroll does not drag the cursor to (0, 0)");
+  });
+
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {
     const out = await runScript(join(HERE, "spaces.js"));
 

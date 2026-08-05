@@ -1,3 +1,5 @@
+import { createSessionResolver } from "./session.mjs";
+
 /**
  * snapshot() — the semantic page view the agent reads.
  *
@@ -337,38 +339,12 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
 }
 
 export function createSnapshotApi(cdp, { listTabs }) {
-  let session = { targetId: null, sessionId: null };
-
-  /**
-   * Snapshot whatever page the harness is actually driving.
-   *
-   * The harness picks its own target (state.preferredTargetId, then the active
-   * tab) and attaches a session to it. That choice is invisible from here, so
-   * the transport records the target of its Target.attachToTarget calls. Using
-   * it keeps observation and action on the same page — computing "the active
-   * tab" independently lets the two drift, which reads as an empty snapshot.
-   */
-  async function sessionForActiveTab() {
-    const attached = cdp.attachedHint?.();
-    let targetId = attached;
-
-    if (!targetId) {
-      const { tabs } = await listTabs();
-      const active = tabs.find((tab) => tab.active) || tabs[tabs.length - 1];
-      if (!active) throw new Error("snapshot: no page tab to attach to");
-      targetId = active.targetId;
-    }
-
-    if (session.targetId === targetId && session.sessionId) {
-      return session.sessionId;
-    }
-    const { sessionId } = await cdp.call("Target.attachToTarget", {
-      targetId,
-      flatten: true,
-    });
-    session = { targetId, sessionId };
-    return sessionId;
-  }
+  // Snapshot whatever page the harness is actually driving: observation and
+  // action drifting apart reads as an empty snapshot. See session.mjs.
+  const sessionForActiveTab = createSessionResolver(cdp, {
+    listTabs,
+    op: "snapshot",
+  });
 
   return {
     async snapshot(options = {}) {

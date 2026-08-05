@@ -1,5 +1,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 
+import { agentIdentity } from "./agent-identity.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 
 /**
@@ -137,6 +138,8 @@ export function createTaskSpacesApi(cdp) {
         name: String(name ?? `task ${state.nextId}`),
         ownership: "agent",
         createdBy: "agent",
+        // Which agent profile opened it — the overview's right-hand label.
+        ...agentIdentity(),
         targetIds: [targetId],
       };
       state.spaces.push(space);
@@ -202,12 +205,6 @@ export function createTaskSpacesApi(cdp) {
       state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
       if (state.selectedId === space.id) state.selectedId = null;
       await writeState(state);
-      return { done: true };
-    },
-
-    async setAgentTaskState(...args) {
-      // The native app drives its Space overlay from this; nothing to render here.
-      void args;
       return { done: true };
     },
 
