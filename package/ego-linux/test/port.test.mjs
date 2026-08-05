@@ -138,6 +138,14 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /14\. says it is typing:\s+Claude · typing…/, "typing is announced");
     assert.match(out, /15\. marks the field:\s+on/, "and the field being typed into is ringed");
     assert.match(out, /16\. lets go when done:\s+true/, "the ring clears once the keystrokes stop");
+
+    // The highlighter — a marker drawn to explain something, not a selection.
+    assert.match(out, /17\. highlight lines:\s+1/, "a phrase is found by its text and measured per line");
+    assert.match(out, /18\. bands drawn:\s+1/, "and gets a band");
+    assert.match(out, /19\. note in badge:\s+Claude · explaining this/, "the note says why");
+    assert.match(out, /20\. band matches text:\s+[0-2],[0-2]/, "the band sits on the text, within 2px");
+    assert.match(out, /21\. miss draws nothing:\s+true/, "text that is not there draws nothing");
+    assert.match(out, /22\. cleared:\s+true/, "and it can be wiped off again");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {

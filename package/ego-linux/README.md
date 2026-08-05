@@ -132,6 +132,32 @@ It is deliberately unable to interfere with the automation it illustrates:
 It *is* drawn into screenshots, which is usually what you want and occasionally
 not: `EGO_LINUX_CURSOR=0` turns it off.
 
+### The highlighter
+
+`ego` is a global inside a heredoc, so the port adds one thing the upstream API
+has no equivalent for — a marker the agent draws to show you what it is talking
+about:
+
+```js
+await ego.highlight('free shipping', { note: 'this is the bit that changed' })
+await ego.highlight('#total', { note: 'and this is the total' })
+await ego.clearHighlight()
+```
+
+A string is tried as a CSS selector first and searched for as page text if that
+finds nothing, so both forms above do the obvious thing; `{selector}` or `{text}`
+forces one. Off-screen text is scrolled into view first — a marker nobody can see
+explains nothing.
+
+It resolves to a `Range`, which is what gives **one band per line** instead of
+one box around a whole paragraph: the difference between a pen stroke and a
+coloured rectangle. Each band wipes in from its own left edge while the cursor
+travels along it, and the call resolves when the stroke finishes, so an agent can
+narrate at the speed a human reads.
+
+It never makes a real selection. Selecting text for the look of it would fight
+the agent's own work on the page.
+
 ### What the launcher normalises, and why
 
 Two settings are forced on the agent profile because inheriting them silently

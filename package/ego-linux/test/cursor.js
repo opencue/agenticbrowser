@@ -105,3 +105,32 @@ console.log("14. says it is typing:   " + (await badgeText()));
 console.log("15. marks the field:     " + (await probe(`${SHADOW}.getElementById('ring').className`)));
 await page.waitForTimeout(1000);
 console.log("16. lets go when done:   " + (await probe(`${SHADOW}.getElementById('ring').className`) === ""));
+
+// The highlighter: a marker an agent draws to explain something, rather than a
+// real selection, which would fight its own work on the page.
+const bandCount = () => probe(`${SHADOW}.getElementById('bands').children.length`);
+const byText = await ego.highlight("must survive the snapshot", { note: "explaining this" });
+await page.waitForTimeout(500);
+console.log("17. highlight lines:     " + byText.lines);
+console.log("18. bands drawn:         " + (await bandCount()));
+console.log("19. note in badge:       " + (await badgeText()));
+
+await ego.highlight("h1", { note: "the heading" });
+await page.waitForTimeout(600);
+console.log(
+  "20. band matches text:   " +
+    (await probe(`(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('h1'));
+      const want = range.getBoundingClientRect();
+      const band = ${SHADOW}.getElementById('bands').children[0].getBoundingClientRect();
+      return Math.round(Math.abs(band.width - want.width)) + ',' + Math.round(Math.abs(band.left - want.left));
+    })()`)),
+);
+
+const miss = await ego.highlight("no such words appear anywhere on this page");
+console.log("21. miss draws nothing:  " + (miss.done === false && miss.lines === 0));
+
+await ego.clearHighlight();
+await page.waitForTimeout(200);
+console.log("22. cleared:             " + ((await bandCount()) === 0));
