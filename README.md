@@ -19,7 +19,7 @@
 
 > ### Unofficial Linux fork
 >
-> This is **[`NagyVikt/ego-lite-linux`](https://github.com/NagyVikt/ego-lite-linux)**,
+> This is **[`opencue/ego-lite-linux`](https://github.com/opencue/ego-lite-linux)**,
 > an unofficial community fork of
 > [`citrolabs/ego-lite`](https://github.com/citrolabs/ego-lite). It is **not**
 > affiliated with, endorsed by, or supported by CitroLabs. The download badges

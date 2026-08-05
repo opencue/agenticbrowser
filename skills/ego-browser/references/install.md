@@ -7,7 +7,7 @@ This is the **Linux port**, not the macOS app. Upstream ego lite ships as a
 macOS-only `.dmg`; on Linux the same `ego-browser` harness runs against a stock
 Chromium through a CDP shim.
 
-Source: [`NagyVikt/ego-lite-linux`](https://github.com/NagyVikt/ego-lite-linux),
+Source: [`opencue/ego-lite-linux`](https://github.com/opencue/ego-lite-linux),
 an unofficial fork of `citrolabs/ego-lite`, published on branch `linux-port`
 (checked out locally as `main`, which tracks it). On this machine the checkout
 is at `~/Documents/ego-lite-linux`. Full details: `package/ego-linux/README.md`.
@@ -84,8 +84,10 @@ Node process, so the browser is what survives, not the process.
   (own tabs, ownership, `switch` / `claim` / `handOff` / `complete`), but CDP
   cannot place a tab in a chosen window, so per-space tab lists are not
   reproducible.
-- **No isolation between spaces.** They share one cookie jar, which is the
-  price of inheriting the user's real logins.
+- **Spaces are isolated, but their login state is a copy.** Each space gets its
+  own cookie jar, seeded from yours when the space is created — so your logins
+  are there, but a login made inside one space does not appear in the others,
+  and `localStorage` / IndexedDB / service workers are not carried at all.
 - **Snapshot content is rebuilt** from `DOMSnapshot.captureSnapshot`. Refs
   (`@N`) are exact — they are real CDP `backendNodeId`s — but the tree's
   wording differs from the native snapshot.
