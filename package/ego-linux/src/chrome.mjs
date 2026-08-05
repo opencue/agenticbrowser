@@ -444,7 +444,10 @@ export async function stopBrowser() {
   let stopped = false;
 
   if (state?.port) stopped = await closeBrowserGracefully(state.port);
-  if (stopped && state?.pid) await waitForProcessExit(state.pid);
+  // Answering the request is not the same as acting on it. A browser that
+  // stayed up has to be signalled anyway — otherwise --stop removes the state
+  // file that is the only handle on it and leaves it running, unreachable.
+  if (stopped && state?.pid && !(await waitForProcessExit(state.pid))) stopped = false;
 
   // The blunt instrument, only when the browser did not take the polite request.
   if (!stopped && state?.pid) {
