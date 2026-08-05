@@ -34,6 +34,7 @@ export async function connectCdp(wsUrl) {
   let activeTargetId = null;
   let attachedTargetId = null;
   let mouseWatcher = null;
+  let keyWatcher = null;
   let downloadContextResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
@@ -46,6 +47,13 @@ export async function connectCdp(wsUrl) {
         // the drag path and the press itself, which is what the cursor overlay
         // needs to look like a hand on the mouse rather than a teleport.
         mouseWatcher?.(message.params || {});
+      } else if (
+        message.method === "Input.dispatchKeyEvent" ||
+        message.method === "Input.insertText"
+      ) {
+        // Typing is the one thing an agent does that leaves no trace until the
+        // text appears. Both paths matter: keystrokes and fill()'s bulk insert.
+        keyWatcher?.(message.params || {});
       } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
@@ -205,6 +213,11 @@ export async function connectCdp(wsUrl) {
      */
     watchMouse(handler) {
       mouseWatcher = handler;
+    },
+
+    /** Observe the harness's keyboard input, on the same read-only terms. */
+    watchKeys(handler) {
+      keyWatcher = handler;
     },
 
     /** The shim's own request/response calls. */
