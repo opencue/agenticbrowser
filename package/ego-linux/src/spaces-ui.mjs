@@ -85,7 +85,11 @@ export const SPACES_HTML = `<!doctype html>
   }
   .dot.user { background: var(--muted); }
   .dot.agentDelegatedToUser { background: #e0a02a; }
-  .frame img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+  .frame img {
+    width: 100%; height: 100%; object-fit: cover; object-position: top center;
+    display: block;
+    transition: transform .28s ease-out, transform-origin .28s ease-out;
+  }
   /* A working space is cropped to where its agent is, so the frame shows the
      action rather than the whole page — say so, or the zoom looks like a bug. */
   .frame.live { border-color: rgba(217, 119, 87, .55); }
@@ -214,6 +218,16 @@ function card(space) {
     const img = document.createElement("img");
     img.src = space.thumbnail;
     img.alt = space.title || space.name;
+    // A screencast frame is the whole viewport, where the cursor is about five
+    // pixels wide in a card — unreadable. The server used to crop to the cursor;
+    // now the frames arrive continuously and the zoom happens here instead, so
+    // motion stays smooth and the action still fills the card.
+    const spot = space.activity;
+    if (spot && spot.fx != null && spot.fy != null) {
+      img.style.transformOrigin =
+        (spot.fx * 100).toFixed(1) + "% " + (spot.fy * 100).toFixed(1) + "%";
+      img.style.transform = "scale(2.4)";
+    }
     frame.append(img);
   } else {
     frame.textContent = "no page yet";
@@ -422,7 +436,7 @@ async function refresh() {
 // show movement gets to show some. Idle spaces do not need the traffic: every
 // refresh costs a screenshot per space.
 const IDLE_POLL_MS = 4000;
-const LIVE_POLL_MS = 1200;
+const LIVE_POLL_MS = 400;
 let timer = null;
 
 function schedule() {
