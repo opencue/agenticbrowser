@@ -33,12 +33,19 @@ export async function connectCdp(wsUrl) {
   let closed = false;
   let activeTargetId = null;
   let attachedTargetId = null;
+  let mouseWatcher = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
     try {
       const message = JSON.parse(payload);
-      if (message.method === "Target.activateTarget" && message.params?.targetId) {
+      if (message.method === "Input.dispatchMouseEvent") {
+        // Where the agent's pointer actually is. The harness announces intent
+        // through ego.animationHighlightMouseToPosition, but only these carry
+        // the drag path and the press itself, which is what the cursor overlay
+        // needs to look like a hand on the mouse rather than a teleport.
+        mouseWatcher?.(message.params || {});
+      } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
         // ensureSession() attaches to whatever the harness considers current —
@@ -149,6 +156,15 @@ export async function connectCdp(wsUrl) {
 
     /** The target the harness's own CDP session is attached to, or null. */
     attachedHint: () => attachedTargetId,
+
+    /**
+     * Observe the harness's mouse input as it goes out. Read-only: the callback
+     * runs before the send and its errors are swallowed by noteActivation's
+     * catch, so a watcher can never hold up or fail an action.
+     */
+    watchMouse(handler) {
+      mouseWatcher = handler;
+    },
 
     /** The shim's own request/response calls. */
     call(method, params = {}, sessionId = undefined) {

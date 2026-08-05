@@ -3,6 +3,7 @@ import { connectCdp } from "./transport.mjs";
 import { createTabsApi } from "./tabs.mjs";
 import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
+import { createCursorApi } from "./cursor.mjs";
 
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
@@ -19,6 +20,18 @@ export async function createEgoShim({ headless = false } = {}) {
   const taskSpaces = createTaskSpacesApi(cdp);
   const tabs = createTabsApi(cdp, { port });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
+  const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
+
+  // Every pointer event the harness sends moves the overlay, and a press ripples
+  // where it landed — so a user watching the window sees the agent work.
+  cdp.watchMouse((params) => {
+    // A wheel does not move the pointer, and page.wheel() defaults its
+    // coordinates to (0, 0) — following those would snap the cursor into the
+    // corner on every scroll.
+    if (params.type === "mouseWheel") return;
+    if (params.type === "mousePressed") cursor.pulseAt(params.x, params.y);
+    else cursor.moveTo(params.x, params.y);
+  });
 
   const ego = {
     // --- CDP transport: exact passthrough -----------------------------------
@@ -38,13 +51,26 @@ export async function createEgoShim({ headless = false } = {}) {
     createTaskSpace: taskSpaces.createTaskSpace,
     useTaskSpace: taskSpaces.useTaskSpace,
     claimTaskSpace: taskSpaces.claimTaskSpace,
-    handOffTaskSpace: taskSpaces.handOffTaskSpace,
-    takeOverTaskSpace: taskSpaces.takeOverTaskSpace,
+    // Handing a space back to the user drops the agent overlay, and taking it
+    // over brings it back — the same signal the native app's Space overlay gives.
+    async handOffTaskSpace(id) {
+      const result = await taskSpaces.handOffTaskSpace(id);
+      cursor.hide();
+      return result;
+    },
+    async takeOverTaskSpace(id) {
+      const result = await taskSpaces.takeOverTaskSpace(id);
+      cursor.show();
+      return result;
+    },
     completeTaskSpace: taskSpaces.completeTaskSpace,
     closeTaskSpace: taskSpaces.closeTaskSpace,
-    setAgentTaskState: taskSpaces.setAgentTaskState,
 
-    // --- Cosmetic / app-lifecycle: no-ops on Linux --------------------------
+    // --- The agent's cursor -------------------------------------------------
+    animationHighlightMouseToPosition: (x, y) => cursor.moveTo(x, y),
+    setAgentTaskState: (taskState) => cursor.setTaskState(taskState),
+
+    // --- App-lifecycle: no-ops on Linux -------------------------------------
     async getBrowserVersion() {
       const version = await cdp.call("Browser.getVersion");
       return { version: version.product, revision: version.revision, linuxPort: true };
@@ -53,10 +79,6 @@ export async function createEgoShim({ headless = false } = {}) {
       // The Linux port has no bundled app to upgrade; the user's Chrome updates
       // itself. Reporting "done" keeps the harness's upgrade path a no-op.
       return { done: false, reason: "not applicable on the Linux port" };
-    },
-    async animationHighlightMouseToPosition() {
-      // Purely a visual flourish in the native app.
-      return { done: true };
     },
   };
 
