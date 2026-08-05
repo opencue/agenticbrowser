@@ -38,6 +38,7 @@ const USAGE = `ego-browser (Linux port)
 Linux-only commands:
   --status                  show the backing browser's connection state
   --open                    open the shared agent browser window
+  --spaces                  open the Spaces overview panel
   --stop                    stop the backing browser
   --import-chrome-profile   copy your real Chrome profile in, to inherit logins
   --install-desktop-entry   add it to your app launcher, with an icon
