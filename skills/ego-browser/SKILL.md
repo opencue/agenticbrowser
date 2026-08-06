@@ -146,6 +146,7 @@ A task space is an **isolated browsing context**: its own set of tabs and its ow
 The rules that matter every round:
 
 - Start every working heredoc with `taskSpaces.useOrCreate(nameOrId)` — the Node runtime exits between heredocs; the space is what persists. Prefer the numeric `task.id` over names across rounds.
+- **Check `task.previously` on the returned space.** A space left untouched long enough is closed automatically, and asking for that name afterwards gives you a new, empty one rather than an error. When that has happened, `previously` carries a `note` and the `urls` the old space had open — reopen them instead of assuming you resumed where you left off. It is absent on a normal run.
 - One user goal = one space, reused for every follow-up (corrections, re-checks, validation). A new space only when the user starts a clearly unrelated goal.
 - Finish with `taskSpaces.complete(nameOrId, { keep })` in its own dedicated final heredoc, only after a prior round's output confirmed the task is done. `keep: false` unless the user needs that exact live page open.
 - Login, captcha, or manual confirmation → `taskSpaces.handOff(nameOrId)`, tell the user exactly what to do, and resume with `taskSpaces.takeOver(nameOrId)` **only after they explicitly confirm**. Never take control uninvited — a "user is controlling" error is a hard stop: ask and wait.
