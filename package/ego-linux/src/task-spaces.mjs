@@ -368,6 +368,15 @@ export function createTaskSpacesApi(cdp) {
     }
   }
 
+  /** The space's own still-blank tab, if it has exactly that and nothing else. */
+  async function blankAnchor(space) {
+    const ids = space.targetIds || [];
+    if (ids.length !== 1) return null;
+    const live = await livePageTargets().catch(() => new Map());
+    const target = live.get(ids[0]);
+    return target && target.url === "about:blank" ? target.targetId : null;
+  }
+
   async function disposeContext(browserContextId) {
     await cdp
       .call("Target.disposeBrowserContext", { browserContextId })
@@ -556,6 +565,27 @@ export function createTaskSpacesApi(cdp) {
       const space = state.spaces.find(
         (candidate) => candidate.id === effectiveSelectedId(state),
       );
+      // A space is anchored by a tab — one with none is reaped as soon as it is
+      // reconciled — so it opens on about:blank before it has anywhere to go.
+      // Creating a second tab for the first navigation strands that anchor, and
+      // the window then shows a blank tab beside the real page for the rest of
+      // the session. Navigating the anchor is what it was opened for.
+      //
+      // Guarded on lastContentAt rather than on the tab's current url: a tab is
+      // about:blank for a moment during every navigation, so matching on the url
+      // alone would hijack a tab that is already carrying work. "Never held a
+      // page" is only true of a space that has not started yet.
+      const anchor = space && !space.lastContentAt ? await blankAnchor(space) : null;
+      if (anchor && url && url !== "about:blank") {
+        const { sessionId } = await cdp.call("Target.attachToTarget", {
+          targetId: anchor,
+          flatten: true,
+        });
+        await cdp.call("Page.navigate", { url }, sessionId);
+        await cdp.call("Target.activateTarget", { targetId: anchor }).catch(() => {});
+        return { targetId: anchor };
+      }
+
       // Open it inside the space's context, so every tab of a space shares that
       // space's jar rather than the first tab being isolated and the rest not.
       let result;
