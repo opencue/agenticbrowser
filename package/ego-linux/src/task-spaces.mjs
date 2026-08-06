@@ -30,7 +30,15 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
-const EMPTY = { spaces: [], selectedId: null, nextId: 1 };
+const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+
+/**
+ * How many idle-closed spaces to remember.
+ *
+ * Enough that a session returning from a long break still finds its own, few
+ * enough that the state file cannot grow without bound.
+ */
+const REMEMBERED_CLOSURES = 20;
 
 export function createTaskSpacesApi(cdp) {
   /**
@@ -230,6 +238,23 @@ export function createTaskSpacesApi(cdp) {
       }
       if (space.browserContextId) await disposeContext(space.browserContextId);
     }
+
+    // Leave a trail. Without one, an agent coming back after a long break calls
+    // useOrCreate with the same name, silently gets a brand-new empty space, and
+    // carries on believing it resumed — the tabs it had open are simply gone and
+    // nothing says so. A closed space that names itself and lists what it held
+    // turns that into something the agent can put back.
+    const closures = state.closedSpaces || [];
+    for (const space of doomed) {
+      closures.unshift({
+        name: space.name,
+        urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
+        closedAt: now,
+        idleMinutes: Math.round((now - space.touchedAt) / 60000),
+      });
+    }
+    state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
     return true;
@@ -460,6 +485,30 @@ export function createTaskSpacesApi(cdp) {
       state.nextId += 1;
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+
+      // useOrCreate lands here whenever it cannot find the name it was given —
+      // including when the idle sweep closed that very space while its agent was
+      // away. Handing back what the old one held is the difference between
+      // "resumed" and "started over without noticing". Consumed on use, so it is
+      // reported once rather than on every later run of the same name.
+      const closures = state.closedSpaces || [];
+      const index = closures.findIndex((entry) => entry.name === space.name);
+      if (index !== -1) {
+        const [previous] = closures.splice(index, 1);
+        state.closedSpaces = closures;
+        space.previously = {
+          closedAt: previous.closedAt,
+          idleMinutes: previous.idleMinutes,
+          urls: previous.urls,
+          note:
+            `a task space named ${JSON.stringify(space.name)} was closed after ` +
+            `${previous.idleMinutes} minutes idle; this is a new, empty one. ` +
+            (previous.urls.length
+              ? `It had these pages open: ${previous.urls.join(", ")}`
+              : "It had no pages open."),
+        };
+      }
+
       await writeState(state);
       return space;
     },
