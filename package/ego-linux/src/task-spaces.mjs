@@ -170,6 +170,17 @@ export function createTaskSpacesApi(cdp) {
     let stamped = false;
     const doomed = state.spaces.filter((space) => {
       if (space.id === state.selectedId) return false;
+      // touchedAt only moves when an API call names the space, and nothing a
+      // person does at the keyboard produces one. A space handed over for a
+      // login or a captcha, or completed with keep: true — which exists purely
+      // to say "leave this page open" — would therefore go idle while it is
+      // being used, and get closed out from under them.
+      if (
+        space.ownership === "user" ||
+        space.ownership === "agentDelegatedToUser"
+      ) {
+        return false;
+      }
       // Spaces that predate this field have no idle history, and judging them
       // by createdAt would sweep every one of them the first time the feature
       // runs — including whatever a colleague session is halfway through. Stamp

@@ -835,7 +835,13 @@ function renderOverlay(payload) {
   // the same signal the sweep does rather than tracking a second one.
   const readingNow = Boolean(payload.read) && !payload.typing;
   shadow.getElementById("layer").classList.toggle("reading", readingNow);
-  shadow.getElementById("glow").classList.toggle("on", readingNow);
+  // A host injected by an older build has no #glow, and the shim reuses whatever
+  // host it finds rather than rebuilding it. Reaching straight through would
+  // throw a TypeError that flush() silently swallows, leaving the cursor frozen
+  // on every page that was already open when the update landed. Missing glow
+  // just means no glow until that page next navigates.
+  const glow = shadow.getElementById("glow");
+  if (glow) glow.classList.toggle("on", readingNow);
   // A reading label is always current — the sweep rewrites it per line — so the
   // stale dimming only applies when the badge actually fell back to old text.
   shadow

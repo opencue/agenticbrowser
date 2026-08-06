@@ -120,6 +120,30 @@ describe("idle task space sweep", () => {
     }
   });
 
+  it("leaves a space the user was given, however long it has sat", async () => {
+    // The keep: true path sets ownership "user" precisely to say "leave this
+    // page open", and a handoff sets "agentDelegatedToUser" while a person is
+    // logging in. Neither produces an API call, so both would look idle.
+    process.env.EGO_LINUX_SPACE_IDLE_MIN = "30";
+    const long = Date.now() - 300 * MINUTE;
+    await seed([
+      { ...space(1, "t-live", long), ownership: "user" },
+      { ...space(2, "t-idle", long), ownership: "agentDelegatedToUser" },
+    ]);
+
+    const closed = [];
+    const { taskSpaces } = await createTaskSpacesApi(
+      fakeCdp(closed),
+    ).listTaskSpaces();
+
+    assert.deepEqual(
+      taskSpaces.map((s) => s.id),
+      [1, 2],
+      "a space in a person's hands is never swept",
+    );
+    assert.deepEqual(closed, []);
+  });
+
   it("can be turned off entirely", async () => {
     process.env.EGO_LINUX_SPACE_IDLE_MIN = "0";
     const now = Date.now();
