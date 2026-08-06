@@ -1,0 +1,82 @@
+{
+  "id": "facebook",
+  "name": "Facebook Groups",
+  "domains": ["facebook.com", "*.facebook.com", "fb.com", "*.fb.com"],
+  "notes": ["notes/overview.md", "notes/groups.md"],
+  "nodeTools": {
+    "list_my_groups": {
+      "description": "List the groups the logged-in account belongs to, from facebook.com/groups/joins.",
+      "path": "tools/my-groups.js",
+      "callable": "listMyGroups",
+      "args": {
+        "maxGroups": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of groups to return. Defaults to 50, capped at 200."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {name, url, groupId} objects."
+      }
+    },
+    "get_group_posts": {
+      "description": "Extract posts from the group feed currently open in the tab. Scrolls to load the virtualized feed.",
+      "path": "tools/group-feed.js",
+      "callable": "getGroupPosts",
+      "args": {
+        "maxPosts": {
+          "type": "integer",
+          "required": false,
+          "description": "Maximum number of posts to extract. Defaults to 20, capped at 100."
+        },
+        "scrollRounds": {
+          "type": "integer",
+          "required": false,
+          "description": "How many times to scroll the virtualized feed before extracting. Defaults to 3, capped at 15."
+        }
+      },
+      "returns": {
+        "type": "array",
+        "description": "Array of {author, authorUrl, text, permalink, timestamp, timestampAbsolute} objects. author and text are always populated; permalink and both timestamps are empty for roughly half of posts because Facebook never renders their timestamp anchor."
+      }
+    },
+    "post_to_group": {
+      "description": "Open the group composer and type a post. Only submits when confirm is true; otherwise it leaves the filled draft on screen for review.",
+      "path": "tools/group-post.js",
+      "callable": "postToGroup",
+      "args": {
+        "text": {
+          "type": "string",
+          "required": true,
+          "description": "Post body to type into the composer."
+        },
+        "confirm": {
+          "type": "boolean",
+          "required": false,
+          "description": "Set true to actually publish. Defaults to false, which fills the draft and stops so a human can review it."
+        },
+        "submitLabels": {
+          "type": "array",
+          "required": false,
+          "description": "Extra aria-label strings for the publish button, for UI locales beyond the built-in English and Hungarian defaults."
+        }
+      },
+      "returns": {
+        "type": "object",
+        "description": "{ status, draft, url } where status is 'posted', 'drafted', or 'failed'. The drafted result also carries matchesRequested, which is false when the composer altered the text — Facebook drops a trailing period."
+      }
+    }
+  },
+  "browserTools": {
+    "composer_state": {
+      "description": "Report whether a post composer is open on the current page, what it contains, and which publish button is reachable.",
+      "path": "browser-tools/composer-state.js",
+      "args": {},
+      "returns": {
+        "type": "object",
+        "description": "{ open, text, submitLabel, submitEnabled } describing the composer."
+      }
+    }
+  }
+}
