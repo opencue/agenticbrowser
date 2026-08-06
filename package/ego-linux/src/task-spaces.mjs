@@ -33,6 +33,36 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 const EMPTY = { spaces: [], selectedId: null, nextId: 1 };
 
 export function createTaskSpacesApi(cdp) {
+  /**
+   * Which space *this process* is working in.
+   *
+   * selectedId lives in a file every concurrent session shares, and each heredoc
+   * writes it on the way in. So a second agent starting up silently reassigns
+   * the first one: from that moment the first agent scoped its tab list, its
+   * navigations and its cursor to the *other* session's space. The observed
+   * symptom is a tab navigating away to an unrelated site while the agent that
+   * opened it is still working in it, and the other agent finding a stranger's
+   * page where its own should be.
+   *
+   * Once this process has chosen a space it pins it here and stops consulting
+   * the shared value. The file still records the global selection — the Spaces
+   * overview reads it, and it is the right answer for a fresh process that has
+   * not chosen yet — it simply no longer decides what an already-committed
+   * process acts on.
+   */
+  let pinnedSpaceId = null;
+
+  /** The pinned space if it still exists, else whatever the file last recorded. */
+  function effectiveSelectedId(state) {
+    if (
+      pinnedSpaceId !== null &&
+      state.spaces.some((space) => space.id === pinnedSpaceId)
+    ) {
+      return pinnedSpaceId;
+    }
+    return state.selectedId;
+  }
+
   async function readState() {
     try {
       const parsed = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
@@ -120,7 +150,7 @@ export function createTaskSpacesApi(cdp) {
 
   async function pruneAbandoned(state, live) {
     const doomed = state.spaces.filter((space) => {
-      if (space.id === state.selectedId) return false;
+      if (space.id === effectiveSelectedId(state)) return false;
       // Ever held a real page => not abandoned, only between pages.
       if (space.lastContentAt) return false;
       if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS) return false;
@@ -169,7 +199,7 @@ export function createTaskSpacesApi(cdp) {
     // would re-stamp from scratch, so nothing would ever reach the threshold.
     let stamped = false;
     const doomed = state.spaces.filter((space) => {
-      if (space.id === state.selectedId) return false;
+      if (space.id === effectiveSelectedId(state)) return false;
       // touchedAt only moves when an API call names the space, and nothing a
       // person does at the keyboard produces one. A space handed over for a
       // login or a captcha, or completed with keep: true — which exists purely
@@ -277,7 +307,8 @@ export function createTaskSpacesApi(cdp) {
    * create are passed an id.
    */
   async function requireSpace(state, id, op) {
-    const wanted = id === undefined || id === null ? state.selectedId : Number(id);
+    const wanted =
+      id === undefined || id === null ? effectiveSelectedId(state) : Number(id);
     const space = state.spaces.find((candidate) => candidate.id === wanted);
     if (!space) {
       throw new Error(
@@ -329,9 +360,8 @@ export function createTaskSpacesApi(cdp) {
   function selectedContextId() {
     try {
       const state = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
-      const space = state.spaces?.find(
-        (candidate) => candidate.id === state.selectedId,
-      );
+      const wanted = effectiveSelectedId({ ...state, spaces: state.spaces ?? [] });
+      const space = state.spaces?.find((candidate) => candidate.id === wanted);
       return space?.browserContextId ?? null;
     } catch {
       return null;
@@ -375,7 +405,9 @@ export function createTaskSpacesApi(cdp) {
      */
     async noteContent() {
       const state = await readState();
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
       if (!space || space.lastContentAt) return;
       space.lastContentAt = Date.now();
       await writeState(state);
@@ -418,6 +450,7 @@ export function createTaskSpacesApi(cdp) {
       state.spaces.push(space);
       state.nextId += 1;
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       return space;
     },
@@ -426,6 +459,7 @@ export function createTaskSpacesApi(cdp) {
       const state = await readState();
       const space = await requireSpace(state, id, "useTaskSpace");
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return { done: true };
@@ -436,6 +470,7 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "claimTaskSpace");
       space.ownership = "agent";
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return space;
@@ -454,6 +489,7 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "takeOverTaskSpace");
       space.ownership = "agent";
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return { done: true };
@@ -481,6 +517,7 @@ export function createTaskSpacesApi(cdp) {
       }
       state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
       if (state.selectedId === space.id) state.selectedId = null;
+      if (pinnedSpaceId === space.id) pinnedSpaceId = null;
       await writeState(state);
       return { done: true };
     },
@@ -503,8 +540,10 @@ export function createTaskSpacesApi(cdp) {
      */
     async selectedScope() {
       const state = await readState();
-      if (!state.selectedId) return null;
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      if (!effectiveSelectedId(state)) return null;
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
       if (!space) return null;
       return {
         browserContextId: space.browserContextId || null,
@@ -514,7 +553,9 @@ export function createTaskSpacesApi(cdp) {
 
     async createTabInSelectedSpace(tabs, url) {
       const state = await readState();
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
       // Open it inside the space's context, so every tab of a space shares that
       // space's jar rather than the first tab being isolated and the rest not.
       let result;
