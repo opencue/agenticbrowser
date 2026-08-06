@@ -31,6 +31,12 @@ import { createSessionResolver } from "./session.mjs";
 
 const HOST_ID = "ego-agent-cursor-overlay";
 const ACCENT = "#d97757";
+// Reading is where an agent spends most of its time, and the state a watcher is
+// likeliest to mistake for an idle window. Giving it its own colour means one
+// glance separates looking at the page from changing it — terracotta acts, blue
+// observes. Every mark the overlay draws while reading switches to this, and
+// switches back the moment real input lands.
+const READ_ACCENT = "#4a9eff";
 
 /** How long the pressed look is held, however briefly the button was down. */
 const MIN_PRESS_MS = 130;
@@ -111,10 +117,15 @@ export function createCursorApi(cdp, { listTabs }) {
         const payload = {
           x: state.x,
           y: state.y,
-          // Only while the cursor is still on the action it was set for.
-          label: state.x === labelX && state.y === labelY ? state.label : "",
+          // The label always goes out, so the badge never empties mid-session —
+          // a blank badge tells a watcher less than a slightly old one. Whether
+          // it still describes where the cursor now is travels alongside it, and
+          // the overlay dims a stale label rather than passing it off as current.
+          label: state.label,
+          labelStale: !(state.x === labelX && state.y === labelY),
           name,
           accent: ACCENT,
+          readAccent: READ_ACCENT,
           hostId: HOST_ID,
           // Typing counts as something to show even before the cursor has been
           // placed, because fill() never places it.
@@ -164,7 +175,9 @@ export function createCursorApi(cdp, { listTabs }) {
       state.x = x;
       state.y = y;
       state.placed = true;
-      if (state.label === "reading") state.label = "";
+      // The label is no longer blanked here: it stays up, marked stale, until a
+      // real action replaces it. Emptying it on every move is what made the
+      // badge flicker on a page the agent was only walking across.
       schedule();
       return { done: true };
     },
@@ -579,8 +592,25 @@ function renderOverlay(payload) {
       // A read band is the same stroke, lighter and temporary: reading is
       // constant, so its marks fade behind the cursor instead of piling up the
       // way a deliberate highlight does.
-      ".band.read{background:linear-gradient(180deg,rgba(217,119,87,.3),rgba(217,119,87,.16));" +
+      ".band.read{background:linear-gradient(180deg,rgba(74,158,255,.32),rgba(74,158,255,.16));" +
       "box-shadow:none;transition-property:width,opacity;transition-timing-function:linear}" +
+      // While reading, every mark the overlay owns turns blue: the arrow, the
+      // ring, the badge's dot. The rules are scoped to #layer.reading so the
+      // whole scheme reverts in one class toggle when input arrives.
+      "#layer.reading #arrow path,#layer.reading #hand path{fill:" +
+      payload.readAccent +
+      "}" +
+      "#layer.reading #ring{border-color:" +
+      payload.readAccent +
+      ";box-shadow:0 0 0 4px rgba(74,158,255,.18)}" +
+      "#layer.reading #dot{background:" +
+      payload.readAccent +
+      "}" +
+      // A label that no longer describes where the cursor is stays legible but
+      // stops competing with one that does — and its dot stops breathing,
+      // because breathing is what marks the badge as live.
+      "#badge.stale{opacity:.5}" +
+      "#badge.stale #dot{animation:none;opacity:.35}" +
       "#pointer{position:absolute;left:0;top:0;" +
       "transition:transform 200ms cubic-bezier(.22,.61,.36,1);will-change:transform}" +
       "#ring{position:absolute;left:0;top:0;border:2px solid " +
@@ -631,6 +661,18 @@ function renderOverlay(payload) {
       payload.accent +
       ";animation:ego-breathe 1.7s ease-in-out infinite}" +
       "@keyframes ego-breathe{0%,100%{opacity:1}50%{opacity:.35}}" +
+      // The reading glow. A sibling of #layer, not a child: #layer carries the
+      // scroll offset as a transform, and a transformed ancestor would make
+      // position:fixed resolve against it instead of the viewport — the glow
+      // would then scroll away from the edges it is meant to trace.
+      "#glow{position:fixed;left:0;top:0;right:0;bottom:0;opacity:0;" +
+      "transition:opacity 260ms ease;" +
+      "box-shadow:inset 0 0 0 2px rgba(74,158,255,.22)," +
+      "inset 0 0 52px rgba(74,158,255,.13)}" +
+      // Breathing at a slower beat than the badge dot, so the two read as one
+      // system rather than as two things blinking out of step.
+      "#glow.on{opacity:1;animation:ego-read-glow 2.4s ease-in-out infinite}" +
+      "@keyframes ego-read-glow{0%,100%{opacity:1}50%{opacity:.5}}" +
       // The shape says what the cursor is over, the way a real one does: an
       // arrow on the page, a hand on anything clickable, a beam over text.
       "svg.shape{position:absolute;left:-1px;top:-1px;display:none}" +
@@ -669,7 +711,8 @@ function renderOverlay(payload) {
       // whole subtree alike only while that stays true.
       '<div id="badge"><span id="dot"></span><span id="hint"></span>' +
       '<span id="text"></span></div>' +
-      "</div>";
+      "</div>" +
+      '<div id="glow"></div>';
     host.__egoShadow = shadow;
 
     // The page scrolls under the cursor between actions, and no CDP round trip
@@ -690,8 +733,16 @@ function renderOverlay(payload) {
     // cycle would stack a listener per show, each closing over a dead root.
     if (window.__egoCursorSync) {
       window.removeEventListener("scroll", window.__egoCursorSync);
+      window.removeEventListener("resize", window.__egoCursorSync);
     }
     window.addEventListener("scroll", sync, { passive: true });
+    // A resize reflows the page under an overlay whose marks are held in page
+    // coordinates, and re-docks nothing on its own: the badge keeps measuring
+    // itself against the viewport it was placed in, so the whole overlay reads
+    // as slid away from what it points at. Retiling the window — switching to a
+    // dynamic or split layout — is the everyday way to hit it, and scrolling was
+    // the only event that used to put it right again.
+    window.addEventListener("resize", sync, { passive: true });
     window.__egoCursorSync = sync;
     host.__egoSync = sync;
     parent.appendChild(host);
@@ -767,10 +818,29 @@ function renderOverlay(payload) {
     : null;
   showShape(shadow, payload.typing ? "beam" : shapeFor(under));
 
-  const detail = payload.typing
-    ? "typing…"
-    : payload.note || payload.label || describe(subject);
+  // A label that still matches where the cursor is outranks everything. Once it
+  // goes stale it yields to a fresh description of what is actually under the
+  // cursor, and only comes back when there is nothing else to say — dimmed, to
+  // admit it is history. That ordering is what keeps the badge both permanent
+  // and honest: it never empties, and it never narrates the wrong thing.
+  const current = payload.note || (payload.labelStale ? "" : payload.label);
+  const nearby = describe(subject);
+  const showingStale =
+    !payload.typing && !current && !nearby && Boolean(payload.label);
+  const detail = payload.typing ? "typing…" : current || nearby || payload.label;
   setBadgeText(detail ? payload.name + " · " + detail : payload.name);
+
+  // Reading owns the blue scheme; anything else hands it straight back. The
+  // read is what the harness cleared on the last real input, so this follows
+  // the same signal the sweep does rather than tracking a second one.
+  const readingNow = Boolean(payload.read) && !payload.typing;
+  shadow.getElementById("layer").classList.toggle("reading", readingNow);
+  shadow.getElementById("glow").classList.toggle("on", readingNow);
+  // A reading label is always current — the sweep rewrites it per line — so the
+  // stale dimming only applies when the badge actually fell back to old text.
+  shadow
+    .getElementById("badge")
+    .classList.toggle("stale", showingStale && !readingNow);
 
   placeBadge(viewX, viewY);
 
