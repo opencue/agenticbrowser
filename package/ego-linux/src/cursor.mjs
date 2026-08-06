@@ -82,6 +82,48 @@ export function createCursorApi(cdp, { listTabs }) {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
   /**
+   * Put the overlay back after the page it lived in was replaced.
+   *
+   * The cursor is a DOM node injected into the current document, so a
+   * navigation destroys it — and nothing re-injects. Only a render does that,
+   * and renders are driven by snapshots, pointer events and keystrokes, none of
+   * which a goto() performs. So an agent that navigated and then worked through
+   * page.evaluate or a site tool — neither of which snapshots — drove the page
+   * with no cursor on screen at all, which reads as an idle window.
+   *
+   * The old coordinates described elements in a document that no longer exists,
+   * so re-drawing at them would point confidently at nothing. The cursor goes
+   * back to its resting corner instead and lets the badge carry what the agent
+   * is doing; the label is already marked stale by the move, so it presents
+   * itself as history rather than as the current action.
+   */
+  function pageReplaced() {
+    if (!enabled) return;
+    endRead();
+    state.x = RESTING_X;
+    state.y = RESTING_Y;
+    state.placed = true;
+    schedule();
+  }
+
+  // Events only reach the shim for sessions it has claimed, and only for domains
+  // enabled on them — see claimSession/onShimEvent in transport.mjs. Registered
+  // once here; flush() does the per-session claim as targets come and go.
+  cdp.onShimEvent?.("Page.loadEventFired", () => pageReplaced());
+
+  /** Sessions already claimed and told to report loads. */
+  const watchedSessions = new Set();
+
+  async function watchLoads(sessionId) {
+    if (!sessionId || watchedSessions.has(sessionId)) return;
+    watchedSessions.add(sessionId);
+    cdp.claimSession?.(sessionId);
+    // Without Page.enable the load event never fires on this session. Failure is
+    // cosmetic, exactly like every other render step here.
+    await cdp.call("Page.enable", {}, sessionId).catch(() => {});
+  }
+
+  /**
    * A read sweep narrates the snapshot that started it, so any real input makes
    * it stale. Dropping the read from the payload is how the page is told to stop
    * — the sweep owns the cursor only while the id it began with keeps arriving.
@@ -140,6 +182,7 @@ export function createCursorApi(cdp, { listTabs }) {
         };
         pendingPulse = false;
         const sessionId = await sessionForActiveTab();
+        await watchLoads(sessionId);
         await cdp.call(
           "Runtime.evaluate",
           {
@@ -161,6 +204,26 @@ export function createCursorApi(cdp, { listTabs }) {
   }
 
   return {
+    /**
+     * Arm the load watcher ahead of a navigation the overlay has to survive.
+     *
+     * flush() claims the session as a side effect of rendering, so a process
+     * whose very first act is a goto has claimed nothing yet and misses its own
+     * first load — leaving the window blank for exactly the shape of task that
+     * navigates and then works through page.evaluate or a site tool. Called on
+     * Page.navigate, which the harness sends before the document is replaced.
+     */
+    async watchPage() {
+      if (!enabled) return { done: false, reason: "cursor disabled" };
+      try {
+        await watchLoads(await sessionForActiveTab());
+      } catch {
+        // No tab yet, or a target that refused the attach: cosmetic, like every
+        // other step here.
+      }
+      return { done: true };
+    },
+
     /** Back ego.animationHighlightMouseToPosition(x, y). */
     moveTo(x, y) {
       if (!enabled) return { done: false, reason: "cursor disabled" };
@@ -814,7 +877,14 @@ function renderOverlay(payload) {
   // ask here precisely because the overlay is pointer-events:none.
   const under = document.elementFromPoint(viewX, viewY);
   const subject = under
-    ? under.closest("a,button,input,select,textarea,label,summary,[role]") || under
+    ? under.closest("a,button,input,select,textarea,label,summary,[role]") ||
+      // Falling back to whatever is under the cursor is useful for a paragraph
+      // or an image. It is not for <html> or <body>: their textContent is the
+      // entire document, stylesheet text and all, so the badge would read
+      // "Claude · Example Domainbody{background:#…". Resting the cursor in a
+      // corner after a navigation lands on exactly those, so describing them
+      // has to mean describing nothing — the stale label is the better answer.
+      (under.tagName === "HTML" || under.tagName === "BODY" ? null : under)
     : null;
   showShape(shadow, payload.typing ? "beam" : shapeFor(under));
 
