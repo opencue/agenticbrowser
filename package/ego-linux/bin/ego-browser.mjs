@@ -41,6 +41,11 @@ Linux-only commands:
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
   --prune-spaces            close spaces that hold nothing but about:blank
+                            Spaces nobody returns to are also closed on their
+                            own after 30 minutes idle; a space stays alive as
+                            long as its session keeps using it. Set
+                            EGO_LINUX_SPACE_IDLE_MIN to change the window, or
+                            0 to sweep only by hand
   --stop                    stop the backing browser
   --import-chrome-profile   copy your real Chrome profile in, to inherit logins
   --install-desktop-entry   add it to your app launcher, with an icon

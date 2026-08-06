@@ -141,6 +141,59 @@ export function createTaskSpacesApi(cdp) {
     return true;
   }
 
+  /**
+   * Close spaces nobody has come back to.
+   *
+   * A space outlives the process that opened it — every heredoc is a fresh Node
+   * run — so nothing reaps one whose agent simply stopped returning. A session
+   * that ends mid-task leaves its tabs open for good, and the count only climbs;
+   * spaces from long-finished work were still holding pages days later.
+   *
+   * Idleness is measured from the last time something addressed the space, not
+   * from when its page last changed: an agent reading one page for ten minutes
+   * is working, and a space parked on a live dashboard is not. Live work keeps
+   * itself alive by continuing, since every round touches the space it uses.
+   *
+   * The selected space is never swept — it is the one someone is on right now —
+   * and EGO_LINUX_SPACE_IDLE_MIN=0 turns the sweep off for anyone who would
+   * rather clean up by hand.
+   */
+  const IDLE_MINUTES = Number(process.env.EGO_LINUX_SPACE_IDLE_MIN ?? 30);
+  const IDLE_AFTER_MS =
+    Number.isFinite(IDLE_MINUTES) && IDLE_MINUTES > 0 ? IDLE_MINUTES * 60000 : 0;
+
+  async function pruneIdle(state) {
+    if (!IDLE_AFTER_MS) return false;
+    const now = Date.now();
+    // Stamping is itself a state change worth persisting: drop it and every run
+    // would re-stamp from scratch, so nothing would ever reach the threshold.
+    let stamped = false;
+    const doomed = state.spaces.filter((space) => {
+      if (space.id === state.selectedId) return false;
+      // Spaces that predate this field have no idle history, and judging them
+      // by createdAt would sweep every one of them the first time the feature
+      // runs — including whatever a colleague session is halfway through. Stamp
+      // them instead and let them earn a full idle window from here.
+      if (!space.touchedAt) {
+        space.touchedAt = now;
+        stamped = true;
+        return false;
+      }
+      return now - space.touchedAt >= IDLE_AFTER_MS;
+    });
+    if (doomed.length === 0) return stamped;
+
+    for (const space of doomed) {
+      for (const targetId of space.targetIds || []) {
+        await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+      }
+      if (space.browserContextId) await disposeContext(space.browserContextId);
+    }
+    const gone = new Set(doomed.map((space) => space.id));
+    state.spaces = state.spaces.filter((space) => !gone.has(space.id));
+    return true;
+  }
+
   /** Drop tabs the user closed, and spaces left with none. */
   async function reconcile(state) {
     const live = await livePageTargets();
@@ -172,6 +225,7 @@ export function createTaskSpacesApi(cdp) {
 
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
+    if (await pruneIdle(state)) changed = true;
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
@@ -221,6 +275,11 @@ export function createTaskSpacesApi(cdp) {
           : `${op}: task space not found: ${id}`,
       );
     }
+    // Every API call that names a space is a session saying it is still here.
+    // That is what the idle sweep measures, and touching it in the one place
+    // they all pass through is what keeps live work from being swept out from
+    // under an agent that simply had a long think between rounds.
+    space.touchedAt = Date.now();
     return space;
   }
 
@@ -337,6 +396,7 @@ export function createTaskSpacesApi(cdp) {
         taskId: state.nextId,
         name: String(name ?? `task ${state.nextId}`),
         createdAt: Date.now(),
+        touchedAt: Date.now(),
         ownership: "agent",
         createdBy: "agent",
         // Which agent profile opened it — the overview's right-hand label.
