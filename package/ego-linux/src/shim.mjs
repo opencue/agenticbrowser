@@ -57,6 +57,10 @@ export async function createEgoShim({ headless = false } = {}) {
 
   cdp.watchNavigation(() => {
     void taskSpaces.noteContent().catch(() => {});
+    // A navigation destroys the overlay with the document it lives in. This is
+    // the earliest point the shim hears about one, and arming here is what lets
+    // the cursor come back on the load that follows.
+    void cursor.watchPage().catch(() => {});
   });
 
   const ego = {
@@ -84,8 +88,20 @@ export async function createEgoShim({ headless = false } = {}) {
 
     // --- Task spaces --------------------------------------------------------
     listTaskSpaces: taskSpaces.listTaskSpaces,
-    createTaskSpace: taskSpaces.createTaskSpace,
-    useTaskSpace: taskSpaces.useTaskSpace,
+    // Arming on Page.navigate is too late for that same navigation — the claim
+    // and Page.enable race the load and usually lose. Selecting a space is the
+    // first moment a tab is guaranteed to exist, and it always precedes the
+    // goto, so this is where a process's very first load gets covered.
+    async createTaskSpace(name) {
+      const result = await taskSpaces.createTaskSpace(name);
+      void cursor.watchPage().catch(() => {});
+      return result;
+    },
+    async useTaskSpace(id) {
+      const result = await taskSpaces.useTaskSpace(id);
+      void cursor.watchPage().catch(() => {});
+      return result;
+    },
     claimTaskSpace: taskSpaces.claimTaskSpace,
     // Handing a space back to the user drops the agent overlay, and taking it
     // over brings it back — the same signal the native app's Space overlay gives.
