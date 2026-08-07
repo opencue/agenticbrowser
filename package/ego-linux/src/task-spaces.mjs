@@ -156,6 +156,57 @@ export function createTaskSpacesApi(cdp) {
    */
   const ABANDONED_AFTER_MS = 120000;
 
+  /**
+   * Leave a trail. Without one, an agent coming back after a break calls
+   * useOrCreate with the same name, silently gets a brand-new empty space, and
+   * carries on believing it resumed — the tabs it had open are simply gone and
+   * nothing says so. A closed space that names itself and lists what it held
+   * turns that into something the agent can put back.
+   *
+   * Every path that destroys a space records one. Only the idle sweep used to,
+   * so a space the user closed the last tab of, or one reaped as abandoned,
+   * vanished without a word — and those are the ordinary ways a space ends, not
+   * the rare one. The reason travels with the entry because "closed after 30
+   * minutes idle" and "you closed its last tab" ask the agent to do different
+   * things about it.
+   */
+  function rememberClosures(state, spaces, reason, now) {
+    const closures = state.closedSpaces || [];
+    for (const space of spaces) {
+      closures.unshift({
+        name: space.name,
+        urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
+        closedAt: now,
+        reason,
+        // Only the idle sweep measures itself against a deadline; for the other
+        // reasons the number would be noise dressed up as a cause.
+        ...(reason === "idle" && space.touchedAt
+          ? { idleMinutes: Math.round((now - space.touchedAt) / 60000) }
+          : {}),
+      });
+    }
+    state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+  }
+
+  /**
+   * Phrase why a space ended, for whoever comes looking for it.
+   *
+   * Entries written before closures carried a reason only ever came from the
+   * idle sweep, so an idleMinutes with no reason still reads correctly. One with
+   * neither says only that the space is gone, which is the honest answer rather
+   * than a guessed cause.
+   */
+  function closureCause(closure) {
+    if (closure.reason === "tabs-closed") return "was closed with its last tab";
+    if (closure.reason === "abandoned") {
+      return "was reaped as abandoned, having been opened but never used";
+    }
+    if (typeof closure.idleMinutes === "number") {
+      return `was closed after ${closure.idleMinutes} minutes idle`;
+    }
+    return "was closed";
+  }
+
   async function pruneAbandoned(state, live) {
     const doomed = state.spaces.filter((space) => {
       if (space.id === effectiveSelectedId(state)) return false;
@@ -174,6 +225,7 @@ export function createTaskSpacesApi(cdp) {
       }
       if (space.browserContextId) await disposeContext(space.browserContextId);
     }
+    rememberClosures(state, doomed, "abandoned", Date.now());
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
     return true;
@@ -239,21 +291,7 @@ export function createTaskSpacesApi(cdp) {
       if (space.browserContextId) await disposeContext(space.browserContextId);
     }
 
-    // Leave a trail. Without one, an agent coming back after a long break calls
-    // useOrCreate with the same name, silently gets a brand-new empty space, and
-    // carries on believing it resumed — the tabs it had open are simply gone and
-    // nothing says so. A closed space that names itself and lists what it held
-    // turns that into something the agent can put back.
-    const closures = state.closedSpaces || [];
-    for (const space of doomed) {
-      closures.unshift({
-        name: space.name,
-        urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
-        closedAt: now,
-        idleMinutes: Math.round((now - space.touchedAt) / 60000),
-      });
-    }
-    state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+    rememberClosures(state, doomed, "idle", now);
 
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
@@ -299,11 +337,13 @@ export function createTaskSpacesApi(cdp) {
       // hand, so its context has to go the same way closeTaskSpace disposes
       // one. Dropping the record alone would strand a live context holding a
       // full copy of the seeded cookie jar until the browser restarts.
-      for (const space of state.spaces) {
-        if (space.targetIds.length === 0 && space.browserContextId) {
-          await disposeContext(space.browserContextId);
-        }
+      const closed = state.spaces.filter(
+        (space) => space.targetIds.length === 0,
+      );
+      for (const space of closed) {
+        if (space.browserContextId) await disposeContext(space.browserContextId);
       }
+      rememberClosures(state, closed, "tabs-closed", Date.now());
       state.spaces = surviving;
       changed = true;
     }
@@ -449,7 +489,14 @@ export function createTaskSpacesApi(cdp) {
 
     async listTaskSpaces() {
       const { state, live } = await reconcile(await readState());
-      return { taskSpaces: state.spaces.map((space) => decorate(space, live)) };
+      return {
+        taskSpaces: state.spaces.map((space) => decorate(space, live)),
+        // A caller that cannot find the space it asked for needs this to say
+        // anything better than "not found". Reported alongside the live list
+        // rather than consumed, so a lookup can explain itself without
+        // spending the entry a later useOrCreate still wants.
+        closedSpaces: state.closedSpaces || [],
+      };
     },
 
     async createTaskSpace(name) {
@@ -499,10 +546,11 @@ export function createTaskSpacesApi(cdp) {
         space.previously = {
           closedAt: previous.closedAt,
           idleMinutes: previous.idleMinutes,
+          reason: previous.reason,
           urls: previous.urls,
           note:
-            `a task space named ${JSON.stringify(space.name)} was closed after ` +
-            `${previous.idleMinutes} minutes idle; this is a new, empty one. ` +
+            `a task space named ${JSON.stringify(space.name)} ` +
+            `${closureCause(previous)}; this is a new, empty one. ` +
             (previous.urls.length
               ? `It had these pages open: ${previous.urls.join(", ")}`
               : "It had no pages open."),

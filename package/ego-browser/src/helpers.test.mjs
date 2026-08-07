@@ -636,6 +636,66 @@ test("useOrCreateTaskSpace explains that a missing id cannot be created", async 
   );
 });
 
+// "not found" is the least useful true thing available when the runtime knows
+// the space was closed twenty minutes ago and what it held.
+test("completeTaskSpace says what became of a space that is gone", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "pdp",
+              id: 128,
+              name: "lifted pdp flash",
+              ownership: "agent",
+            },
+          ],
+          closedSpaces: [
+            {
+              name: "lifted editorial card redesign",
+              reason: "tabs-closed",
+              closedAt: 1,
+              urls: ["https://shop.example/editorial"],
+            },
+          ],
+        };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          completeTaskSpace("lifted editorial card redesign", { keep: false }),
+        (error) => {
+          assert.match(error.message, /no longer exists/);
+          assert.match(error.message, /was closed with its last tab/);
+          assert.match(error.message, /https:\/\/shop\.example\/editorial/);
+          // And what is still around to work with.
+          assert.match(error.message, /128 \(lifted pdp flash\)/);
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("completeTaskSpace stays terse when the runtime remembers nothing", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        // An older runtime reports no trail at all.
+        return { taskSpaces: [] };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => completeTaskSpace("never existed", { keep: false }),
+        /task space not found: never existed/,
+      );
+    },
+  );
+});
+
 test("useOrCreateTaskSpace resolves string names before numeric id strings", async () => {
   const calls = [];
   await withEgo(
