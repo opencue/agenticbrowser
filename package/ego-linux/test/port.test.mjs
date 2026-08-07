@@ -147,11 +147,28 @@ describe("ego-browser Linux port", () => {
     assert.match(out, /21\. miss draws nothing:\s+true/, "text that is not there draws nothing");
     assert.match(out, /22\. cleared:\s+true/, "and it can be wiped off again");
 
+    // Reading dispatches no input at all, so without the sweep a snapshotting
+    // agent drew nothing and the window looked idle while it worked.
+    assert.match(out, /23\. says what it reads:\s+Claude · reading “.+”/, "the badge names the line being read");
+    assert.match(out, /24\. marks the lines:\s+true/, "and the lines it has passed are marked");
+    assert.match(out, /25\. input ends the read:\s+true/, "real input takes the cursor back from the sweep");
+
     // The trail the Spaces panel reads back. One entry per transition: the
     // fill() above sent dozens of key events and must appear once.
-    assert.match(out, /23\. trail:.*clicked Increment counter/, "a click is recorded by what it hit");
-    assert.match(out, /23\. trail:.*typed into Your name/, "named by the field's own label, not its placeholder");
-    assert.match(out, /23\. trail:.*highlighted explaining this/, "so is a highlight, by its note");
+    assert.match(out, /26\. trail:.*clicked Increment counter/, "a click is recorded by what it hit");
+    assert.match(out, /26\. trail:.*typed into Your name/, "named by the field's own label, not its placeholder");
+    assert.match(out, /26\. trail:.*highlighted explaining this/, "so is a highlight, by its note");
+    assert.match(out, /26\. trail:.*read Helper e2e fixture/, "and a read, by what it started on");
+
+    // Anchored to its element, the cursor rides a long scroll off the screen —
+    // which used to leave the window blank while the agent was still working.
+    assert.match(out, /27\. cursor leaves view:\s+true/, "a long scroll carries the cursor off screen");
+    assert.match(out, /28\. badge stays in it:\s+true/, "but the badge stays legible");
+    assert.match(out, /29\. and points back:\s+↑/, "pointing back the way the cursor went");
+    // Measuring in the right place is not proof of being drawn there: a badge
+    // parented to the off-screen pointer passes check 28 and paints nothing.
+    assert.match(out, /30\. drawn independently:\s+true/, "and does not depend on the off-screen pointer layer");
+    assert.match(out, /31\. motion scales:\s+true/, "a nudge and a jump do not take the same time");
   });
 
   it("emulates task spaces with their own windows, ownership and lifecycle", async () => {

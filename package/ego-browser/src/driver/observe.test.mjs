@@ -112,6 +112,16 @@ test("screenshot creates a missing parent directory", async () => {
   }
 });
 
-test("drainEvents returns the current event array synchronously", () => {
-  assert.ok(Array.isArray(drainEvents()));
+test("drainEvents resolves to the current event array", async () => {
+  assert.ok(Array.isArray(await drainEvents()));
+});
+
+// The documented signature is page.drainEvents() => Promise<object[]>, so a
+// caller is entitled to chain on the result rather than await it. Returning a
+// bare array made that a TypeError.
+test("drainEvents returns a thenable, so .then/.catch chain instead of throwing", async () => {
+  const pending = drainEvents();
+  assert.equal(typeof pending.then, "function");
+  assert.equal(typeof pending.catch, "function");
+  assert.ok(Array.isArray(await pending.catch(() => "unreachable")));
 });

@@ -59,6 +59,7 @@ type TabTarget = string | { targetId: string };
  */
 export async function goto(url: string, options: GotoOptions = {}) {
   const navigation = await cdp("Page.navigate", { url });
+  assertNavigationCommitted(navigation, url);
   const loaded =
     options.waitUntil === "commit"
       ? false
@@ -74,6 +75,31 @@ export async function goto(url: string, options: GotoOptions = {}) {
     await state.sleep(settle);
   }
   return { navigation, loaded };
+}
+
+/**
+ * A navigation that never reached the site is not a navigation that succeeded.
+ *
+ * `Page.navigate` resolves normally when the load fails at the network layer and
+ * reports the reason in `errorText`. The browser then swaps in its own error page
+ * — a real document that reaches `readyState: "complete"` — so `waitForDocumentLoad`
+ * sees a healthy load and `goto` used to report `loaded: true` for a page that was
+ * never served. The failure surfaced later and somewhere else, as a selector
+ * matching nothing on a `chrome-error://chromewebdata/` page, which reads as a bug
+ * in the caller's script rather than a dev server that is not running.
+ *
+ * `net::ERR_ABORTED` is excluded: it is how the browser reports a navigation that
+ * turned into a download or was superseded by a later one, and in both cases the
+ * tab is fine.
+ */
+function assertNavigationCommitted(navigation: unknown, url: string) {
+  const errorText =
+    navigation && typeof navigation === "object"
+      ? (navigation as Record<string, unknown>).errorText
+      : undefined;
+  if (typeof errorText !== "string" || !errorText) return;
+  if (errorText === "net::ERR_ABORTED") return;
+  throw new Error(`goto: ${url} failed to load (${errorText})`);
 }
 
 /**

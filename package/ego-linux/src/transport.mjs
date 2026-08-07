@@ -34,8 +34,13 @@ export async function connectCdp(wsUrl) {
   let activeTargetId = null;
   let attachedTargetId = null;
   let mouseWatcher = null;
+  // Sessions the shim opened for its own reads. Their events belong to the
+  // shim, not to the harness.
+  const shimSessions = new Set();
+  const shimEvents = new Map();
   let keyWatcher = null;
   let navWatcher = null;
+  let viewportWatcher = null;
   let downloadContextResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
@@ -60,6 +65,14 @@ export async function connectCdp(wsUrl) {
         // a tab is about:blank again the moment it navigates away, so polling
         // its url later cannot tell "never used" from "between pages".
         if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
+      } else if (message.method === "Emulation.setDeviceMetricsOverride") {
+        // Emulation resizes the page's viewport, never the OS window — so a
+        // mobile layout renders as a narrow strip inside a desktop-sized window.
+        viewportWatcher?.(message.params || {});
+      } else if (message.method === "Emulation.clearDeviceMetricsOverride") {
+        // Explicitly the other half: leaving emulation has to put the window
+        // back, or it stays phone-shaped for the rest of the session.
+        viewportWatcher?.({ width: 0, height: 0 });
       } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
         activeTargetId = message.params.targetId;
       } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
@@ -125,6 +138,15 @@ export async function connectCdp(wsUrl) {
       } else {
         entry.resolve(data.result ?? {});
       }
+      return;
+    }
+
+    // Events from a session the shim opened are the shim's business. Forwarding
+    // them would push them into the harness's event buffer, where drainEvents()
+    // hands them to the agent — a screencast alone would bury a task's real
+    // events under dozens of frames a second.
+    if (data.sessionId && shimSessions.has(data.sessionId)) {
+      shimEvents.get(data.method)?.(data.params || {}, data.sessionId);
       return;
     }
 
@@ -224,6 +246,28 @@ export async function connectCdp(wsUrl) {
     /** Observe the harness's keyboard input, on the same read-only terms. */
     watchKeys(handler) {
       keyWatcher = handler;
+    },
+
+    /**
+     * Claim a session the shim opened, so its events stop at the shim.
+     * Sessions the harness opens are untouched and keep flowing to it.
+     */
+    claimSession(sessionId) {
+      if (sessionId) shimSessions.add(sessionId);
+    },
+
+    releaseSession(sessionId) {
+      shimSessions.delete(sessionId);
+    },
+
+    /** Handle one CDP event method arriving on a claimed session. */
+    onShimEvent(method, handler) {
+      shimEvents.set(method, handler);
+    },
+
+    /** Observe viewport emulation, on the same read-only terms. */
+    watchViewport(handler) {
+      viewportWatcher = handler;
     },
 
     /** Observe navigations to real pages, on the same read-only terms. */

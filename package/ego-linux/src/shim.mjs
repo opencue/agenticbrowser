@@ -4,6 +4,7 @@ import { createTabsApi } from "./tabs.mjs";
 import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
 import { createCursorApi } from "./cursor.mjs";
+import { createWindowFit } from "./window-fit.mjs";
 
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
@@ -47,8 +48,19 @@ export async function createEgoShim({ headless = false } = {}) {
 
   // A space that has ever loaded a real page is never "opened and never used",
   // however blank its tab looks between navigations.
+  // A phone-width emulation in a desktop-width window shows a strip of site
+  // beside a band of empty chrome; the window follows the viewport instead.
+  const windowFit = createWindowFit(cdp);
+  cdp.watchViewport((metrics) => {
+    void windowFit.follow(metrics, cdp.attachedHint()).catch(() => {});
+  });
+
   cdp.watchNavigation(() => {
     void taskSpaces.noteContent().catch(() => {});
+    // A navigation destroys the overlay with the document it lives in. This is
+    // the earliest point the shim hears about one, and arming here is what lets
+    // the cursor come back on the load that follows.
+    void cursor.watchPage().catch(() => {});
   });
 
   const ego = {
@@ -76,8 +88,20 @@ export async function createEgoShim({ headless = false } = {}) {
 
     // --- Task spaces --------------------------------------------------------
     listTaskSpaces: taskSpaces.listTaskSpaces,
-    createTaskSpace: taskSpaces.createTaskSpace,
-    useTaskSpace: taskSpaces.useTaskSpace,
+    // Arming on Page.navigate is too late for that same navigation — the claim
+    // and Page.enable race the load and usually lose. Selecting a space is the
+    // first moment a tab is guaranteed to exist, and it always precedes the
+    // goto, so this is where a process's very first load gets covered.
+    async createTaskSpace(name) {
+      const result = await taskSpaces.createTaskSpace(name);
+      void cursor.watchPage().catch(() => {});
+      return result;
+    },
+    async useTaskSpace(id) {
+      const result = await taskSpaces.useTaskSpace(id);
+      void cursor.watchPage().catch(() => {});
+      return result;
+    },
     claimTaskSpace: taskSpaces.claimTaskSpace,
     // Handing a space back to the user drops the agent overlay, and taking it
     // over brings it back — the same signal the native app's Space overlay gives.

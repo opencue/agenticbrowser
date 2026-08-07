@@ -7,8 +7,8 @@ import { createSessionResolver } from "./session.mjs";
  * is the only surface the shim controls, so the cursor is a DOM overlay
  * injected into whichever page the harness is currently acting on. It follows
  * every pointer position the harness sends, presses and springs back when a
- * button goes down and up, ripples where it clicks, and carries the agent's
- * current task state as a label.
+ * button goes down and up, ripples where it clicks, sweeps the lines it reads,
+ * and carries the agent's current task state as a label.
  *
  * Two properties keep it from interfering with the automation it illustrates:
  *
@@ -31,6 +31,12 @@ import { createSessionResolver } from "./session.mjs";
 
 const HOST_ID = "ego-agent-cursor-overlay";
 const ACCENT = "#d97757";
+// Reading is where an agent spends most of its time, and the state a watcher is
+// likeliest to mistake for an idle window. Giving it its own colour means one
+// glance separates looking at the page from changing it — terracotta acts, blue
+// observes. Every mark the overlay draws while reading switches to this, and
+// switches back the moment real input lands.
+const READ_ACCENT = "#4a9eff";
 
 /** How long the pressed look is held, however briefly the button was down. */
 const MIN_PRESS_MS = 130;
@@ -56,6 +62,7 @@ export function createCursorApi(cdp, { listTabs }) {
     typing: false,
     note: "",
     highlight: null,
+    read: null,
   };
   // Where the cursor rests on a page it has only read, never touched.
   const RESTING_X = 28;
@@ -70,8 +77,60 @@ export function createCursorApi(cdp, { listTabs }) {
   let labelX = null;
   let labelY = null;
   let highlightId = 0;
+  let readId = 0;
 
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  /**
+   * Put the overlay back after the page it lived in was replaced.
+   *
+   * The cursor is a DOM node injected into the current document, so a
+   * navigation destroys it — and nothing re-injects. Only a render does that,
+   * and renders are driven by snapshots, pointer events and keystrokes, none of
+   * which a goto() performs. So an agent that navigated and then worked through
+   * page.evaluate or a site tool — neither of which snapshots — drove the page
+   * with no cursor on screen at all, which reads as an idle window.
+   *
+   * The old coordinates described elements in a document that no longer exists,
+   * so re-drawing at them would point confidently at nothing. The cursor goes
+   * back to its resting corner instead and lets the badge carry what the agent
+   * is doing; the label is already marked stale by the move, so it presents
+   * itself as history rather than as the current action.
+   */
+  function pageReplaced() {
+    if (!enabled) return;
+    endRead();
+    state.x = RESTING_X;
+    state.y = RESTING_Y;
+    state.placed = true;
+    schedule();
+  }
+
+  // Events only reach the shim for sessions it has claimed, and only for domains
+  // enabled on them — see claimSession/onShimEvent in transport.mjs. Registered
+  // once here; flush() does the per-session claim as targets come and go.
+  cdp.onShimEvent?.("Page.loadEventFired", () => pageReplaced());
+
+  /** Sessions already claimed and told to report loads. */
+  const watchedSessions = new Set();
+
+  async function watchLoads(sessionId) {
+    if (!sessionId || watchedSessions.has(sessionId)) return;
+    watchedSessions.add(sessionId);
+    cdp.claimSession?.(sessionId);
+    // Without Page.enable the load event never fires on this session. Failure is
+    // cosmetic, exactly like every other render step here.
+    await cdp.call("Page.enable", {}, sessionId).catch(() => {});
+  }
+
+  /**
+   * A read sweep narrates the snapshot that started it, so any real input makes
+   * it stale. Dropping the read from the payload is how the page is told to stop
+   * — the sweep owns the cursor only while the id it began with keeps arriving.
+   */
+  function endRead() {
+    state.read = null;
+  }
 
   function placeAt(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
@@ -100,10 +159,15 @@ export function createCursorApi(cdp, { listTabs }) {
         const payload = {
           x: state.x,
           y: state.y,
-          // Only while the cursor is still on the action it was set for.
-          label: state.x === labelX && state.y === labelY ? state.label : "",
+          // The label always goes out, so the badge never empties mid-session —
+          // a blank badge tells a watcher less than a slightly old one. Whether
+          // it still describes where the cursor now is travels alongside it, and
+          // the overlay dims a stale label rather than passing it off as current.
+          label: state.label,
+          labelStale: !(state.x === labelX && state.y === labelY),
           name,
           accent: ACCENT,
+          readAccent: READ_ACCENT,
           hostId: HOST_ID,
           // Typing counts as something to show even before the cursor has been
           // placed, because fill() never places it.
@@ -113,10 +177,12 @@ export function createCursorApi(cdp, { listTabs }) {
           typing: state.typing,
           note: state.note,
           highlight: state.highlight,
+          read: state.read,
           pulse: pendingPulse,
         };
         pendingPulse = false;
         const sessionId = await sessionForActiveTab();
+        await watchLoads(sessionId);
         await cdp.call(
           "Runtime.evaluate",
           {
@@ -138,15 +204,43 @@ export function createCursorApi(cdp, { listTabs }) {
   }
 
   return {
+    /**
+     * Arm the load watcher ahead of a navigation the overlay has to survive.
+     *
+     * flush() claims the session as a side effect of rendering, so a process
+     * whose very first act is a goto has claimed nothing yet and misses its own
+     * first load — leaving the window blank for exactly the shape of task that
+     * navigates and then works through page.evaluate or a site tool. Called on
+     * Page.navigate, which the harness sends before the document is replaced.
+     */
+    async watchPage() {
+      if (!enabled) return { done: false, reason: "cursor disabled" };
+      try {
+        await watchLoads(await sessionForActiveTab());
+      } catch {
+        // No tab yet, or a target that refused the attach: cosmetic, like every
+        // other step here.
+      }
+      return { done: true };
+    },
+
     /** Back ego.animationHighlightMouseToPosition(x, y). */
     moveTo(x, y) {
       if (!enabled) return { done: false, reason: "cursor disabled" };
       if (!Number.isFinite(x) || !Number.isFinite(y)) return { done: false };
-      if (state.placed && state.x === x && state.y === y) return { done: true };
+      // A redundant move is normally worth nothing, but a read sweep has walked
+      // the cursor away from where the harness last put it — so moving back to
+      // that same point is a real move, and the one that ends the sweep.
+      if (state.placed && state.x === x && state.y === y && !state.read) {
+        return { done: true };
+      }
+      endRead();
       state.x = x;
       state.y = y;
       state.placed = true;
-      if (state.label === "reading") state.label = "";
+      // The label is no longer blanked here: it stays up, marked stale, until a
+      // real action replaces it. Emptying it on every move is what made the
+      // badge flicker on a page the agent was only walking across.
       schedule();
       return { done: true };
     },
@@ -163,6 +257,13 @@ export function createCursorApi(cdp, { listTabs }) {
      * The resting spot is only used when no click has placed the cursor yet; a
      * cursor that has been somewhere stays there, because jumping it to a corner
      * on every snapshot would lose where the agent actually was.
+     *
+     * The badge alone said the agent was reading but never *what*, which is the
+     * one thing a person watching wants to know — so each read also carries an
+     * id, and the page runs a sweep for it: the cursor travels the lines that
+     * are actually on screen, marking each as it passes. The sweep is driven
+     * from inside the page, because a round trip per line would cost more than
+     * the snapshot it illustrates.
      */
     reading(label = "reading") {
       if (!enabled) return { done: false, reason: "cursor disabled" };
@@ -173,6 +274,8 @@ export function createCursorApi(cdp, { listTabs }) {
       }
       previousLabel = state.label;
       if (state.label !== label) state.label = label;
+      readId += 1;
+      state.read = { id: readId };
       schedule();
       return { done: true };
     },
@@ -219,6 +322,7 @@ export function createCursorApi(cdp, { listTabs }) {
     /** A button went down here: hold the cursor pressed, and ripple. */
     press(x, y) {
       if (!enabled) return;
+      endRead();
       placeAt(x, y);
       clearTimeout(releaseTimer);
       state.pressed = true;
@@ -235,6 +339,7 @@ export function createCursorApi(cdp, { listTabs }) {
      */
     release(x, y) {
       if (!enabled) return;
+      endRead();
       placeAt(x, y);
       if (!state.pressed) {
         schedule();
@@ -265,6 +370,7 @@ export function createCursorApi(cdp, { listTabs }) {
      */
     typed() {
       if (!enabled) return;
+      endRead();
       clearTimeout(typingTimer);
       typingTimer = setTimeout(() => {
         state.typing = false;
@@ -315,6 +421,9 @@ export function createCursorApi(cdp, { listTabs }) {
       }
       if (!found || !found.rects?.length) return { done: false, lines: 0 };
 
+      // An explicit marker replaces the automatic sweep: both drive the cursor,
+      // and the agent's own explanation is the one worth watching.
+      endRead();
       state.note = String(options.note ?? "").slice(0, 120);
       highlightId += 1;
       state.highlight = { id: highlightId, rects: found.rects, upTo: -1 };
@@ -492,8 +601,24 @@ function renderOverlay(payload) {
 
   let host = document.getElementById(payload.hostId);
   if (!payload.visible) {
-    if (host) host.remove();
+    // Handing the space back is a departure, not a disappearance, so the cursor
+    // fades instead of blinking out. The state the Spaces overview polls goes
+    // immediately though: the agent has let go, whatever the pixels still say.
+    if (host && !host.__egoLeaving) {
+      host.__egoLeaving = true;
+      host.__egoState = null;
+      if (host.__egoSweep) host.__egoSweep.done = true;
+      host.style.opacity = "0";
+      setTimeout(() => host.remove(), 220);
+    }
     return;
+  }
+
+  // A host on its way out is not one to reuse: its opacity is already bound for
+  // zero, and a taken-over space would inherit the fade meant for the handoff.
+  if (host && host.__egoLeaving) {
+    host.remove();
+    host = null;
   }
 
   if (!host) {
@@ -505,7 +630,11 @@ function renderOverlay(payload) {
     // that, which is what keeps elementFromPoint blind to the overlay.
     host.style.cssText =
       "all:initial;position:fixed;left:0;top:0;width:0;height:0;" +
-      "z-index:2147483647;pointer-events:none;";
+      "z-index:2147483647;pointer-events:none;" +
+      // Arrives and leaves under its own power. The agent taking a page over is
+      // an event worth seeing, and a cursor that pops into existence reads as a
+      // rendering glitch rather than as something showing up.
+      "opacity:0;transition:opacity 200ms ease;";
     const shadow = host.attachShadow({ mode: "closed" });
     shadow.innerHTML =
       "<style>" +
@@ -523,6 +652,28 @@ function renderOverlay(payload) {
       "background:linear-gradient(180deg,rgba(217,119,87,.34),rgba(217,119,87,.22));" +
       "box-shadow:0 0 0 1px rgba(217,119,87,.22);" +
       "transition:width 260ms cubic-bezier(.33,.9,.5,1)}" +
+      // A read band is the same stroke, lighter and temporary: reading is
+      // constant, so its marks fade behind the cursor instead of piling up the
+      // way a deliberate highlight does.
+      ".band.read{background:linear-gradient(180deg,rgba(74,158,255,.32),rgba(74,158,255,.16));" +
+      "box-shadow:none;transition-property:width,opacity;transition-timing-function:linear}" +
+      // While reading, every mark the overlay owns turns blue: the arrow, the
+      // ring, the badge's dot. The rules are scoped to #layer.reading so the
+      // whole scheme reverts in one class toggle when input arrives.
+      "#layer.reading #arrow path,#layer.reading #hand path{fill:" +
+      payload.readAccent +
+      "}" +
+      "#layer.reading #ring{border-color:" +
+      payload.readAccent +
+      ";box-shadow:0 0 0 4px rgba(74,158,255,.18)}" +
+      "#layer.reading #dot{background:" +
+      payload.readAccent +
+      "}" +
+      // A label that no longer describes where the cursor is stays legible but
+      // stops competing with one that does — and its dot stops breathing,
+      // because breathing is what marks the badge as live.
+      "#badge.stale{opacity:.5}" +
+      "#badge.stale #dot{animation:none;opacity:.35}" +
       "#pointer{position:absolute;left:0;top:0;" +
       "transition:transform 200ms cubic-bezier(.22,.61,.36,1);will-change:transform}" +
       "#ring{position:absolute;left:0;top:0;border:2px solid " +
@@ -547,16 +698,44 @@ function renderOverlay(payload) {
       "#pulse.on{animation:ego-pulse 500ms ease-out}" +
       "@keyframes ego-pulse{from{transform:scale(.2);opacity:.9}" +
       "to{transform:scale(1);opacity:0}}" +
-      "#badge{position:absolute;left:20px;top:22px;display:flex;align-items:center;" +
+      // Positioned by transform alone, in the page coordinates #layer works in.
+      "#badge{position:absolute;left:0;top:0;display:flex;align-items:center;" +
       "gap:7px;max-width:300px;padding:5px 11px 5px 9px;border-radius:999px;" +
-      "background:rgba(24,24,27,.94);color:#fff;box-sizing:border-box;" +
+      "background:rgba(24,24,27,.72);color:#fff;box-sizing:border-box;" +
+      // Frosted rather than flat: the badge sits over arbitrary pages, and one
+      // that lets its background through belongs to the page it is labelling
+      // instead of hovering over it as a second opaque card.
+      "-webkit-backdrop-filter:blur(14px) saturate(1.5);" +
+      "backdrop-filter:blur(14px) saturate(1.5);" +
+      "border:1px solid rgba(255,255,255,.09);letter-spacing:.01em;" +
       "font:500 12px/1.35 ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif;" +
-      "box-shadow:0 8px 22px rgba(0,0,0,.3);transition:transform 200ms ease}" +
-      "#text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      "box-shadow:0 8px 24px rgba(0,0,0,.28),0 1px 2px rgba(0,0,0,.2);" +
+      "transition:transform 200ms ease}" +
+      // Docked, the badge is holding still against a moving page: every scroll
+      // event rewrites its offset, and a transition would chase each one.
+      "#badge.docked{transition:none}" +
+      // Which way the cursor went, when it is no longer on screen to point at.
+      "#hint{flex:none;opacity:.7;font-size:11px}" +
+      "#hint:empty{display:none}" +
+      "#text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" +
+      "animation:ego-fade 220ms ease}" +
+      "@keyframes ego-fade{from{opacity:.3}to{opacity:1}}" +
       "#dot{flex:none;width:7px;height:7px;border-radius:50%;background:" +
       payload.accent +
       ";animation:ego-breathe 1.7s ease-in-out infinite}" +
       "@keyframes ego-breathe{0%,100%{opacity:1}50%{opacity:.35}}" +
+      // The reading glow. A sibling of #layer, not a child: #layer carries the
+      // scroll offset as a transform, and a transformed ancestor would make
+      // position:fixed resolve against it instead of the viewport — the glow
+      // would then scroll away from the edges it is meant to trace.
+      "#glow{position:fixed;left:0;top:0;right:0;bottom:0;opacity:0;" +
+      "transition:opacity 260ms ease;" +
+      "box-shadow:inset 0 0 0 2px rgba(74,158,255,.22)," +
+      "inset 0 0 52px rgba(74,158,255,.13)}" +
+      // Breathing at a slower beat than the badge dot, so the two read as one
+      // system rather than as two things blinking out of step.
+      "#glow.on{opacity:1;animation:ego-read-glow 2.4s ease-in-out infinite}" +
+      "@keyframes ego-read-glow{0%,100%{opacity:1}50%{opacity:.5}}" +
       // The shape says what the cursor is over, the way a real one does: an
       // arrow on the page, a hand on anything clickable, a beam over text.
       "svg.shape{position:absolute;left:-1px;top:-1px;display:none}" +
@@ -586,9 +765,17 @@ function renderOverlay(payload) {
       '<path d="M1.6 1 H7.4 M4.5 1 V19.4 M1.6 19.4 H7.4" stroke="' +
       payload.accent +
       '" stroke-width="2" stroke-linecap="round" fill="none"/></svg>' +
-      '<div id="badge"><span id="dot"></span><span id="text"></span></div>' +
       "</div>" +
-      "</div>";
+      // A sibling of #pointer rather than a child of it. The badge has to stay
+      // readable exactly when the cursor has scrolled out of view, and a child
+      // of something parked far off screen is at the mercy of whether that
+      // layer gets drawn at all. Still inside #layer, though: everything the
+      // overlay draws shares one coordinate space, and a screenshot treats the
+      // whole subtree alike only while that stays true.
+      '<div id="badge"><span id="dot"></span><span id="hint"></span>' +
+      '<span id="text"></span></div>' +
+      "</div>" +
+      '<div id="glow"></div>';
     host.__egoShadow = shadow;
 
     // The page scrolls under the cursor between actions, and no CDP round trip
@@ -599,20 +786,40 @@ function renderOverlay(payload) {
         layer.style.transform =
           "translate3d(" + -window.scrollX + "px," + -window.scrollY + "px,0)";
       }
+      // Staying glued to its element means riding that element off the screen,
+      // and a long scroll leaves the window showing nothing at all. The cursor
+      // keeps its place; the badge is what has to remain readable.
+      const at = host.__egoState;
+      if (at) placeBadge(at.pageX - window.scrollX, at.pageY - window.scrollY);
     };
     // hide() removes the host but leaves the realm standing, so a hide/show
     // cycle would stack a listener per show, each closing over a dead root.
     if (window.__egoCursorSync) {
       window.removeEventListener("scroll", window.__egoCursorSync);
+      window.removeEventListener("resize", window.__egoCursorSync);
     }
     window.addEventListener("scroll", sync, { passive: true });
+    // A resize reflows the page under an overlay whose marks are held in page
+    // coordinates, and re-docks nothing on its own: the badge keeps measuring
+    // itself against the viewport it was placed in, so the whole overlay reads
+    // as slid away from what it points at. Retiling the window — switching to a
+    // dynamic or split layout — is the everyday way to hit it, and scrolling was
+    // the only event that used to put it right again.
+    window.addEventListener("resize", sync, { passive: true });
     window.__egoCursorSync = sync;
     host.__egoSync = sync;
     parent.appendChild(host);
+    void host.offsetWidth; // let opacity:0 land, or there is nothing to fade from
+    host.style.opacity = "1";
   }
 
   const shadow = host.__egoShadow;
   if (!shadow) return;
+
+  // Looked up before the first sync rather than where they are first drawn:
+  // sync() places the badge too, and it runs on the line below.
+  const badge = shadow.getElementById("badge");
+  const hint = shadow.getElementById("hint");
 
   host.__egoSync?.();
 
@@ -640,8 +847,29 @@ function renderOverlay(payload) {
   const viewX = pageX - window.scrollX;
   const viewY = pageY - window.scrollY;
 
+  // A read sweep drives the cursor from inside the page, line by line, so a
+  // render belonging to the same read must not drag it back to where the sweep
+  // began. Anything else — a click, a keystroke, the next read — ends it.
   const pointer = shadow.getElementById("pointer");
-  pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
+  const running = host.__egoSweep;
+  const readId = payload.read ? payload.read.id : 0;
+  const sweeping = Boolean(running) && running.id === readId && !running.done;
+  if (running && !running.done && !sweeping) {
+    // Cut off mid-line. Hand the pointer back with the timing it had before the
+    // sweep borrowed it, or the next real move animates like a read.
+    running.done = true;
+    pointer.style.transitionDuration = "";
+    pointer.style.transitionTimingFunction = "";
+  }
+  if (!sweeping) {
+    // One fixed duration for every move made a nudge between two fields crawl
+    // and a jump across the page look like a teleport. Scaling it to the
+    // distance is what a hand on a mouse does: near is quick, far takes a beat.
+    const far = previous ? Math.hypot(pageX - previous.pageX, pageY - previous.pageY) : 0;
+    pointer.style.transitionDuration =
+      Math.round(Math.min(420, Math.max(90, far * 0.45))) + "ms";
+    pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
+  }
   pointer.classList.toggle("press", Boolean(payload.pressed));
 
   // What the cursor is over decides both its shape and, when the agent has not
@@ -649,26 +877,48 @@ function renderOverlay(payload) {
   // ask here precisely because the overlay is pointer-events:none.
   const under = document.elementFromPoint(viewX, viewY);
   const subject = under
-    ? under.closest("a,button,input,select,textarea,label,summary,[role]") || under
+    ? under.closest("a,button,input,select,textarea,label,summary,[role]") ||
+      // Falling back to whatever is under the cursor is useful for a paragraph
+      // or an image. It is not for <html> or <body>: their textContent is the
+      // entire document, stylesheet text and all, so the badge would read
+      // "Claude · Example Domainbody{background:#…". Resting the cursor in a
+      // corner after a navigation lands on exactly those, so describing them
+      // has to mean describing nothing — the stale label is the better answer.
+      (under.tagName === "HTML" || under.tagName === "BODY" ? null : under)
     : null;
   showShape(shadow, payload.typing ? "beam" : shapeFor(under));
 
-  const badge = shadow.getElementById("badge");
-  const detail = payload.typing
-    ? "typing…"
-    : payload.note || payload.label || describe(subject);
-  shadow.getElementById("text").textContent = detail
-    ? payload.name + " · " + detail
-    : payload.name;
+  // A label that still matches where the cursor is outranks everything. Once it
+  // goes stale it yields to a fresh description of what is actually under the
+  // cursor, and only comes back when there is nothing else to say — dimmed, to
+  // admit it is history. That ordering is what keeps the badge both permanent
+  // and honest: it never empties, and it never narrates the wrong thing.
+  const current = payload.note || (payload.labelStale ? "" : payload.label);
+  const nearby = describe(subject);
+  const showingStale =
+    !payload.typing && !current && !nearby && Boolean(payload.label);
+  const detail = payload.typing ? "typing…" : current || nearby || payload.label;
+  setBadgeText(detail ? payload.name + " · " + detail : payload.name);
 
-  // Flip the badge back over the cursor near the viewport edges, so the label
-  // is never the thing that gets clipped off screen. Viewport coordinates, not
-  // page ones: what matters is where it currently sits on screen.
-  const flipX = viewX + 340 > window.innerWidth;
-  const flipY = viewY + 70 > window.innerHeight;
-  badge.style.transform =
-    (flipX ? "translateX(calc(-100% - 40px))" : "") +
-    (flipY ? " translateY(-60px)" : "");
+  // Reading owns the blue scheme; anything else hands it straight back. The
+  // read is what the harness cleared on the last real input, so this follows
+  // the same signal the sweep does rather than tracking a second one.
+  const readingNow = Boolean(payload.read) && !payload.typing;
+  shadow.getElementById("layer").classList.toggle("reading", readingNow);
+  // A host injected by an older build has no #glow, and the shim reuses whatever
+  // host it finds rather than rebuilding it. Reaching straight through would
+  // throw a TypeError that flush() silently swallows, leaving the cursor frozen
+  // on every page that was already open when the update landed. Missing glow
+  // just means no glow until that page next navigates.
+  const glow = shadow.getElementById("glow");
+  if (glow) glow.classList.toggle("on", readingNow);
+  // A reading label is always current — the sweep rewrites it per line — so the
+  // stale dimming only applies when the badge actually fell back to old text.
+  shadow
+    .getElementById("badge")
+    .classList.toggle("stale", showingStale && !readingNow);
+
+  placeBadge(viewX, viewY);
 
   // A short trail of what happened, kept in the page for the same reason the
   // cursor's position is: the Spaces panel runs in another process and this is
@@ -713,8 +963,12 @@ function renderOverlay(payload) {
   const bands = shadow.getElementById("bands");
   const marks = payload.highlight ? payload.highlight.rects : [];
   if (!marks.length) {
-    bands.replaceChildren();
-    bands.__egoId = 0;
+    // A sweep in flight puts its own bands in here; only a render that ended it
+    // is entitled to wipe them.
+    if (!sweeping) {
+      bands.replaceChildren();
+      bands.__egoId = 0;
+    }
   } else {
     // A new highlight replaces the old one. Without the generation check the
     // previous stroke's bands would be reused for it, and the second highlight
@@ -758,6 +1012,231 @@ function renderOverlay(payload) {
     highlightId: payload.highlight ? payload.highlight.id : 0,
     at: Date.now(),
   };
+
+  // Last, so everything the sweep reaches for — the log, the badge, the state
+  // it keeps fresh — already exists by the time it runs.
+  if (readId && (!running || running.id !== readId)) startReadSweep(readId);
+
+  /**
+   * Reading, made watchable.
+   *
+   * Snapshotting is most of what an agent does and it dispatches no input at
+   * all, so a window where the agent was reading showed a cursor parked in a
+   * corner under a badge that said "reading" — true, but never *what*. The
+   * sweep walks the cursor along the lines that are actually on screen, marking
+   * each as it passes and naming it in the badge, so someone watching can
+   * follow what the agent took in.
+   *
+   * It runs entirely inside the page: a round trip per line would cost more
+   * than the snapshot it illustrates, and the heredoc that triggered it has
+   * usually exited before the last line is drawn. That also means it must give
+   * up on its own — the sweep object is the only handle anything has on it.
+   */
+  function startReadSweep(id) {
+    const sweep = { id, done: false };
+    host.__egoSweep = sweep;
+    const lines = readableLines();
+    if (!lines.length) {
+      sweep.done = true;
+      return;
+    }
+    remember("read " + snip(lines[0].text));
+
+    let index = 0;
+    let spent = 0;
+
+    const step = () => {
+      if (sweep.done) return;
+      // A budget rather than a line count: reading is constant, and a sweep
+      // still going when the agent acts again would only ever be interrupted.
+      if (index >= lines.length || spent > 2400) {
+        sweep.done = true;
+        pointer.style.transitionDuration = "";
+        pointer.style.transitionTimingFunction = "";
+        return;
+      }
+      const line = lines[index];
+      index += 1;
+      const scanMs = Math.min(360, Math.max(130, Math.round(line.width * 0.8)));
+      spent += scanMs + 110;
+      const baseline = line.y + line.height - 2;
+
+      // Onto the start of the line first, then along it: the two legs are what
+      // make it read as following the words rather than sliding to a spot.
+      pointer.style.transitionTimingFunction = "ease-out";
+      pointer.style.transitionDuration = "100ms";
+      pointer.style.transform =
+        "translate3d(" + line.x + "px," + baseline + "px,0)";
+      setBadgeText(payload.name + " · reading “" + snip(line.text) + "”");
+      placeBadge(line.x - window.scrollX, baseline - window.scrollY);
+
+      setTimeout(() => {
+        if (sweep.done) return;
+        pointer.style.transitionTimingFunction = "linear";
+        pointer.style.transitionDuration = scanMs + "ms";
+        pointer.style.transform =
+          "translate3d(" + (line.x + line.width) + "px," + baseline + "px,0)";
+
+        const band = document.createElement("div");
+        band.className = "band read";
+        band.style.height = line.height + "px";
+        band.style.transform = "translate3d(" + line.x + "px," + line.y + "px,0)";
+        band.style.transitionDuration = scanMs + "ms";
+        bands.appendChild(band);
+        void band.offsetWidth; // let the zero width land before the real one
+        band.style.width = line.width + "px";
+        setTimeout(() => {
+          band.style.opacity = "0";
+          setTimeout(() => band.remove(), scanMs + 60);
+        }, scanMs + 320);
+
+        // Keep the state the Spaces overview polls moving: a card whose agent is
+        // reading should not look like a card whose agent walked away.
+        host.__egoState.pageX = line.x + line.width;
+        host.__egoState.pageY = baseline;
+        host.__egoState.label = "reading " + snip(line.text);
+        host.__egoState.at = Date.now();
+
+        setTimeout(step, scanMs + 10);
+      }, 110);
+    };
+
+    step();
+  }
+
+  /**
+   * The lines of text actually on screen, in reading order.
+   *
+   * Line boxes rather than elements: a Range hands back one rect per line, which
+   * is what lets the cursor travel a paragraph the way a reader does. Only the
+   * first few rects of any one node, so a long paragraph cannot spend the whole
+   * sweep while the rest of the page goes unread.
+   */
+  function readableLines() {
+    const root = document.body;
+    if (!root) return [];
+    const found = [];
+    // Measuring is what costs, and an agent scrolled halfway down a long page
+    // has thousands of text nodes above it that can never be swept. Dropping a
+    // container that is entirely off screen drops everything inside it in one
+    // test — but only when it has a box of its own to judge by, since an empty
+    // rect (display:contents, a zero-height wrapper) says nothing about the
+    // children. The count is the backstop for what pruning cannot reach.
+    let measured = 0;
+    const walker = document.createTreeWalker(
+      root,
+      NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+      {
+        acceptNode(node) {
+          if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+          const box = node.getBoundingClientRect();
+          const offScreen = box.bottom < 4 || box.top > window.innerHeight - 4;
+          if (box.width > 0 && box.height > 0 && offScreen) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          return NodeFilter.FILTER_SKIP; // an element is not a line; its text is
+        },
+      },
+    );
+    while (found.length < 12 && measured < 400 && walker.nextNode()) {
+      const node = walker.currentNode;
+      const text = (node.nodeValue || "").replace(/\s+/g, " ").trim();
+      if (text.length < 12) continue;
+      const parent = node.parentElement;
+      if (!parent || parent.closest("script,style,noscript,svg")) continue;
+      measured += 1;
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      let taken = 0;
+      for (const rect of range.getClientRects()) {
+        if (taken >= 3 || found.length >= 12) break;
+        if (rect.width < 80 || rect.height < 9 || rect.height > 96) continue;
+        if (rect.bottom < 4 || rect.top > window.innerHeight - 4) continue;
+        taken += 1;
+        found.push({
+          x: rect.left + window.scrollX,
+          y: rect.top + window.scrollY,
+          width: rect.width,
+          height: rect.height,
+          text,
+        });
+      }
+    }
+    // Document order is close to reading order but not the same thing under
+    // absolute positioning, and a cursor that jumps back up the page reads as a
+    // glitch rather than as reading.
+    return found.sort((a, b) => a.y - b.y || a.x - b.x);
+  }
+
+  /** Short enough for a badge that is drawn into every screenshot. */
+  function snip(text) {
+    const value = String(text || "").replace(/\s+/g, " ").trim();
+    return value.length > 44 ? value.slice(0, 43) + "…" : value;
+  }
+
+  /**
+   * The label, swapped without a jump cut.
+   *
+   * Written synchronously — anything reading the badge sees the new text on the
+   * next tick, and only the fade is deferred. The animation is restarted by hand
+   * because a swap arriving mid-fade would otherwise inherit whatever opacity
+   * the last one had reached and never brighten.
+   */
+  function setBadgeText(next) {
+    const text = shadow.getElementById("text");
+    if (text.textContent === next) return;
+    text.textContent = next;
+    text.style.animation = "none";
+    void text.offsetWidth;
+    text.style.animation = "";
+  }
+
+  /**
+   * Where the label goes, in viewport coordinates: what matters is where the
+   * cursor currently sits on screen, not where on the page it is marking.
+   *
+   * Near an edge the badge flips back over the cursor, so the label is never the
+   * thing that gets clipped. Past the edge — the cursor scrolled out of view
+   * entirely — it stops following and docks, because a label that leaves with
+   * the cursor tells a watcher nothing about what is still happening.
+   */
+  function placeBadge(atX, atY) {
+    const outY = atY < 4 ? "↑" : atY > window.innerHeight - 4 ? "↓" : "";
+    const outX = atX < 4 ? "←" : atX > window.innerWidth - 4 ? "→" : "";
+    // Vertical first: pages scroll that way, so it is the direction that
+    // actually carries the cursor off screen.
+    const away = outY || outX;
+    hint.textContent = away;
+
+    // #layer already carries -scroll, so a viewport target has to be written
+    // back into page coordinates to survive it.
+    const toPage = (x, y) =>
+      "translate(" +
+      Math.round(x + window.scrollX) +
+      "px," +
+      Math.round(y + window.scrollY) +
+      "px)";
+
+    if (!away) {
+      // Trailing the cursor at the offset it used to sit at as a child of it,
+      // then flipped back over it near an edge so the label is never the thing
+      // that gets clipped.
+      badge.classList.remove("docked");
+      badge.style.transform =
+        toPage(atX + 20, atY + 22) +
+        (atX + 340 > window.innerWidth ? " translateX(calc(-100% - 40px))" : "") +
+        (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
+      return;
+    }
+
+    // Parked against the edge the cursor left by, and held there while the page
+    // keeps moving under it.
+    const width = badge.offsetWidth || 240;
+    const dockX = Math.min(Math.max(atX, 12), Math.max(12, window.innerWidth - width - 12));
+    const dockY = Math.min(Math.max(atY, 12), Math.max(12, window.innerHeight - 40));
+    badge.classList.add("docked");
+    badge.style.transform = toPage(dockX, dockY);
+  }
 
   /** The page's own cursor for this element is the honest source of shape. */
   function shapeFor(element) {

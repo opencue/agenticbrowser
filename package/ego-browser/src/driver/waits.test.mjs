@@ -13,6 +13,7 @@ import {
   waitForLoadState,
   waitForRequest,
   waitForResponse,
+  waitForSelector,
   waitForURL,
 } from "../../dist/src/driver/waits.js";
 
@@ -113,7 +114,9 @@ test("waitForURL supports Playwright-style glob strings", async () => {
   } finally {
     restore();
   }
-  assert.deepEqual(sleeps, [100]);
+  // Ramped, not flat: the URL is usually one navigation tick away, so the first
+  // probe comes back in 25 ms instead of sitting out a full 100 ms.
+  assert.deepEqual(sleeps, [25]);
 });
 
 test("waitForURL predicates receive URL objects and wait for load by default", async () => {
@@ -777,7 +780,11 @@ test("waitForLoadState accepts Playwright-style options as the first argument", 
   } finally {
     restore();
   }
-  assert.deepEqual(sleeps, [300, 300]);
+  // The final wait is clamped to what is left of the timeout: with 500 ms to
+  // spend, the second probe waits 200 ms rather than overshooting to 300 ms and
+  // returning late. The probe interval is a backstop, not a licence to run past
+  // the caller's deadline.
+  assert.deepEqual(sleeps, [300, 200]);
 });
 
 test("waitForLoadState enables the Network domain and disables it afterwards", async () => {
@@ -860,4 +867,39 @@ test("waitForLoadState survives a bridge that rejects Network.enable", async () 
   } finally {
     restore();
   }
+});
+
+test("waitForSelector ramps its poll instead of waiting a flat 300 ms", async () => {
+  // The common case: the element is a render or two behind the call. A flat
+  // 300 ms poll charged 600 ms to notice it; the ramp notices in 75 ms and
+  // costs a genuinely slow element no extra round trips, because the delay
+  // still tops out at 300 ms.
+  let attempts = 0;
+  let now = 0;
+  const sleeps = [];
+  const restore = setOverrides({
+    defaultTimeout: 5000,
+    now: () => now,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      now += ms;
+    },
+    cdpOverride(method) {
+      if (method === "Runtime.evaluate") {
+        attempts += 1;
+        return attempts < 3
+          ? { result: {} }
+          : { result: { objectId: "node-late" } };
+      }
+      return {};
+    },
+  });
+  try {
+    assert.equal(await waitForSelector("#late"), true);
+  } finally {
+    restore();
+  }
+
+  assert.equal(attempts, 3);
+  assert.deepEqual(sleeps, [25, 50]);
 });

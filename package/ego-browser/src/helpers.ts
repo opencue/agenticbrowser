@@ -187,7 +187,11 @@ export async function newTaskSpace(name) {
  * Use an existing agent-owned task space, or create it when missing. User-owned
  * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
  * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
- * @param {string|number} nameOrId Task space name or numeric id.
+ *
+ * Only a name can be created. Ids are assigned by the browser rather than chosen
+ * by the caller, so a numeric nameOrId can only select a space that already
+ * exists — despite the name, this never creates one from an id.
+ * @param {string|number} nameOrId Task space name, or the numeric id of a space that already exists.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
@@ -195,7 +199,15 @@ export async function useOrCreateTaskSpace(nameOrId) {
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
-      throw new Error(`task space not found: ${nameOrId}`);
+      // The "orCreate" half of the name does not apply to ids, and a bare
+      // "not found" left the caller with no way to tell whether the space had
+      // vanished or had never been creatable this way. Say which it is, and
+      // point at the ids that do exist.
+      throw new Error(
+        `useOrCreateTaskSpace: no task space with id ${nameOrId}. ` +
+          `Ids are assigned by the browser, so an id can only select an existing ` +
+          `space — pass a name to create one. ${describeTaskSpaces(spaces)}`,
+      );
     }
     return newTaskSpace(nameOrId);
   }
@@ -442,6 +454,17 @@ async function findTaskSpace(nameOrId) {
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) throw new Error(`task space not found: ${nameOrId}`);
   return match;
+}
+
+/** Name the task spaces that do exist, so a miss points somewhere. */
+function describeTaskSpaces(spaces) {
+  if (!spaces.length) return "No task spaces exist yet.";
+  const shown = spaces
+    .slice(0, 10)
+    .map((space) => `${space.id} (${space.name})`)
+    .join(", ");
+  const rest = spaces.length > 10 ? `, and ${spaces.length - 10} more` : "";
+  return `Existing: ${shown}${rest}.`;
 }
 
 function findMatchingTaskSpace(spaces, nameOrId) {
