@@ -98,12 +98,8 @@ export function runtimeValue(response, expression) {
   const details = response.exceptionDetails;
   if (details || result.subtype === "error") {
     const desc = jsExceptionDescription(result, details);
-    const loc =
-      details?.lineNumber !== undefined && details?.columnNumber !== undefined
-        ? ` at line ${details.lineNumber}, column ${details.columnNumber}`
-        : "";
     throw new Error(
-      `JavaScript evaluation failed${loc}: ${desc}; expression: ${jsSnippet(expression)}`,
+      `JavaScript evaluation failed${jsExceptionLocation(expression, details)}: ${desc}; expression: ${jsSnippet(expression)}`,
     );
   }
   if (Object.hasOwn(result, "value")) {
@@ -113,6 +109,30 @@ export function runtimeValue(response, expression) {
     return decodeUnserializableJsValue(result.unserializableValue);
   }
   return null;
+}
+
+/**
+ * Say where an evaluation threw, in the numbering the caller counts in.
+ *
+ * CDP reports lineNumber and columnNumber 0-based, and both were passed through
+ * raw. So the message blamed "line 5, column 12" for a failure the V8 stack
+ * printed directly underneath as <anonymous>:6:13, and called the first line of
+ * a script "line 0" — a number no editor or stack trace ever shows. Anyone
+ * counting lines to find the fault landed one line short of it.
+ *
+ * The failing line is quoted for multi-line expressions, because the snippet
+ * that follows is capped at 160 characters and usually stops before the line
+ * that actually threw.
+ */
+function jsExceptionLocation(expression, details) {
+  const line = details?.lineNumber;
+  const column = details?.columnNumber;
+  if (line === undefined || column === undefined) return "";
+  const location = ` at line ${line + 1}, column ${column + 1}`;
+  const lines = String(expression).split("\n");
+  if (lines.length < 2) return location;
+  const source = lines[line]?.trim();
+  return source ? `${location} (${jsSnippet(source, 120)})` : location;
 }
 
 function jsExceptionDescription(result, details) {
