@@ -70,37 +70,150 @@ function followClip(cursor) {
   };
 }
 
-async function captureCard(cdp, targetId) {
-  try {
+/**
+ * Live frames, pushed rather than polled.
+ *
+ * captureScreenshot per poll cost four CDP round trips per space (attach, read
+ * cursor, capture, detach) and could never show more than one frame per poll —
+ * an agent's cursor jumped between stills instead of moving. Page.startScreencast
+ * inverts it: Chrome sends a frame whenever the page changes, into a cache the
+ * request path just reads.
+ *
+ * The cost is the crop. A screencast frame is the whole viewport, so the
+ * cursor-following zoom moves to the client, which has the cursor position
+ * anyway — see the transform in spaces-ui.mjs.
+ */
+const CAST = { format: "jpeg", quality: 55, maxWidth: 960, maxHeight: 600 };
+
+function createCastPool(cdp) {
+  const casts = new Map();
+  // Opening is async, so two concurrent polls for the same tab would each find
+  // no cast and each attach — the loser's session then leaks, attached and
+  // acking frames nobody reads.
+  const opening = new Map();
+  let closed = false;
+
+  cdp.onShimEvent("Page.screencastFrame", (params, sessionId) => {
+    for (const cast of casts.values()) {
+      if (cast.sessionId !== sessionId) continue;
+      cast.frame = params.data || null;
+      cast.seq += 1;
+      break;
+    }
+    // Chrome stops sending frames until each one is acknowledged.
+    cdp
+      .call("Page.screencastFrameAck", { sessionId: params.sessionId }, sessionId)
+      .catch(() => {});
+  });
+
+  async function open(targetId) {
     const { sessionId } = await cdp.call("Target.attachToTarget", {
       targetId,
       flatten: true,
     });
+    cdp.claimSession(sessionId);
+    if (closed) {
+      // The pool was torn down while this attach was in flight. Registering it
+      // now would leave a claimed session that nothing will ever detach.
+      cdp.releaseSession(sessionId);
+      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      throw new Error("cast pool is closed");
+    }
+    const cast = { sessionId, frame: null, seq: 0 };
+    casts.set(targetId, cast);
     try {
-      const cursor = await readCursor(cdp, sessionId);
-      const active = Boolean(cursor) && cursor.ageMs < ACTIVE_WINDOW_MS;
+      await cdp.call("Page.startScreencast", { ...CAST, everyNthFrame: 1 }, sessionId);
+    } catch (error) {
+      // Leaving the entry behind would serve a blank card for as long as the tab
+      // lives: every later poll finds it, skips open(), and reads a stream that
+      // is not running.
+      casts.delete(targetId);
+      cdp.releaseSession(sessionId);
+      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      throw error;
+    }
+    // The first frame only arrives once the page next paints, which on a static
+    // page can be never — so prime the cache with one shot rather than show an
+    // empty card until something happens to move.
+    try {
       const shot = await cdp.call(
         "Page.captureScreenshot",
-        {
-          format: THUMBNAIL.format,
-          quality: THUMBNAIL.quality,
-          captureBeyondViewport: false,
-          ...(active ? { clip: followClip(cursor) } : {}),
-        },
+        { format: CAST.format, quality: CAST.quality, captureBeyondViewport: false },
         sessionId,
       );
-      return {
-        thumbnail: shot.data ? `data:image/jpeg;base64,${shot.data}` : null,
-        activity: active
-          ? { name: cursor.name, label: cursor.label, ageMs: Math.round(cursor.ageMs) }
-          : null,
-        // The trail outlives the activity window: what a space did five minutes
-        // ago is exactly what you want to know about one that has gone quiet.
-        trail: cursor?.trail?.slice(-3).reverse() ?? [],
-      };
-    } finally {
-      await cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      if (shot.data && !cast.frame) cast.frame = shot.data;
+    } catch {
+      // The stream will fill it in as soon as the page paints.
     }
+    return cast;
+  }
+
+  return {
+    /** The newest frame for this tab, opening a stream for it on first ask. */
+    async frameFor(targetId) {
+      const existing = casts.get(targetId);
+      if (existing) return existing;
+      // Same contract for every caller: a broken stream yields null, never a
+      // rejection a caller has to remember to catch.
+      const inFlight = opening.get(targetId);
+      if (inFlight) return inFlight.catch(() => null);
+
+      const attempt = open(targetId).finally(() => opening.delete(targetId));
+      opening.set(targetId, attempt);
+      return attempt.catch(() => null);
+    },
+
+    sessionFor(targetId) {
+      return casts.get(targetId)?.sessionId ?? null;
+    },
+
+    /** Tabs that went away take their stream with them. */
+    async retain(liveTargetIds) {
+      for (const [targetId, cast] of [...casts.entries()]) {
+        if (liveTargetIds.has(targetId)) continue;
+        casts.delete(targetId);
+        cdp.releaseSession(cast.sessionId);
+        await cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
+      }
+    },
+
+    closeAll() {
+      closed = true;
+      // Detach first. Releasing alone stops the shim claiming the session while
+      // Chrome is still streaming to it, so every frame in flight is forwarded
+      // to the harness — into the buffer drainEvents() hands to agents, which is
+      // the exact leak the claim exists to prevent.
+      for (const cast of casts.values()) {
+        cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
+        cdp.releaseSession(cast.sessionId);
+      }
+      casts.clear();
+    },
+  };
+}
+
+async function captureCard(cdp, targetId, pool) {
+  try {
+    const cast = await pool.frameFor(targetId);
+    if (!cast) return { thumbnail: null, activity: null, trail: [] };
+
+    const cursor = await readCursor(cdp, cast.sessionId);
+    const active = Boolean(cursor) && cursor.ageMs < ACTIVE_WINDOW_MS;
+    return {
+      thumbnail: cast.frame ? `data:image/jpeg;base64,${cast.frame}` : null,
+      activity: active
+        ? {
+            name: cursor.name,
+            label: cursor.label,
+            ageMs: Math.round(cursor.ageMs),
+            // Fractions of the viewport, so the card can zoom to the cursor
+            // without the server cropping the frame.
+            fx: cursor.viewportWidth ? cursor.x / cursor.viewportWidth : null,
+            fy: cursor.viewportHeight ? cursor.y / cursor.viewportHeight : null,
+          }
+        : null,
+      trail: cursor?.trail?.slice(-3).reverse() ?? [],
+    };
   } catch {
     return { thumbnail: null, activity: null, trail: [] };
   }
@@ -134,6 +247,7 @@ async function readBody(request) {
  */
 export async function startSpacesServer(shim) {
   const { ego, cdp } = shim;
+  const pool = createCastPool(cdp);
 
   const server = createServer(async (request, response) => {
     // Bound to loopback, but a page in the agent's own browser can still reach
@@ -174,12 +288,13 @@ export async function startSpacesServer(shim) {
           .map((target) => [target.targetId, target]),
       );
 
+      await pool.retain(new Set(byTarget.keys()));
       const spaces = await Promise.all(
         taskSpaces.map(async (space) => {
           const live = (space.targetIds || []).filter((id) => byTarget.has(id));
           const lead = live[0];
           const card = lead
-            ? await captureCard(cdp, lead)
+            ? await captureCard(cdp, lead, pool)
             : { thumbnail: null, activity: null, trail: [] };
           return {
             id: space.id,
@@ -232,6 +347,9 @@ export async function startSpacesServer(shim) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     port: server.address().port,
-    close: () => server.close(),
+    close: () => {
+      pool.closeAll();
+      server.close();
+    },
   };
 }

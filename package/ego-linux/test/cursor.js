@@ -40,10 +40,16 @@ console.log("6. overlay in snapshot:  " + snap.content.includes("ego-agent-curso
 
 // A wheel carries coordinates that default to (0, 0) but moves no pointer:
 // following them would snap the cursor into the corner on every scroll.
+// The move first is not decoration: the snapshot above started a read sweep,
+// which walks the cursor along the page for its own reasons, and this would
+// otherwise measure that instead of the wheel.
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(300);
+const beforeWheel = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
 await page.mouse.wheel(0, 200);
 await page.waitForTimeout(200);
 const afterScroll = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
-console.log("7. cursor held on wheel: " + (afterScroll === transform));
+console.log("7. cursor held on wheel: " + (afterScroll === beforeWheel));
 
 // Press and release are asserted apart, because a click's own press lasts 25ms
 // — the held floor is what makes it visible, not something a test can catch.
@@ -135,10 +141,71 @@ await ego.clearHighlight();
 await page.waitForTimeout(200);
 console.log("22. cleared:             " + ((await bandCount()) === 0));
 
+// Reading is most of what an agent does and it dispatches no input at all, so
+// a sweep is the only thing that tells a watcher what was taken in. It runs
+// itself inside the page, which is why this waits rather than awaits.
+await page.snapshotRaw({ scope: "full_page" });
+await page.waitForTimeout(300);
+console.log("23. says what it reads:  " + (await badgeText()));
+console.log("24. marks the lines:     " + ((await bandCount()) > 0));
+
+// Real input outranks the narration of a read that has already happened —
+// including a move back to where the harness last left the cursor.
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(150);
+const sweepDone = await probe(`document.getElementById('ego-agent-cursor-overlay').__egoSweep.done`);
+console.log("25. input ends the read: " + sweepDone);
+
 // The trail the Spaces panel reads: transitions, not events, so a burst of
 // keystrokes is one entry rather than sixty.
 const trail = await probe(`(() => {
   const log = document.getElementById('ego-agent-cursor-overlay').__egoLog || [];
   return log.map(e => e.text).join(' | ');
 })()`);
-console.log("23. trail:               " + trail);
+console.log("26. trail:               " + trail);
+
+// The cursor marks the element it is working on, so a long scroll carries it
+// off the screen entirely — and the window went blank while the agent worked.
+// The badge is what stays behind, docked to the edge and pointing back at it.
+await page.evaluate("document.body.style.minHeight = '3000px'");
+await page.mouse.move(center.x, center.y);
+await page.waitForTimeout(250);
+await page.evaluate("window.scrollTo(0, 1400)");
+await page.waitForTimeout(250);
+const docked = JSON.parse(
+  await probe(`(() => {
+    const badge = ${SHADOW}.getElementById('badge').getBoundingClientRect();
+    const arrow = ${SHADOW}.getElementById('arrow').getBoundingClientRect();
+    return JSON.stringify({
+      gone: arrow.bottom < 0,
+      onScreen:
+        badge.top >= 0 && badge.left >= 0 &&
+        badge.bottom <= innerHeight && badge.right <= innerWidth,
+      hint: ${SHADOW}.getElementById('hint').textContent,
+      // Being in the right place is not the same as being drawn there. The
+      // pointer is a composited layer sitting at a page coordinate, and one
+      // scrolled out of view is not rasterised at all — a badge parented to it
+      // measures perfectly and paints nothing.
+      independent: !${SHADOW}.getElementById('pointer')
+        .contains(${SHADOW}.getElementById('badge')),
+    });
+  })()`),
+);
+console.log("27. cursor leaves view:  " + docked.gone);
+console.log("28. badge stays in it:   " + docked.onScreen);
+console.log("29. and points back:     " + docked.hint);
+console.log("30. drawn independently: " + docked.independent);
+
+// A nudge between two fields and a jump across the page should not take the
+// same time; one duration for both made the first crawl and the second snap.
+await page.evaluate("window.scrollTo(0, 0)");
+await page.waitForTimeout(250);
+const moveFor = async (x, y) => {
+  await page.mouse.move(x, y);
+  await page.waitForTimeout(80);
+  return parseInt(await probe(`${SHADOW}.getElementById('pointer').style.transitionDuration`), 10);
+};
+await moveFor(center.x, center.y);
+const near = await moveFor(center.x + 6, center.y);
+const far = await moveFor(30, 30);
+console.log("31. motion scales:       " + (near < far) + ` (${near}ms vs ${far}ms)`);

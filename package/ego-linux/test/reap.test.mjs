@@ -60,13 +60,30 @@ after(async () => {
 describe("reapOrphanedBrowsers", () => {
   it("terminates an ego browser whose profile directory is gone", async () => {
     const gone = join(SANDBOX, "deleted-profile");
-    const orphan = await standIn("--class=ego-lite-linux", `--user-data-dir=${gone}`);
 
-    const reaped = await reapOrphanedBrowsers();
-    await settle();
+    // The reaper is machine-global: it signals any browser carrying our class
+    // whose profile is gone, whoever started it. The suites run in parallel and
+    // several of them launch a browser, which runs this same reaper — and to it
+    // our stand-in is a textbook orphan, so it can be signalled out from under
+    // this test between the spawn and the measurement. That is the reaper
+    // working, not failing, and it left nothing for ours to count.
+    //
+    // Re-arm and measure again rather than serialise the whole suite for it
+    // (`--test-concurrency=1` costs ~17s a run). A stand-in that is still alive
+    // and still unsignalled is a real failure and asserts on the spot, so this
+    // can never turn a broken reaper green.
+    for (let attempt = 0; ; attempt += 1) {
+      const orphan = await standIn("--class=ego-lite-linux", `--user-data-dir=${gone}`);
 
-    assert.equal(reaped, 1, "exactly the one orphan is signalled");
-    assert.equal(alive(orphan), false, "the orphan is gone");
+      const reaped = await reapOrphanedBrowsers();
+      await settle();
+
+      if (reaped === 0 && !alive(orphan) && attempt < 5) continue; // stolen; retry
+
+      assert.equal(reaped, 1, "exactly the one orphan is signalled");
+      assert.equal(alive(orphan), false, "the orphan is gone");
+      return;
+    }
   });
 
   it("leaves a browser whose profile directory still exists", async () => {

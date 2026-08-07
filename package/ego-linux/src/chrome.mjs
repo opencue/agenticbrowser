@@ -45,6 +45,13 @@ const LAUNCH_FLAGS = [
   // viewport — a 1280px window lays out as 853px — so page content the agent
   // expects on screen falls below the fold.
   "--force-device-scale-factor=1",
+  // "Chrome didn't shut down correctly — Restore pages?". Two things keep it
+  // away, covering different halves: the graceful Browser.close in stopBrowser()
+  // stops the profile *earning* the mark, and clearStaleCrashMark() clears a
+  // mark it already carries, which a clean exit alone never does. This flag is
+  // the backstop for what neither covers — a browser killed by something outside
+  // this launcher, between one launch's clear and the next.
+  "--hide-crash-restore-bubble",
   // Give the agent browser its own window class. Without it the window carries
   // Chrome's, so the desktop groups it under the ordinary Chrome icon: it never
   // appears as its own running app and the launcher icon cannot raise it.
@@ -206,6 +213,38 @@ async function neutralizeZoom(profileDir) {
   }
 }
 
+/**
+ * Clear a stale crash mark before launching.
+ *
+ * Chrome stamps `profile.exit_type` "Crashed" while it runs and rewrites it to
+ * "Normal" on a graceful exit — but only if it did not *start* out marked. Once
+ * a profile carries the mark, Chrome keeps it until someone answers the
+ * "Restore pages?" prompt, and in an agent browser nobody ever does. So a single
+ * ungraceful kill marks a profile permanently: every later launch opens with the
+ * prompt, and even a clean Browser.close leaves the mark exactly where it was.
+ *
+ * Established by bisecting a marked profile's Preferences against a fresh one,
+ * top-level keys first and then within `profile`, down to this single key: seed
+ * "Crashed" and the next clean stop still reads "Crashed"; seed anything else
+ * and it reads "Normal".
+ *
+ * The mark exists to protect a human's tabs. This profile has none worth
+ * restoring — the agent opens what it needs — so clearing it costs nothing.
+ */
+export async function clearStaleCrashMark(profileDir) {
+  const path = join(profileDir, "Default", "Preferences");
+  try {
+    const prefs = JSON.parse(await readFile(path, "utf8"));
+    if (!prefs.profile || prefs.profile.exit_type === "Normal") return false;
+    prefs.profile = { ...prefs.profile, exit_type: "Normal" };
+    await writeFile(path, JSON.stringify(prefs));
+    return true;
+  } catch {
+    // A fresh profile has no Preferences file yet; nothing to clear.
+    return false;
+  }
+}
+
 /** Whether a pid is a browser running against our own profile directory. */
 async function ownsOurProfile(pid, profileDir) {
   try {
@@ -321,6 +360,7 @@ async function launch({ headless }) {
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
   await neutralizeZoom(PROFILE_DIR);
+  await clearStaleCrashMark(PROFILE_DIR);
   await clearProfileLock(PROFILE_DIR);
   // A stale port file would be read as this launch's port.
   await rm(join(PROFILE_DIR, PORT_FILE), { force: true });
@@ -330,6 +370,10 @@ async function launch({ headless }) {
     `${PROFILE_FLAG}${PROFILE_DIR}`,
     "--remote-debugging-port=0",
     ...(headless ? ["--headless=new"] : []),
+    // The harness attaches its CDP session to the active tab and fails with
+    // "no active tab to attach session" when there is none, so the browser has
+    // to come up holding one. --no-startup-window was tried here and breaks
+    // every page operation for that reason.
     "about:blank",
   ];
   const child = spawn(binary, args, {
@@ -368,11 +412,81 @@ export async function ensureBrowser({ headless = false } = {}) {
   return launch({ headless });
 }
 
+/**
+ * Ask the browser to close itself, over CDP.
+ *
+ * SIGTERM is recorded by Chrome as a crash: the profile keeps `exit_type:
+ * "Crashed"`, and every later launch greets the user with "Chrome didn't shut
+ * down correctly — Restore pages?". Browser.close is the graceful path, so the
+ * profile records a clean exit and there is nothing left to restore.
+ */
+async function closeBrowserGracefully(port, timeoutMs = 5000) {
+  const wsUrl = await probe(port);
+  if (!wsUrl) return false;
+
+  return new Promise((resolve) => {
+    let socket = null;
+    let sent = false;
+    let settled = false;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        socket?.close();
+      } catch {
+        // already closing
+      }
+      resolve(ok);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+
+    try {
+      socket = new WebSocket(wsUrl);
+    } catch {
+      finish(false);
+      return;
+    }
+    socket.onopen = () => {
+      sent = true;
+      socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+    };
+    // Chrome answers and then drops the socket as it goes away; whichever lands
+    // first means the request was taken. A close *before* the request went out
+    // is a failed connection, not a shutdown.
+    socket.onmessage = () => finish(true);
+    socket.onclose = () => finish(sent);
+    socket.onerror = () => finish(false);
+  });
+}
+
+/** Wait for a pid to disappear — a browser still exiting still holds the profile lock. */
+async function waitForProcessExit(pid, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return true;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 /** Terminate the backing browser and forget it. */
 export async function stopBrowser() {
   const state = await readBrowserState();
   let stopped = false;
-  if (state?.pid) {
+
+  if (state?.port) stopped = await closeBrowserGracefully(state.port);
+  // Answering the request is not the same as acting on it. A browser that
+  // stayed up has to be signalled anyway — otherwise --stop removes the state
+  // file that is the only handle on it and leaves it running, unreachable.
+  if (stopped && state?.pid && !(await waitForProcessExit(state.pid))) stopped = false;
+
+  // The blunt instrument, only when the browser did not take the polite request.
+  if (!stopped && state?.pid) {
     try {
       process.kill(state.pid, "SIGTERM");
       stopped = true;
@@ -380,9 +494,11 @@ export async function stopBrowser() {
       // already gone
     }
   }
+
   await rm(BROWSER_STATE_FILE, { force: true });
   // A SIGTERMed Chrome does not always release its profile lock, which would
-  // block the next launch.
+  // block the next launch. After a graceful close there is nothing left to
+  // clear, and this is a no-op.
   await clearProfileLock(PROFILE_DIR);
   return stopped;
 }

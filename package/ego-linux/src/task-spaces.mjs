@@ -30,9 +30,47 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
-const EMPTY = { spaces: [], selectedId: null, nextId: 1 };
+const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+
+/**
+ * How many idle-closed spaces to remember.
+ *
+ * Enough that a session returning from a long break still finds its own, few
+ * enough that the state file cannot grow without bound.
+ */
+const REMEMBERED_CLOSURES = 20;
 
 export function createTaskSpacesApi(cdp) {
+  /**
+   * Which space *this process* is working in.
+   *
+   * selectedId lives in a file every concurrent session shares, and each heredoc
+   * writes it on the way in. So a second agent starting up silently reassigns
+   * the first one: from that moment the first agent scoped its tab list, its
+   * navigations and its cursor to the *other* session's space. The observed
+   * symptom is a tab navigating away to an unrelated site while the agent that
+   * opened it is still working in it, and the other agent finding a stranger's
+   * page where its own should be.
+   *
+   * Once this process has chosen a space it pins it here and stops consulting
+   * the shared value. The file still records the global selection — the Spaces
+   * overview reads it, and it is the right answer for a fresh process that has
+   * not chosen yet — it simply no longer decides what an already-committed
+   * process acts on.
+   */
+  let pinnedSpaceId = null;
+
+  /** The pinned space if it still exists, else whatever the file last recorded. */
+  function effectiveSelectedId(state) {
+    if (
+      pinnedSpaceId !== null &&
+      state.spaces.some((space) => space.id === pinnedSpaceId)
+    ) {
+      return pinnedSpaceId;
+    }
+    return state.selectedId;
+  }
+
   async function readState() {
     try {
       const parsed = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
@@ -120,7 +158,7 @@ export function createTaskSpacesApi(cdp) {
 
   async function pruneAbandoned(state, live) {
     const doomed = state.spaces.filter((space) => {
-      if (space.id === state.selectedId) return false;
+      if (space.id === effectiveSelectedId(state)) return false;
       // Ever held a real page => not abandoned, only between pages.
       if (space.lastContentAt) return false;
       if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS) return false;
@@ -136,6 +174,87 @@ export function createTaskSpacesApi(cdp) {
       }
       if (space.browserContextId) await disposeContext(space.browserContextId);
     }
+    const gone = new Set(doomed.map((space) => space.id));
+    state.spaces = state.spaces.filter((space) => !gone.has(space.id));
+    return true;
+  }
+
+  /**
+   * Close spaces nobody has come back to.
+   *
+   * A space outlives the process that opened it — every heredoc is a fresh Node
+   * run — so nothing reaps one whose agent simply stopped returning. A session
+   * that ends mid-task leaves its tabs open for good, and the count only climbs;
+   * spaces from long-finished work were still holding pages days later.
+   *
+   * Idleness is measured from the last time something addressed the space, not
+   * from when its page last changed: an agent reading one page for ten minutes
+   * is working, and a space parked on a live dashboard is not. Live work keeps
+   * itself alive by continuing, since every round touches the space it uses.
+   *
+   * The selected space is never swept — it is the one someone is on right now —
+   * and EGO_LINUX_SPACE_IDLE_MIN=0 turns the sweep off for anyone who would
+   * rather clean up by hand.
+   */
+  const IDLE_MINUTES = Number(process.env.EGO_LINUX_SPACE_IDLE_MIN ?? 30);
+  const IDLE_AFTER_MS =
+    Number.isFinite(IDLE_MINUTES) && IDLE_MINUTES > 0 ? IDLE_MINUTES * 60000 : 0;
+
+  async function pruneIdle(state) {
+    if (!IDLE_AFTER_MS) return false;
+    const now = Date.now();
+    // Stamping is itself a state change worth persisting: drop it and every run
+    // would re-stamp from scratch, so nothing would ever reach the threshold.
+    let stamped = false;
+    const doomed = state.spaces.filter((space) => {
+      if (space.id === effectiveSelectedId(state)) return false;
+      // touchedAt only moves when an API call names the space, and nothing a
+      // person does at the keyboard produces one. A space handed over for a
+      // login or a captcha, or completed with keep: true — which exists purely
+      // to say "leave this page open" — would therefore go idle while it is
+      // being used, and get closed out from under them.
+      if (
+        space.ownership === "user" ||
+        space.ownership === "agentDelegatedToUser"
+      ) {
+        return false;
+      }
+      // Spaces that predate this field have no idle history, and judging them
+      // by createdAt would sweep every one of them the first time the feature
+      // runs — including whatever a colleague session is halfway through. Stamp
+      // them instead and let them earn a full idle window from here.
+      if (!space.touchedAt) {
+        space.touchedAt = now;
+        stamped = true;
+        return false;
+      }
+      return now - space.touchedAt >= IDLE_AFTER_MS;
+    });
+    if (doomed.length === 0) return stamped;
+
+    for (const space of doomed) {
+      for (const targetId of space.targetIds || []) {
+        await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+      }
+      if (space.browserContextId) await disposeContext(space.browserContextId);
+    }
+
+    // Leave a trail. Without one, an agent coming back after a long break calls
+    // useOrCreate with the same name, silently gets a brand-new empty space, and
+    // carries on believing it resumed — the tabs it had open are simply gone and
+    // nothing says so. A closed space that names itself and lists what it held
+    // turns that into something the agent can put back.
+    const closures = state.closedSpaces || [];
+    for (const space of doomed) {
+      closures.unshift({
+        name: space.name,
+        urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
+        closedAt: now,
+        idleMinutes: Math.round((now - space.touchedAt) / 60000),
+      });
+    }
+    state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
     return true;
@@ -172,6 +291,7 @@ export function createTaskSpacesApi(cdp) {
 
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
+    if (await pruneIdle(state)) changed = true;
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
@@ -212,7 +332,8 @@ export function createTaskSpacesApi(cdp) {
    * create are passed an id.
    */
   async function requireSpace(state, id, op) {
-    const wanted = id === undefined || id === null ? state.selectedId : Number(id);
+    const wanted =
+      id === undefined || id === null ? effectiveSelectedId(state) : Number(id);
     const space = state.spaces.find((candidate) => candidate.id === wanted);
     if (!space) {
       throw new Error(
@@ -221,6 +342,11 @@ export function createTaskSpacesApi(cdp) {
           : `${op}: task space not found: ${id}`,
       );
     }
+    // Every API call that names a space is a session saying it is still here.
+    // That is what the idle sweep measures, and touching it in the one place
+    // they all pass through is what keeps live work from being swept out from
+    // under an agent that simply had a long think between rounds.
+    space.touchedAt = Date.now();
     return space;
   }
 
@@ -259,13 +385,21 @@ export function createTaskSpacesApi(cdp) {
   function selectedContextId() {
     try {
       const state = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
-      const space = state.spaces?.find(
-        (candidate) => candidate.id === state.selectedId,
-      );
+      const wanted = effectiveSelectedId({ ...state, spaces: state.spaces ?? [] });
+      const space = state.spaces?.find((candidate) => candidate.id === wanted);
       return space?.browserContextId ?? null;
     } catch {
       return null;
     }
+  }
+
+  /** The space's own still-blank tab, if it has exactly that and nothing else. */
+  async function blankAnchor(space) {
+    const ids = space.targetIds || [];
+    if (ids.length !== 1) return null;
+    const live = await livePageTargets().catch(() => new Map());
+    const target = live.get(ids[0]);
+    return target && target.url === "about:blank" ? target.targetId : null;
   }
 
   async function disposeContext(browserContextId) {
@@ -305,7 +439,9 @@ export function createTaskSpacesApi(cdp) {
      */
     async noteContent() {
       const state = await readState();
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
       if (!space || space.lastContentAt) return;
       space.lastContentAt = Date.now();
       await writeState(state);
@@ -337,6 +473,7 @@ export function createTaskSpacesApi(cdp) {
         taskId: state.nextId,
         name: String(name ?? `task ${state.nextId}`),
         createdAt: Date.now(),
+        touchedAt: Date.now(),
         ownership: "agent",
         createdBy: "agent",
         // Which agent profile opened it — the overview's right-hand label.
@@ -347,6 +484,31 @@ export function createTaskSpacesApi(cdp) {
       state.spaces.push(space);
       state.nextId += 1;
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
+
+      // useOrCreate lands here whenever it cannot find the name it was given —
+      // including when the idle sweep closed that very space while its agent was
+      // away. Handing back what the old one held is the difference between
+      // "resumed" and "started over without noticing". Consumed on use, so it is
+      // reported once rather than on every later run of the same name.
+      const closures = state.closedSpaces || [];
+      const index = closures.findIndex((entry) => entry.name === space.name);
+      if (index !== -1) {
+        const [previous] = closures.splice(index, 1);
+        state.closedSpaces = closures;
+        space.previously = {
+          closedAt: previous.closedAt,
+          idleMinutes: previous.idleMinutes,
+          urls: previous.urls,
+          note:
+            `a task space named ${JSON.stringify(space.name)} was closed after ` +
+            `${previous.idleMinutes} minutes idle; this is a new, empty one. ` +
+            (previous.urls.length
+              ? `It had these pages open: ${previous.urls.join(", ")}`
+              : "It had no pages open."),
+        };
+      }
+
       await writeState(state);
       return space;
     },
@@ -355,6 +517,7 @@ export function createTaskSpacesApi(cdp) {
       const state = await readState();
       const space = await requireSpace(state, id, "useTaskSpace");
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return { done: true };
@@ -365,6 +528,7 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "claimTaskSpace");
       space.ownership = "agent";
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return space;
@@ -383,6 +547,7 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "takeOverTaskSpace");
       space.ownership = "agent";
       state.selectedId = space.id;
+      pinnedSpaceId = space.id;
       await writeState(state);
       await focusSpace(space);
       return { done: true };
@@ -410,6 +575,7 @@ export function createTaskSpacesApi(cdp) {
       }
       state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
       if (state.selectedId === space.id) state.selectedId = null;
+      if (pinnedSpaceId === space.id) pinnedSpaceId = null;
       await writeState(state);
       return { done: true };
     },
@@ -432,8 +598,10 @@ export function createTaskSpacesApi(cdp) {
      */
     async selectedScope() {
       const state = await readState();
-      if (!state.selectedId) return null;
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      if (!effectiveSelectedId(state)) return null;
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
       if (!space) return null;
       return {
         browserContextId: space.browserContextId || null,
@@ -443,7 +611,30 @@ export function createTaskSpacesApi(cdp) {
 
     async createTabInSelectedSpace(tabs, url) {
       const state = await readState();
-      const space = state.spaces.find((candidate) => candidate.id === state.selectedId);
+      const space = state.spaces.find(
+        (candidate) => candidate.id === effectiveSelectedId(state),
+      );
+      // A space is anchored by a tab — one with none is reaped as soon as it is
+      // reconciled — so it opens on about:blank before it has anywhere to go.
+      // Creating a second tab for the first navigation strands that anchor, and
+      // the window then shows a blank tab beside the real page for the rest of
+      // the session. Navigating the anchor is what it was opened for.
+      //
+      // Guarded on lastContentAt rather than on the tab's current url: a tab is
+      // about:blank for a moment during every navigation, so matching on the url
+      // alone would hijack a tab that is already carrying work. "Never held a
+      // page" is only true of a space that has not started yet.
+      const anchor = space && !space.lastContentAt ? await blankAnchor(space) : null;
+      if (anchor && url && url !== "about:blank") {
+        const { sessionId } = await cdp.call("Target.attachToTarget", {
+          targetId: anchor,
+          flatten: true,
+        });
+        await cdp.call("Page.navigate", { url }, sessionId);
+        await cdp.call("Target.activateTarget", { targetId: anchor }).catch(() => {});
+        return { targetId: anchor };
+      }
+
       // Open it inside the space's context, so every tab of a space shares that
       // space's jar rather than the first tab being isolated and the rest not.
       let result;
