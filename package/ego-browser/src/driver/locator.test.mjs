@@ -94,7 +94,10 @@ test("required locator reads retry transient zero matches", async () => {
   }
 
   assert.equal(attempts, 3);
-  assert.deepEqual(sleeps, [100, 100]);
+  // Ramped, not flat: an element that is coming is usually one render away, so
+  // the first retries are short and only a genuinely slow one backs off to the
+  // 100 ms this used to wait every time.
+  assert.deepEqual(sleeps, [25, 50]);
 });
 
 test("locator collection helpers evaluate all matching nodes", async () => {

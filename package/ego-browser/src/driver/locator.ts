@@ -301,8 +301,15 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
   return evaluateQueryAll(selector, functionSource, arg);
 }
 
+// Retry cadence after a transient resolution miss. An element that is coming
+// is usually one render away, so the first retries are short; the delay then
+// backs off to the flat interval this used to sit at, so a genuinely slow
+// element costs no more round trips than before.
+const RESOLVE_RETRY_MS = [25, 50, 100];
+
 async function readElement(selector, functionDeclaration, args = []) {
   const deadline = state.now() + state.defaultTimeout;
+  let attempt = 0;
   while (true) {
     try {
       return await readElementOnce(selector, functionDeclaration, args);
@@ -314,7 +321,9 @@ async function readElement(selector, functionDeclaration, args = []) {
       ) {
         throw error;
       }
-      await state.sleep(Math.min(100, deadline - state.now()));
+      const step =
+        RESOLVE_RETRY_MS[Math.min(attempt++, RESOLVE_RETRY_MS.length - 1)];
+      await state.sleep(Math.min(step, deadline - state.now()));
     }
   }
 }

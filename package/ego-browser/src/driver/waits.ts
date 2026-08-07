@@ -36,6 +36,21 @@ let networkEventUsers = 0;
 let networkEventsOwnDomain = false;
 let networkEnableInFlight: Promise<void> | null = null;
 
+// Ramps for the "probe until the page catches up" loops below. These used to be
+// flat intervals, which charged the common case — the page is one render away —
+// the full interval before anyone looked again. Ramping keeps the fast case
+// fast and still tops out where it always sat, so a genuinely slow page costs
+// no extra round trips. Same shape as the resolve retry in locator.ts.
+const SELECTOR_POLL_MS = [25, 50, 100, 200, 300];
+const URL_POLL_MS = [25, 50, 100];
+
+function rampedDelay(steps: number[], attempt: number, deadline: number) {
+  const step = steps[Math.min(attempt, steps.length - 1)];
+  // Never sleep past the caller's deadline, and never sleep a negative span:
+  // the round trip before this can consume what was left of the budget.
+  return Math.max(0, Math.min(step, deadline - state.now()));
+}
+
 /**
  * Sleep for a fixed number of milliseconds.
  * @param {number} [ms=1000] Milliseconds to wait.
@@ -91,6 +106,7 @@ export async function waitForFunction(
 export async function waitForURL(url, options: WaitForURLOptions = {}) {
   const timeout = options.timeout ?? state.defaultTimeout;
   const deadline = state.now() + timeout;
+  let attempt = 0;
   while (state.now() < deadline) {
     const current = runtimeValue(
       await cdp("Runtime.evaluate", {
@@ -112,7 +128,7 @@ export async function waitForURL(url, options: WaitForURLOptions = {}) {
             timeout: Math.max(0, deadline - state.now()),
           });
     }
-    await state.sleep(100);
+    await state.sleep(rampedDelay(URL_POLL_MS, attempt++, deadline));
   }
   return false;
 }
@@ -497,13 +513,14 @@ export async function waitForSelector(
   const deadline = state.now() + timeout;
   const visibilityFn =
     "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
+  let attempt = 0;
   while (state.now() < deadline) {
     let handle;
     try {
       handle = await resolveHandle(selector);
     } catch (err) {
       if (err instanceof ElementResolutionError && err.kind === "transient") {
-        await state.sleep(300);
+        await state.sleep(rampedDelay(SELECTOR_POLL_MS, attempt++, deadline));
         continue; // not found / not ready yet — keep polling.
       }
       throw err; // permanent (bad selector / ambiguous) or unknown error — fail loud.
@@ -526,7 +543,7 @@ export async function waitForSelector(
     } finally {
       await releaseHandle(handle.objectId, handle.sessionId);
     }
-    await state.sleep(300);
+    await state.sleep(rampedDelay(SELECTOR_POLL_MS, attempt++, deadline));
   }
   return false;
 }
