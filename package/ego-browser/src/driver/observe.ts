@@ -42,7 +42,19 @@ type ScreenshotOptions = {
   clip?: ScreenshotClip;
 };
 
-export function drainEvents() {
+/**
+ * Drain the page/CDP events buffered since the last call.
+ *
+ * Async to match the documented `page.drainEvents() => Promise<object[]>`
+ * contract and the rest of the Playwright-style facade, where every method is
+ * awaitable. The buffer is in memory so this never really suspends, but the
+ * shape matters: a caller following the docs chains `.then`/`.catch` on the
+ * result, and a bare array has neither — it failed with
+ * "page.drainEvents(...).catch is not a function" instead of returning events.
+ *
+ * @returns {Promise<object[]>} Events buffered since the previous drain.
+ */
+export async function drainEvents() {
   return drainBrowserEvents();
 }
 
