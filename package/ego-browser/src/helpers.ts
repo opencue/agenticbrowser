@@ -105,13 +105,61 @@ export { browserFetch, serverFetch } from "./http.js";
  * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>>}
  */
 export async function listTaskSpaces() {
+  return (await readTaskSpaces()).spaces;
+}
+
+/**
+ * One binding read, both halves: the spaces that exist and the trail of the ones
+ * that recently stopped existing.
+ *
+ * A lookup that misses can only say "not found" from the live list alone, which
+ * is the least useful true thing available — the runtime knows the space was
+ * closed with its last tab twenty minutes ago and what it held. Older runtimes
+ * do not report the trail at all, so its absence is normal and simply leaves the
+ * error as terse as it always was.
+ */
+async function readTaskSpaces() {
   const ego = globalThis.ego;
   if (!ego || typeof ego.listTaskSpaces !== "function") {
     throw new Error("listTaskSpaces requires ego.listTaskSpaces");
   }
-  return normalizeTaskSpaces(
-    assertNoEgoError(await ego.listTaskSpaces(), "listTaskSpaces"),
+  const result = assertNoEgoError(await ego.listTaskSpaces(), "listTaskSpaces");
+  return {
+    spaces: normalizeTaskSpaces(result),
+    closed: Array.isArray(result?.closedSpaces) ? result.closedSpaces : [],
+  };
+}
+
+/**
+ * Build the error for a task space that is not there, saying what became of it
+ * when the runtime remembers.
+ */
+function taskSpaceNotFound(op, nameOrId, spaces, closed) {
+  const gone = closed.find((entry) => entry?.name === nameOrId);
+  if (!gone) {
+    return new Error(
+      `${op}: task space not found: ${nameOrId}. ${describeTaskSpaces(spaces)}`,
+    );
+  }
+  const held = gone.urls?.length
+    ? ` It held: ${gone.urls.join(", ")}.`
+    : " It had no pages open.";
+  return new Error(
+    `${op}: task space ${JSON.stringify(nameOrId)} no longer exists — it ` +
+      `${closureCause(gone)}.${held} ${describeTaskSpaces(spaces)}`,
   );
+}
+
+/** Phrase why a space ended. Mirrors the wording the runtime uses on resume. */
+function closureCause(closure) {
+  if (closure.reason === "tabs-closed") return "was closed with its last tab";
+  if (closure.reason === "abandoned") {
+    return "was reaped as abandoned, having been opened but never used";
+  }
+  if (typeof closure.idleMinutes === "number") {
+    return `was closed after ${closure.idleMinutes} minutes idle`;
+  }
+  return "was closed";
 }
 
 /*
@@ -300,10 +348,10 @@ export async function completeTaskSpace(
   if (!ego) {
     throw new Error("completeTaskSpace requires ego runtime");
   }
-  const spaces = await listTaskSpaces();
+  const { spaces, closed } = await readTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) {
-    throw new Error(`task space not found: ${nameOrId}`);
+    throw taskSpaceNotFound("completeTaskSpace", nameOrId, spaces, closed);
   }
   if (options.keep) {
     if (match.ownership === "user") {
@@ -450,9 +498,9 @@ function taskSpaceNumericId(space, op: string) {
 }
 
 async function findTaskSpace(nameOrId) {
-  const spaces = await listTaskSpaces();
+  const { spaces, closed } = await readTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
-  if (!match) throw new Error(`task space not found: ${nameOrId}`);
+  if (!match) throw taskSpaceNotFound("taskSpace", nameOrId, spaces, closed);
   return match;
 }
 
