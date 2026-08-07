@@ -259,8 +259,18 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
 
     if (node.nodeType === 3) {
       const text = squash(node.text || node.value);
-      // Text only counts as rendered when it made it into the layout tree.
-      if (text && node.text !== undefined) emit(indent, `text: ${text}`);
+      // Text only counts as rendered when it made it into the layout tree, and
+      // it answers to the same viewport scope as an element does. Skipping this
+      // check meant `only_within_viewport` still emitted every paragraph below
+      // the fold — on a text-heavy page that is most of the content, which is
+      // why scoping the view saved so much less than it looked like it should.
+      if (
+        text &&
+        node.text !== undefined &&
+        intersectsViewport(node.bounds, viewport)
+      ) {
+        emit(indent, `text: ${text}`);
+      }
       return;
     }
     if (node.nodeType !== 1) {
@@ -297,14 +307,29 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
 
     const shouldEmit =
       inScope && (interactive || STRUCTURAL_ROLES.has(role));
+    const addressable = interactive && node.backendNodeId !== undefined;
+
+    // Being addressable is a different question from being on screen. An
+    // interactive node joins the refMap wherever it sits, so `@N` still
+    // resolves for something below the fold; only the rendered line stays
+    // viewport-scoped. Tying the two together is what made
+    // `scope: only_within_viewport` hand back "Unknown ref" for everything it
+    // had scrolled past, forcing a choice between a cheap snapshot and usable
+    // refs. The extra work is one bounded accessible-name walk per off-screen
+    // interactive node, over a document that is already decoded in memory —
+    // no additional CDP round trip, and full_page is unaffected because every
+    // node is in scope there anyway.
+    const name =
+      shouldEmit || addressable ? accessibleName(doc, node, role) : "";
+    if (addressable) {
+      refs.push({ backendNodeId: node.backendNodeId, role, name });
+    }
 
     if (shouldEmit) {
-      const name = accessibleName(doc, node, role);
       const marks = [];
 
-      if (interactive && node.backendNodeId !== undefined) {
+      if (addressable) {
         marks.push(`ref=${node.backendNodeId}`);
-        refs.push({ backendNodeId: node.backendNodeId, role, name });
       }
       if (includeStableLocator) {
         const locator = stableLocator(node, role, name);

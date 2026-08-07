@@ -84,3 +84,7 @@ test/
 !package/ego-linux/test/**
 # Translated skill (local only)
 skills/ego-browser/SKILL.zh.md
+
+# Local agent tooling state (not product code)
+.omc/
+.cue.profile
