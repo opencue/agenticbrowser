@@ -192,6 +192,20 @@ export function createTaskSpacesApi(cdp) {
    * is working, and a space parked on a live dashboard is not. Live work keeps
    * itself alive by continuing, since every round touches the space it uses.
    *
+   * It runs when a session commits to a space, not when spaces are listed.
+   * Coming back to one starts by listing them — useOrCreate(id) resolves the id
+   * against the list before it selects — so sweeping on the read path reaped the
+   * very space the returning agent had just named, one call before the touch
+   * that would have spared it. The symptom is a `task space not found: 172` for
+   * a space that was alive until it was asked for, and a session quiet for
+   * longer than the gap between two user turns is the ordinary case, not an
+   * abandoned one. A poll of the Spaces panel had the same effect, so an open
+   * overview quietly shortened every space's life.
+   *
+   * Selecting is the first moment the sweep knows which space is wanted, and
+   * every path the harness takes ends there — switch, claim, create and reuse
+   * all select afterwards — so nothing goes unswept by waiting for it.
+   *
    * The selected space is never swept — it is the one someone is on right now —
    * and EGO_LINUX_SPACE_IDLE_MIN=0 turns the sweep off for anyone who would
    * rather clean up by hand.
@@ -291,7 +305,6 @@ export function createTaskSpacesApi(cdp) {
 
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
-    if (await pruneIdle(state)) changed = true;
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
@@ -518,6 +531,9 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "useTaskSpace");
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+      // Selected first, so the space this session came back for is the one the
+      // sweep protects rather than the one it closes.
+      await pruneIdle(state);
       await writeState(state);
       await focusSpace(space);
       return { done: true };
