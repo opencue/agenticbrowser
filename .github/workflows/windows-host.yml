@@ -36,6 +36,10 @@ jobs:
         working-directory: package/ego-windows-host
         run: npm ci --ignore-scripts
 
+      - name: Build ego-browser dependency
+        working-directory: package/ego-browser
+        run: npm ci --ignore-scripts && npm run build
+
       - name: Run tests
         working-directory: package/ego-windows-host
         run: npm test

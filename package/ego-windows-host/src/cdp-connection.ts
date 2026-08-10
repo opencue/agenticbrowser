@@ -84,7 +84,6 @@ export class CdpConnection {
         this.pending.delete(id);
         reject(new Error(`CDP request timed out: ${method}`));
       }, timeoutMs);
-      timer.unref?.();
       this.pending.set(id, {
         resolve: (value) => {
           clearTimeout(timer);
