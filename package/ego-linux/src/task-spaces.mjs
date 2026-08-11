@@ -373,6 +373,77 @@ export function createTaskSpacesApi(cdp) {
   }
 
   /**
+   * Whether this browser draws windows at all.
+   *
+   * Cached: a running browser cannot change mode, and every handoff asks.
+   * `--headless=new` reports an ordinary product string ("Chrome/148.0.7778.167"),
+   * so the user agent is the only field of Browser.getVersion that still names
+   * the mode.
+   */
+  let windowed = null;
+  async function hasWindow() {
+    if (windowed === null) {
+      try {
+        const { userAgent } = await cdp.call("Browser.getVersion");
+        windowed = !/headless/i.test(String(userAgent ?? ""));
+      } catch {
+        // A protocol hiccup is not evidence of a missing window. Assume there
+        // is one rather than warn about a browser the user is looking at.
+        windowed = true;
+      }
+    }
+    return windowed;
+  }
+
+  /**
+   * Put the space where a person can actually see it.
+   *
+   * focusSpace() selects the tab, which is all an agent ever needs — it observes
+   * through CDP either way, so a buried window costs it nothing. Handing control
+   * to the user is the one moment someone has to find that window on their own
+   * desktop, and a minimized window behind an IDE looks exactly like nothing
+   * happened.
+   *
+   * Resolves to whether there is a window on screen at all, so the caller can
+   * say so instead of asking the user to click something that does not exist.
+   */
+  async function presentSpace(space) {
+    const live = await livePageTargets().catch(() => new Map());
+    const targetId = (space.targetIds || []).find((id) => live.has(id));
+    if (!targetId) return false;
+    await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    if (!(await hasWindow())) return false;
+
+    try {
+      const { windowId } = await cdp.call("Browser.getWindowForTarget", { targetId });
+      const { bounds } = await cdp.call("Browser.getWindowBounds", { windowId });
+      // Only a minimized window is restored. Sending "normal" unconditionally
+      // would un-maximize a window the user maximized themselves — taking the
+      // browser away from them on the call that hands it to them.
+      if (bounds?.windowState === "minimized") {
+        await cdp.call("Browser.setWindowBounds", {
+          windowId,
+          bounds: { windowState: "normal" },
+        });
+      }
+    } catch {
+      // No window manager, or a compositor that refuses the bounds change.
+    }
+
+    try {
+      const { sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      });
+      await cdp.call("Page.bringToFront", {}, sessionId);
+      await cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+    } catch {
+      // Raising is best-effort — activateTarget above already selected the tab.
+    }
+    return true;
+  }
+
+  /**
    * Give a space its own cookie jar, pre-filled with the user's.
    *
    * Target.createBrowserContext isolates for real, but starts empty — which on
@@ -553,9 +624,25 @@ export function createTaskSpacesApi(cdp) {
     async handOffTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "handOffTaskSpace");
+      // Raised before ownership moves: past this line the agent stops driving,
+      // so it is the last moment anything can put the page in front of the
+      // person who is about to be asked to act on it.
+      const visible = await presentSpace(space);
       space.ownership = "agentDelegatedToUser";
       await writeState(state);
-      return { done: true };
+      if (!visible) {
+        // Not an error. Headless is a supported way to run and CI hands off
+        // with nobody watching; the handoff itself is still valid. It only
+        // becomes a lie when the agent goes on to say "click the button in the
+        // browser", so this says otherwise on the channel the agent reads.
+        process.stderr.write(
+          `ego-browser: handed off task space ${space.id}, but this browser has no window ` +
+            `on screen — the user cannot see the page or act on it. Do not ask them to click, ` +
+            `log in, or solve a captcha here. Get a visible browser first: unset ` +
+            `EGO_LINUX_HEADLESS, then run \`ego-browser --open\`.\n`,
+        );
+      }
+      return { done: true, visible };
     },
 
     async takeOverTaskSpace(id) {
@@ -574,9 +661,13 @@ export function createTaskSpacesApi(cdp) {
     async completeTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "completeTaskSpace");
+      // `keep: true` exists to leave a page for the user to look at, so the same
+      // rule as handoff applies: raise it, and report whether there was
+      // anything to raise.
+      const visible = await presentSpace(space);
       space.ownership = "user";
       await writeState(state);
-      return { done: true };
+      return { done: true, visible };
     },
 
     async closeTaskSpace(id) {

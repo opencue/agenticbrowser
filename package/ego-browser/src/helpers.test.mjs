@@ -885,6 +885,36 @@ test("completeTaskSpace keep true skips user-owned spaces and reports it", async
   assert.deepEqual(calls, [["listTaskSpaces"]]);
 });
 
+test("completeTaskSpace keep true reports a page the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      // Keeping a space headless leaves a page open on no screen at all.
+      async completeTaskSpace() {
+        return { done: true, visible: false };
+      },
+    },
+    async () => {
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      assert.deepEqual(result, { done: true, visible: false });
+    },
+  );
+});
+
 test("handOffTaskSpace skips user-owned spaces and reports it", async () => {
   const calls = [];
   await withEgo(
@@ -941,7 +971,8 @@ test("handOffTaskSpace reports done for agent-owned spaces", async () => {
     },
     async () => {
       const result = await handOffTaskSpace("checkout-flow");
-      assert.deepEqual(result, { done: true });
+      // A binding that says nothing about visibility is one that has a window.
+      assert.deepEqual(result, { done: true, visible: true });
     },
   );
   assert.deepEqual(calls, [
@@ -949,6 +980,37 @@ test("handOffTaskSpace reports done for agent-owned spaces", async () => {
     ["useTaskSpace", 7],
     ["handOffTaskSpace"],
   ]);
+});
+
+test("handOffTaskSpace reports a handoff the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      // What the Linux port answers when the browser is running headless: the
+      // handoff happened, but there is no window for the user to act in.
+      async handOffTaskSpace() {
+        return { done: true, visible: false };
+      },
+    },
+    async () => {
+      const result = await handOffTaskSpace("checkout-flow");
+      assert.deepEqual(result, { done: true, visible: false });
+    },
+  );
 });
 
 test("useOrCreateTaskSpace rejects unknown ownership", async () => {
