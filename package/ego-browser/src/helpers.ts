@@ -329,11 +329,16 @@ export async function completeTaskSpace(
 }
 
 /**
- * Hand off a task space back to the user, hiding the agent overlay.
+ * Hand off a task space back to the user, hiding the agent overlay and raising
+ * the browser window so the user can find the page they are being asked to act on.
  * User-owned spaces are skipped (the user already controls them) and resolve
  * `{ done: false, skipped: "user-owned" }`.
+ *
+ * `visible` reports whether the page reached a screen. It is `false` when the
+ * browser is running headless — the handoff is still recorded, but nobody can
+ * see or click anything, so the caller must not ask the user to.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @returns {Promise<{done: boolean, visible?: boolean, skipped?: "user-owned"}>} `{ done: true, visible }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function handOffTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
@@ -347,8 +352,11 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     }
     await selectTaskSpace(ego, match, "handOffTaskSpace");
   }
-  assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
-  return { done: true };
+  const result = await ego.handOffTaskSpace();
+  assertNoEgoError(result, "handOffTaskSpace");
+  // A backing layer that does not report visibility is one that has a window;
+  // only the Linux port can be windowless, and it always answers.
+  return { done: true, visible: result?.visible !== false };
 }
 
 /**

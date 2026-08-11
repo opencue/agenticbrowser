@@ -102,7 +102,30 @@ user confirmation, then start with `await taskSpaces.claim(id)`.
 manual confirmation), call `await taskSpaces.handOff(nameOrId)` to give control
 to the user, and tell them exactly what to do. Omitting `nameOrId` uses the
 currently selected task space; pass `task.id` across heredoc rounds to avoid
-ambiguity.
+ambiguity. The handoff selects the space's tab, restores the window if it was
+minimized, and raises it — the user has to find that window on their own desktop,
+and a browser buried behind an editor looks identical to nothing happening.
+
+**What the user can actually see**: `handOff` resolves
+`{ done: true, visible: boolean }`.
+
+| `visible` | What it means | What you may say |
+|---|---|---|
+| `true` | The browser has a window and the space's page was raised on it. | Ask for the click, the login, the captcha. Still describe *where* to look ("the ego lite window"), because it may have opened on another workspace. |
+| `false` | The browser is running headless (`EGO_LINUX_HEADLESS`), or the space has no live tab left. There is no window on any display. | Nothing about clicking. Report what you found, state that the browser is headless, and give the fix. |
+
+The fix to hand the user for `visible: false`: unset `EGO_LINUX_HEADLESS`
+(under fish it is usually a universal variable, so `set -Ue EGO_LINUX_HEADLESS`
+rather than `set -e`), then run `ego-browser --open`. That trades the headless
+browser for a visible one, which **restarts Chrome** — the current spaces' tabs
+and their seeded cookie jars do not survive it, so treat the work in flight as
+lost and start the task again in a fresh space.
+
+A `visible: false` handoff is not an error and does not need to be retried: the
+ownership change is real, headless is a supported way to run, and CI hands off
+with nobody watching. It is only wrong to *narrate* it as something the user is
+looking at. The port also writes a one-line warning to stderr in that case, so it
+shows up in the command output even if the resolved value goes unread.
 
 **Regaining control**: Take control back *only* after the user explicitly
 confirms — through an Ask (your harness's button/option prompt, e.g. "Continue"
