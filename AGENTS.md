@@ -23,10 +23,14 @@ This repo contains the open-source harness and the agent skill package — **not
 Data flow: `stdin JS` → `runMain()` → `helperContext()` helpers → browser runtime/CDP → snapshot or DOM/AX resolution → optional site tools → `console.log(...)`.
 
 ## Task Spaces
-Task spaces are isolated browsing contexts with an ownership model (`agent` / `user`):
-- `useOrCreateTaskSpace(nameOrId)` reuses an agent-owned space or creates a new one; it no longer auto-claims user-owned spaces. Use `claimTaskSpace(nameOrId)` to take ownership of a user-owned space. Ids are numeric; prefer `task.id` over names across rounds.
-- `switchTaskSpace` requires agent ownership; `newTaskSpace` creates; `completeTaskSpace(nameOrId, { keep })` finishes (`keep` is mandatory).
-- Control handoff: `handOffTaskSpace` / `takeOverTaskSpace` / `waitForAgentControl`.
+Task spaces are isolated browsing contexts with an ownership model (`agent` / `user`).
+Agent scripts reach them through the injected `taskSpaces` facade
+(`createTaskSpacesFacade()` in `src/helpers.ts`). The flat `useOrCreateTaskSpace` /
+`newTaskSpace` / `completeTaskSpace` names are internal implementations only — calling
+one from a heredoc raises `ReferenceError: … is not defined`.
+- `taskSpaces.useOrCreate(nameOrId)` reuses an agent-owned space or creates a new one; it no longer auto-claims user-owned spaces. Use `taskSpaces.claim(nameOrId)` to take ownership of a user-owned space. Ids are numeric; prefer `task.id` over names across rounds.
+- `taskSpaces.switch(nameOrId)` requires agent ownership; `taskSpaces.new(name)` creates; `taskSpaces.complete(nameOrId, { keep })` finishes (`keep` is mandatory); `taskSpaces.list()` enumerates.
+- Control handoff: `taskSpaces.handOff` / `taskSpaces.takeOver` / `taskSpaces.waitForAgentControl`.
 
 ## Key Directories
 - `package/ego-browser/src/` — runtime, helpers, resolver, drivers, learning subsystem.
