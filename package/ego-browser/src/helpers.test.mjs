@@ -885,6 +885,36 @@ test("completeTaskSpace keep true skips user-owned spaces and reports it", async
   assert.deepEqual(calls, [["listTaskSpaces"]]);
 });
 
+test("completeTaskSpace keep true reports a page the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      // Keeping a space headless leaves a page open on no screen at all.
+      async completeTaskSpace() {
+        return { done: true, visible: false };
+      },
+    },
+    async () => {
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      assert.deepEqual(result, { done: true, visible: false });
+    },
+  );
+});
+
 test("handOffTaskSpace skips user-owned spaces and reports it", async () => {
   const calls = [];
   await withEgo(

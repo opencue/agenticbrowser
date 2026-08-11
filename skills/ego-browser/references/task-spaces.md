@@ -107,7 +107,11 @@ minimized, and raises it — the user has to find that window on their own deskt
 and a browser buried behind an editor looks identical to nothing happening.
 
 **What the user can actually see**: `handOff` resolves
-`{ done: true, visible: boolean }`.
+`{ done: true, visible: boolean }`. So does
+`complete(nameOrId, { keep: true })`, which raises the kept page for the same
+reason — "I left it open for you" is a claim about something they have to be able
+to see. `complete(..., { keep: false })` reports no `visible`: the page is gone
+either way.
 
 | `visible` | What it means | What you may say |
 |---|---|---|
