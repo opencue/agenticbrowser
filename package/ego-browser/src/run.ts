@@ -130,13 +130,20 @@ function realignScriptFrames(error: unknown, fn: Function, code: string) {
   if (start === -1) return;
   const offset = source.slice(0, start).split("\n").length - 1;
   if (offset <= 0) return;
-  error.stack = error.stack.replace(
-    /, <anonymous>:(\d+):(\d+)\)/g,
-    (frame, line, column) => {
-      const real = Number(line) - offset;
-      return real > 0 ? `, <anonymous>:${real}:${column})` : frame;
-    },
-  );
+  error.stack = error.stack
+    .split("\n")
+    // Frame lines only. A stack starts with the message, and an agent that
+    // scrapes a page showing a stack trace and throws it would otherwise have
+    // its own message rewritten.
+    .map((line) =>
+      /^\s+at /.test(line)
+        ? line.replace(/, <anonymous>:(\d+):(\d+)\)/g, (frame, at, column) => {
+            const real = Number(at) - offset;
+            return real > 0 ? `, <anonymous>:${real}:${column})` : frame;
+          })
+        : line,
+    )
+    .join("\n");
 }
 
 async function execute(code: string, stdout: WritableLike) {

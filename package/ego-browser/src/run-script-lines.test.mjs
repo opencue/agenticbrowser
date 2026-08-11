@@ -82,3 +82,18 @@ test("leaves frames it cannot attribute to the script alone", async () => {
   ]);
   assert.match(error.stack, /at handler \(<anonymous>:9:3\)/);
 });
+
+test("never rewrites the message, only the frames", async () => {
+  // An agent scraping a page that displays a stack trace, then throwing it. The
+  // numbers in the message are the page's and mean nothing here.
+  const scraped = "boom at foo, <anonymous>:12:3) while loading";
+  const error = await failWith([
+    "const err = new Error(" + JSON.stringify(scraped) + ")",
+    "throw err",
+  ]);
+  assert.equal(error.message, scraped);
+  assert.ok(
+    error.stack.startsWith(`Error: ${scraped}`),
+    `message was rewritten:\n${error.stack}`,
+  );
+});
