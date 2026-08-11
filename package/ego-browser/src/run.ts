@@ -105,6 +105,40 @@ export async function runMain(options: RunMainOptions = {}) {
   return 0;
 }
 
+/**
+ * Report the line the agent actually wrote.
+ *
+ * new AsyncFunction compiles the script inside a generated wrapper — a
+ * `function anonymous(…)` header, its `) {`, and the injected `"use strict";` —
+ * so V8 reports every position three lines below where the agent sees it. An
+ * agent reading its own stack trace then goes and studies the wrong line, and a
+ * report that blames an innocent console.log is one it cannot act on.
+ *
+ * The offset is measured from the compiled source rather than hardcoded, so a
+ * V8 that changes its preamble stays correct instead of silently going wrong by
+ * a different amount. Columns need no adjustment: the wrapper adds whole lines
+ * and ends in a newline, so the script's first line still starts at column 1.
+ *
+ * Only eval frames are touched. V8 writes those as `, <anonymous>:LINE:COL)`,
+ * which a stack coming back from the browser (`at fn (<anonymous>:3:9)`) does
+ * not match — those line numbers belong to the page and are already correct.
+ */
+function realignScriptFrames(error: unknown, fn: Function, code: string) {
+  if (!(error instanceof Error) || typeof error.stack !== "string") return;
+  const source = fn.toString();
+  const start = source.indexOf(code);
+  if (start === -1) return;
+  const offset = source.slice(0, start).split("\n").length - 1;
+  if (offset <= 0) return;
+  error.stack = error.stack.replace(
+    /, <anonymous>:(\d+):(\d+)\)/g,
+    (frame, line, column) => {
+      const real = Number(line) - offset;
+      return real > 0 ? `, <anonymous>:${real}:${column})` : frame;
+    },
+  );
+}
+
 async function execute(code: string, stdout: WritableLike) {
   resetSink();
   const context = await executionContext();
@@ -117,6 +151,7 @@ async function execute(code: string, stdout: WritableLike) {
   try {
     await fn(...values);
   } catch (error) {
+    realignScriptFrames(error, fn, code);
     thrown = error;
   }
   try {
