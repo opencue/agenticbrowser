@@ -7,7 +7,8 @@ This is the **Linux port**, not the macOS app. Upstream ego lite ships as a
 macOS-only `.dmg`; on Linux the same `ego-browser` harness runs against a stock
 Chromium through a CDP shim.
 
-Source: [`opencue/ego-lite-linux`](https://github.com/opencue/ego-lite-linux),
+Source: [`opencue/agenticbrowser`](https://github.com/opencue/agenticbrowser)
+(formerly `opencue/ego-lite-linux`; old URLs still redirect),
 an unofficial fork of `citrolabs/ego-lite`, published on branch `linux-port`
 (checked out locally as `main`, which tracks it). On this machine the checkout
 is at `~/Documents/ego-lite-linux`. Full details: `package/ego-linux/README.md`.

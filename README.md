@@ -2,7 +2,7 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-**ego lite on Linux — the fastest browser for AI agents, backed by a stock Chromium**
+**agentic browser — ego lite for Linux, the fastest browser for AI agents, backed by a stock Chromium**
 
 <p>
   <a href="#install"><img src="https://img.shields.io/badge/Install-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Install on Linux" /></a>
@@ -13,12 +13,29 @@
 
 </div>
 
-> ### Unofficial Linux fork
+> ### Unofficial Linux fork — renamed to `agenticbrowser`
 >
-> This is **[`opencue/ego-lite-linux`](https://github.com/opencue/ego-lite-linux)**,
+> This is **[`opencue/agenticbrowser`](https://github.com/opencue/agenticbrowser)**,
 > an unofficial community fork of
 > [`citrolabs/ego-lite`](https://github.com/citrolabs/ego-lite). It is **not**
 > affiliated with, endorsed by, or supported by CitroLabs.
+>
+> **This repository was previously named `opencue/ego-lite-linux`.** GitHub
+> redirects the old URLs, so existing clones and links keep working — but update
+> your remote when convenient:
+>
+> ```bash
+> git remote set-url origin https://github.com/opencue/agenticbrowser.git
+> ```
+>
+> The on-disk names stay `ego-lite-linux` on purpose — the profile directory,
+> the `.desktop` entry, the icon and the window class are unchanged, so the
+> rename does not orphan anyone's existing install.
+>
+> **We build one thing: the agentic browser, on Linux, on top of ego lite.**
+> Upstream's `ego-browser` harness is vendored unmodified; everything we write
+> lives in the Linux layer beneath it. We do not develop, test, or ship for
+> macOS or Windows.
 >
 > **On macOS, use the official app instead** — download it from
 > [lite.ego.app](https://lite.ego.app/). This port exists only because the app is
@@ -56,8 +73,8 @@ you already have.
 ## Install
 
 ```bash
-git clone https://github.com/opencue/ego-lite-linux.git
-cd ego-lite-linux
+git clone https://github.com/opencue/agenticbrowser.git
+cd agenticbrowser
 sh skills/ego-browser/scripts/install.sh
 ```
 
@@ -245,6 +262,10 @@ then aborts with "Failed to create a ProcessSingleton".
 
 ### Where things live
 
+These keep the `ego-lite-linux` name even though the repository is now
+`agenticbrowser`. Renaming them would orphan the profile, state and launcher
+entry of every existing install, so they stay as they are.
+
 | Path | What |
 |---|---|
 | `~/.local/share/ego-lite-linux/profile` | The agent's browser profile — where the imported Chrome data goes. |
@@ -420,7 +441,7 @@ they describe is the same one this port serves, since the harness is unmodified.
 For upstream discussion: [Discord](https://discord.gg/5eGZVvHbTq),
 [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions),
 [X/Twitter](https://x.com/ego_agent). Linux-specific problems belong in
-[this fork's issues](https://github.com/opencue/ego-lite-linux/issues).
+[this fork's issues](https://github.com/opencue/agenticbrowser/issues).
 
 ## License
 
