@@ -235,9 +235,8 @@ an unreachable orphan of ours, which is terminated first.
 
 ## Fidelity
 
-The harness uses 15 native methods plus 2 callbacks. All are implemented; two
-areas are degraded, and both degradations are structural rather than unfinished
-work.
+The harness uses 15 native methods plus 2 callbacks. All are implemented. The
+remaining differences are structural rather than unfinished native methods.
 
 | Native surface                                            | Backed by                                             | Fidelity                                                                                                                                                                                     |
 | --------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -247,7 +246,7 @@ work.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | a seeded browser context per space                    | **Isolated, with inherited logins.** The seeded jar is a copy, not live shared state. See below.                                                                                             |
+| the 9 task-space methods                                  | a seeded browser context per space                    | **Isolated, with inherited logins and enforced handoff.** The seeded jar is a copy, not live shared state. See below.                                                                        |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -294,9 +293,11 @@ holding its token outside cookies will still land logged out.
 A space also owns a tracked set of tabs plus its ownership state (`agent` /
 `agentDelegatedToUser` / `user`), with working `switch` / `claim` / `handOff` /
 `takeOver` / `complete` semantics; switching to a space puts the agent back on
-that space's page. A space that cannot get a context, and any space created
-before contexts existed, falls back to the window-only behaviour described
-below.
+that space's page. When the user owns control, the agent bridge rejects page
+operations with `EGO_TASK_SPACE_USER_IN_CONTROL`; the Spaces panel can still
+switch cards because that is the user, not the agent. A space that cannot get a
+context, and any space created before contexts existed, falls back to the
+window-only behaviour described below.
 
 `listTabs` is scoped to the selected space, as it is in the native app. That was
 dropped once and has been restored, because the reason it failed is gone:
@@ -327,9 +328,10 @@ rather than proof — but contexts did not obviously bring it back.
 - _Storage beyond cookies._ `localStorage`, IndexedDB and service workers are
   not seeded, so a site holding its token outside cookies lands logged out.
 
-Ownership is advisory here. The native bridge enforces the user-control boundary
-inside the app; nothing on Linux can stop an agent from driving a window the
-user has taken over, so `EGO_TASK_SPACE_USER_IN_CONTROL` is never raised.
+The user-control boundary is enforced at the bridge: selecting a user-owned
+space returns `EGO_TASK_SPACE_USER_IN_CONTROL`, and page-domain CDP / snapshot /
+new-tab operations are blocked while a space is handed off. Browser/Target CDP
+remains available for attach, inspection and takeover plumbing.
 
 ## Verification
 

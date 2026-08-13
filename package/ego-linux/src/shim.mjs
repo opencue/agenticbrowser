@@ -19,6 +19,7 @@ export async function createEgoShim({ headless = false } = {}) {
   const cdp = await connectCdp(wsUrl);
 
   const taskSpaces = createTaskSpacesApi(cdp);
+  cdp.setPageControlGuard(() => taskSpaces.pageControlErrorSync());
   // Downloads are armed per browser context, and a space owns one — so the
   // harness's context-less setDownloadBehavior has to be aimed at the space the
   // agent is actually in. See aimDownloadsAtCurrentSpace in transport.mjs.
@@ -27,7 +28,10 @@ export async function createEgoShim({ headless = false } = {}) {
     port,
     getScope: () => taskSpaces.selectedScope(),
   });
-  const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
+  const snapshot = createSnapshotApi(cdp, {
+    listTabs: tabs.listTabs,
+    assertAgentControl: taskSpaces.assertAgentControl,
+  });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples

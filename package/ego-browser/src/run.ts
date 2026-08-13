@@ -1,12 +1,18 @@
 import {
+  pid as processPid,
   stdin as processStdin,
   stdout as processStdout,
   stderr as processStderr,
+  version as nodeVersion,
 } from "node:process";
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 
 import { formatCliLogValue } from "./format.js";
 import * as helpers from "./helpers.js";
 import { bufferOutput, flushSink, resetSink } from "./output-sink.js";
+import { state } from "./state.js";
 
 type WritableLike = {
   write(chunk: string): unknown;
@@ -101,7 +107,7 @@ export async function runMain(options: RunMainOptions = {}) {
   }
 
   services.printUpdateBanner(stderr);
-  await execute(code, stdout);
+  await execute(code, stdout, stderr, env);
   return 0;
 }
 
@@ -146,7 +152,12 @@ function realignScriptFrames(error: unknown, fn: Function, code: string) {
     .join("\n");
 }
 
-async function execute(code: string, stdout: WritableLike) {
+async function execute(
+  code: string,
+  stdout: WritableLike,
+  stderr: WritableLike,
+  env: Record<string, string | undefined>,
+) {
   resetSink();
   const context = await executionContext();
   Object.assign(globalThis, context);
@@ -166,10 +177,112 @@ async function execute(code: string, stdout: WritableLike) {
   } catch (error) {
     thrown ??= error;
   }
+  if (thrown) {
+    thrown = withExecutionHint(thrown);
+    if (
+      failureArtifactsEnabled(env) &&
+      !helpers.isEgoHardStopError(thrown)
+    ) {
+      await emitFailureArtifact(thrown, code, stderr, env);
+    }
+  }
   // A thrown Error surfaces a hard-stop message on its own, so flush as a thrown
   // completion (drop the buffer, stay silent) and let it propagate.
   flushSink(stdout, Boolean(thrown));
-  if (thrown) throw withExecutionHint(thrown);
+  if (thrown) throw thrown;
+}
+
+let failureArtifactSeq = 0;
+
+async function emitFailureArtifact(
+  error: unknown,
+  code: string,
+  stderr: WritableLike,
+  env: Record<string, string | undefined>,
+) {
+  try {
+    const path = await writeFailureArtifact(error, code, env);
+    write(stderr, `ego-browser: failure artifact written to ${path}\n`);
+  } catch (artifactError) {
+    write(
+      stderr,
+      `ego-browser: failed to write failure artifact: ${formatErrorMessage(artifactError)}\n`,
+    );
+  }
+}
+
+async function writeFailureArtifact(
+  error: unknown,
+  code: string,
+  env: Record<string, string | undefined>,
+) {
+  const dir = env.EGO_BROWSER_FAILURE_ARTIFACT_DIR || tmpdir();
+  const filename = `ego-browser-failure-${processPid}-${state.now()}-${++failureArtifactSeq}.json`;
+  const path = join(dir, filename);
+  const artifact: Record<string, unknown> = {
+    schema: "ego-browser.failure-artifact.v1",
+    createdAt: new Date(state.now()).toISOString(),
+    runtime: {
+      pid: processPid,
+      node: nodeVersion,
+    },
+    script: {
+      chars: code.length,
+      lines: code.split(/\r\n|\r|\n/).length,
+    },
+    error: summarizeError(error),
+  };
+
+  try {
+    artifact.debug = await helpers.debug({
+      maxSnapshotChars: 4000,
+      eventLimit: 50,
+    });
+  } catch (debugError) {
+    artifact.debugError = summarizeError(debugError);
+  }
+
+  await mkdir(dir, { recursive: true });
+  await state.writeFile(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  return path;
+}
+
+function failureArtifactsEnabled(env: Record<string, string | undefined>) {
+  const value = env.EGO_BROWSER_FAILURE_ARTIFACT;
+  return !value || !/^(0|false|off|no)$/i.test(value);
+}
+
+function summarizeError(error: unknown) {
+  if (error && typeof error === "object") {
+    const obj = error as Record<string, unknown>;
+    const out: Record<string, unknown> = {
+      name: typeof obj.name === "string" ? obj.name : "Error",
+      message:
+        typeof obj.message === "string" ? obj.message : formatErrorMessage(error),
+    };
+    if (typeof obj.stack === "string") {
+      out.stack = obj.stack;
+    }
+    if (typeof obj.error_code === "string") {
+      out.code = obj.error_code;
+    }
+    return out;
+  }
+  return { name: "Error", message: formatErrorMessage(error) };
+}
+
+function formatErrorMessage(error: unknown) {
+  if (error == null) return String(error);
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object") {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === "string" && message) return message;
+  }
+  try {
+    return String(error);
+  } catch {
+    return "Unknown error";
+  }
 }
 
 function withExecutionHint(error: unknown) {

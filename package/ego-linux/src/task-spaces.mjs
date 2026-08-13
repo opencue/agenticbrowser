@@ -19,18 +19,16 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * copy, not live shared state, and a space that fails to get a context falls
  * back to the shared default jar.
  *
- * Spaces deliberately do NOT get their own browser window. That was the first
- * design, and it was measurably worse: a headless Chrome does not render tabs in
- * background windows, so `document.elementFromPoint` returned null for pages
- * living in a non-foreground window. That broke hit-testing, which in turn made
- * the harness's input-fallback path re-synthesise drags that had already landed
- * (see driver/pointer.ts finishDragProbe) — every canvas case in the upstream
- * e2e suite failed or double-counted strokes. One window, tracked tab sets.
+ * A context-backed Space gets its own browser window because stock Chromium
+ * cannot place non-default-context tabs in the default window. Membership still
+ * comes from browserContextId first, then tracked target ids for fallback spaces.
  *
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
 const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+const USER_CONTROL_ERROR = "The task is under user control";
+const USER_CONTROL_CODE = "EGO_TASK_SPACE_USER_IN_CONTROL";
 
 /**
  * How many idle-closed spaces to remember.
@@ -60,6 +58,39 @@ export function createTaskSpacesApi(cdp) {
    */
   let pinnedSpaceId = null;
 
+  function userControlResult() {
+    return { error: USER_CONTROL_ERROR, error_code: USER_CONTROL_CODE };
+  }
+
+  function userControlException() {
+    return Object.assign(new Error(USER_CONTROL_ERROR), {
+      error_code: USER_CONTROL_CODE,
+    });
+  }
+
+  function isUserControlled(space) {
+    return (
+      space?.ownership === "user" ||
+      space?.ownership === "agentDelegatedToUser"
+    );
+  }
+
+  function isPanelProcess() {
+    return process.env.EGO_LINUX_PANEL === "1";
+  }
+
+  function spaceForEffectiveSelection(state) {
+    const wanted = effectiveSelectedId(state);
+    return state.spaces?.find((candidate) => candidate.id === wanted) ?? null;
+  }
+
+  function pageControlErrorForState(state) {
+    if (isPanelProcess()) return null;
+    return isUserControlled(spaceForEffectiveSelection(state))
+      ? userControlResult()
+      : null;
+  }
+
   /** The pinned space if it still exists, else whatever the file last recorded. */
   function effectiveSelectedId(state) {
     if (
@@ -83,6 +114,27 @@ export function createTaskSpacesApi(cdp) {
   async function writeState(state) {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
+  }
+
+  function pageControlErrorSync() {
+    try {
+      const parsed = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
+      return pageControlErrorForState({
+        ...EMPTY,
+        ...parsed,
+        spaces: parsed.spaces ?? [],
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function pageControlError() {
+    return pageControlErrorForState(await readState());
+  }
+
+  async function assertAgentControl() {
+    if (await pageControlError()) throw userControlException();
   }
 
   async function livePageTargets() {
@@ -737,6 +789,9 @@ export function createTaskSpacesApi(cdp) {
     async useTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "useTaskSpace");
+      if (!isPanelProcess() && space.ownership === "user") {
+        return userControlResult();
+      }
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
       // Selected first, so the space this session came back for is the one the
@@ -855,6 +910,9 @@ export function createTaskSpacesApi(cdp) {
       const space = state.spaces.find(
         (candidate) => candidate.id === effectiveSelectedId(state),
       );
+      if (!isPanelProcess() && isUserControlled(space)) {
+        return userControlResult();
+      }
       // A space is anchored by a tab — one with none is reaped as soon as it is
       // reconciled — so it opens on about:blank before it has anywhere to go.
       // Creating a second tab for the first navigation strands that anchor, and
@@ -907,5 +965,8 @@ export function createTaskSpacesApi(cdp) {
       }
       return result;
     },
+
+    pageControlErrorSync,
+    assertAgentControl,
   };
 }

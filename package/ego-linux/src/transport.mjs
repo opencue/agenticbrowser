@@ -42,6 +42,7 @@ export async function connectCdp(wsUrl) {
   let navWatcher = null;
   let viewportWatcher = null;
   let downloadContextResolver = null;
+  let pageControlGuard = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
@@ -218,10 +219,30 @@ export async function connectCdp(wsUrl) {
     }
   }
 
+  function isPageDomainPayload(payload) {
+    try {
+      const message = JSON.parse(payload);
+      const method = typeof message?.method === "string" ? message.method : "";
+      return method && !method.startsWith("Target.") && !method.startsWith("Browser.");
+    } catch {
+      return false;
+    }
+  }
+
+  function pageControlError(payload) {
+    if (!pageControlGuard || !isPageDomainPayload(payload)) return null;
+    return pageControlGuard();
+  }
+
   return {
     /** Raw passthrough for harness-authored payloads (ids below the shim's base). */
     sendRaw(payload) {
       assertOpen();
+      const blocked = pageControlError(payload);
+      if (blocked) {
+        runtime?.onSendCDPMessageError?.(blocked.error, blocked.error_code);
+        return;
+      }
       noteActivation(payload);
       socket.send(aimDownloadsAtCurrentSpace(payload));
     },
@@ -232,6 +253,19 @@ export async function connectCdp(wsUrl) {
      */
     setDownloadContext(resolver) {
       downloadContextResolver = resolver;
+    },
+
+    /**
+     * Synchronous native-boundary ownership check for harness-authored page CDP.
+     *
+     * sendRaw cannot await: browser-runtime expects native send failures through
+     * onSendCDPMessageError, not a later Promise. The task-space layer therefore
+     * exposes a sync state-file read, and this transport only consults it for
+     * page-domain traffic. Browser/Target domain calls stay available so the
+     * harness can attach, inspect, and regain control.
+     */
+    setPageControlGuard(guard) {
+      pageControlGuard = guard;
     },
 
     /**

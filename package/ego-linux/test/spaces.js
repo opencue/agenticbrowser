@@ -21,9 +21,9 @@ console.log(
 await page.goto("about:blank#beta");
 console.log("4. beta page:    " + (await page.url()));
 
-// Switching back must put the agent on alpha's page again. Note this asserts
-// where the agent lands, not a per-space tab list — listTabs is browser-wide on
-// this port (see README).
+// Switching back must put the agent on alpha's page again. Tab-list scoping is
+// covered by the context-backed task-space tests; this smoke test only asserts
+// where the agent lands.
 await taskSpaces.switch(alpha.id);
 console.log("5. back in alpha:" + (await page.title()));
 

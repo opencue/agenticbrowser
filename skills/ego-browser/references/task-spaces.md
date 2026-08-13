@@ -56,13 +56,28 @@ space that was never yours.
 
 ## Completion and cleanup
 
+For one-round tasks, prefer:
+
+```js
+await taskSpaces.run('task name', async (task) => {
+  // browser work here
+}, { keep: false, timeout: 8000 })
+```
+
+`taskSpaces.run` calls `taskSpaces.useOrCreate` first, temporarily applies
+`timeout` as the default helper timeout for the callback, and then calls
+`taskSpaces.complete(task.id, { keep })` after the callback succeeds. If the
+callback throws, the task space is left open so the failure artifact and the
+next retry can inspect the same page. `complete: false` is an escape hatch for
+advanced multi-step scripts that want the wrapper's setup and timeout only.
+
 **`taskSpaces.complete(nameOrId, { keep })` must run only after the result is
-captured and verified.** For one-round tasks, completing at the end of the same
-heredoc is preferred so the browser cannot be left open after success. For
-multi-round tasks, use a dedicated final heredoc after a prior heredoc's output
-has confirmed the task is genuinely done. `keep` is required and defaults by
-policy to `false`: close the task space after completion unless there is a
-concrete reason to leave the live page visible.
+captured and verified.** For one-round tasks that do not use `taskSpaces.run`,
+completing at the end of the same heredoc is preferred so the browser cannot be
+left open after success. For multi-round tasks, use a dedicated final heredoc
+after a prior heredoc's output has confirmed the task is genuinely done. `keep`
+is required and defaults by policy to `false`: close the task space after
+completion unless there is a concrete reason to leave the live page visible.
 
 Use `{ keep: true }` only when the user explicitly asks to keep the page open,
 the task needs manual user action in that exact page, or the result cannot be

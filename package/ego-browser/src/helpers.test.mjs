@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import * as helperExports from "../dist/src/helpers.js";
-import { setOverrides } from "../dist/src/state.js";
+import { setOverrides, state } from "../dist/src/state.js";
 import {
   claimTaskSpace,
   completeTaskSpace,
@@ -11,6 +11,7 @@ import {
   helperContext,
   isEgoHardStopError,
   listTaskSpaces,
+  runTaskSpace,
   useOrCreateTaskSpace,
   switchTaskSpace,
   waitForAgentControl,
@@ -111,6 +112,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.page.waitForRequest, "function");
   assert.equal(typeof context.page.waitForResponse, "function");
   assert.equal(typeof context.page.debug, "function");
+  assert.equal(typeof context.page.trace, "function");
   assert.equal(typeof context.page.screencast, "object");
   assert.equal(typeof context.page.screencast.start, "function");
   assert.equal(typeof context.page.screencast.stop, "function");
@@ -206,6 +208,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.openOrReuseTab, "function");
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
+  assert.equal(typeof context.taskSpaces.run, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
   assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
@@ -244,6 +247,122 @@ test("taskSpaces.isHardStopError identifies errors that must not be retried", ()
   assert.equal(isEgoHardStopError(userControl), true);
 });
 
+test("runTaskSpace completes a successful one-round task", async () => {
+  const calls = [];
+  const spaces = [];
+  const restore = setOverrides({ defaultTimeout: 9999 });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          calls.push(["listTaskSpaces"]);
+          return { taskSpaces: spaces.map((space) => ({ ...space })) };
+        },
+        async createTaskSpace(name) {
+          calls.push(["createTaskSpace", name]);
+          const created = { taskId: name, id: 7, name, ownership: "agent" };
+          spaces.push(created);
+          return created;
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return { done: true };
+        },
+        async closeTaskSpace() {
+          calls.push(["closeTaskSpace"]);
+          spaces.length = 0;
+          return { done: true };
+        },
+      },
+      async () => {
+        const out = await runTaskSpace(
+          "checkout-flow",
+          async (task) => {
+            assert.equal(task.id, 7);
+            assert.equal(state.defaultTimeout, 1234);
+            return "ok";
+          },
+          { timeout: 1234 },
+        );
+        assert.equal(out.result, "ok");
+        assert.deepEqual(out.completion, { done: true });
+      },
+    );
+    assert.equal(state.defaultTimeout, 9999);
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "checkout-flow"],
+    ["useTaskSpace", 7],
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["closeTaskSpace"],
+  ]);
+});
+
+test("runTaskSpace validates timeout before touching task spaces", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => runTaskSpace("checkout-flow", async () => {}, { timeout: -1 }),
+        /timeout must be a non-negative number/,
+      );
+    },
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("runTaskSpace leaves the space open when the callback fails", async () => {
+  const calls = [];
+  const spaces = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        calls.push(["createTaskSpace", name]);
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return { done: true };
+      },
+      async closeTaskSpace() {
+        calls.push(["closeTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          runTaskSpace("checkout-flow", async () => {
+            throw new Error("boom");
+          }),
+        /boom/,
+      );
+      assert.equal(spaces.length, 1, "failed task space remains for debugging");
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "checkout-flow"],
+    ["useTaskSpace", 7],
+  ]);
+});
+
 test("page.url reads the current URL asynchronously", async () => {
   const restore = setOverrides({
     cdpOverride: async (method) => {
@@ -275,6 +394,7 @@ test("page.url reads the current URL asynchronously", async () => {
 
 test("page.debug returns a structured redacted dump for agents", async () => {
   await helperExports.drainEvents();
+  await helperExports.trace({ limit: 0 });
   const writes = [];
   const restore = setOverrides({
     now: () => Date.parse("2026-08-13T00:00:00.000Z"),
@@ -355,11 +475,64 @@ test("page.debug returns a structured redacted dump for agents", async () => {
         assert.equal(writes.length, 1);
         assert.equal(dump.events.drained, true);
         assert.equal(dump.events.count, 0);
+        assert.equal(dump.trace.schema, "ego-browser.trace.v1");
+        assert.equal(dump.trace.count, 0);
         assert.deepEqual(dump.errors, undefined);
       },
     );
   } finally {
     restore();
+  }
+});
+
+test("page.trace returns a redacted chronological timeline", async () => {
+  await helperExports.trace({ limit: 0 });
+  const calls = [];
+  const previousNow = state.now;
+  let now = Date.parse("2026-08-13T00:00:00.000Z");
+  state.now = () => now;
+  try {
+    await withEgo(
+      {
+        sendCDPMessage(payload) {
+          calls.push(JSON.parse(payload));
+        },
+      },
+      async () => {
+        const pending = helperExports.cdp(
+          "Page.navigate",
+          { url: "https://example.com/path?token=secret" },
+          "sess-1",
+          5000,
+        );
+        now += 5;
+        globalThis.ego.onCDPMessage(
+          JSON.stringify({
+            id: calls[0].id,
+            result: { frameId: "frame-1" },
+          }),
+        );
+        await pending;
+
+        const timeline = await helperContext().page.trace({ limit: 5 });
+        assert.equal(timeline.schema, "ego-browser.trace.v1");
+        assert.equal(timeline.count, 2);
+        assert.equal(timeline.shown, 2);
+        assert.equal(timeline.items[0].kind, "cdp.request");
+        assert.equal(
+          timeline.items[0].summary,
+          "navigate https://example.com/path?token=REDACTED",
+        );
+        assert.equal(timeline.items[1].durationMs, 5);
+        assert.equal(
+          timeline.items[1].summary,
+          "Page.navigate completed in 5ms",
+        );
+      },
+    );
+  } finally {
+    state.now = previousNow;
+    await helperExports.trace({ limit: 0 });
   }
 });
 

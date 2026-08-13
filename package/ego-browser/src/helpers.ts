@@ -92,7 +92,7 @@ export {
   elementCenter,
   drainEvents,
 } from "./driver/observe.js";
-export { debug } from "./driver/debug.js";
+export { debug, trace } from "./driver/debug.js";
 export {
   waitForTimeout,
   waitForLoadState,
@@ -457,6 +457,61 @@ export async function waitForAgentControl(
   }
 }
 
+/**
+ * Run one bounded browser task inside a task space and close it on success.
+ *
+ * This is the safe default for one-round automations: it creates or reuses a
+ * task space, optionally narrows helper timeouts for the callback, rethrows
+ * user-control hard stops unchanged, and calls completeTaskSpace after the
+ * callback succeeds. Ordinary callback errors leave the space open for debugging
+ * and for the CLI failure artifact.
+ * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {(task: object) => Promise<any>|any} fn Work to run in the selected task space.
+ * @param {{ keep?: boolean, timeout?: number, complete?: boolean }} [options] `keep` is passed to completeTaskSpace on success (default false); `timeout` temporarily sets page helper timeouts in milliseconds; `complete:false` skips automatic completion.
+ * @returns {Promise<{task: object, result: any, completion: object}>}
+ */
+export async function runTaskSpace(
+  nameOrId: string | number,
+  fn: (task: any) => Promise<any> | any,
+  options: { keep?: boolean; timeout?: number; complete?: boolean } = {},
+) {
+  if (typeof fn !== "function") {
+    throw new Error("taskSpaces.run requires a callback function");
+  }
+  const hasTimeout = Object.prototype.hasOwnProperty.call(options, "timeout");
+  let timeout;
+  if (hasTimeout) {
+    timeout = Number(options.timeout);
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new Error("taskSpaces.run timeout must be a non-negative number");
+    }
+  }
+
+  const task = await useOrCreateTaskSpace(nameOrId);
+  const previousTimeout = state.defaultTimeout;
+  if (hasTimeout) {
+    state.defaultTimeout = timeout;
+  }
+
+  let result;
+  try {
+    result = await fn(task);
+  } catch (error) {
+    if (isEgoHardStopError(error)) throw error;
+    throw error;
+  } finally {
+    if (hasTimeout) {
+      state.defaultTimeout = previousTimeout;
+    }
+  }
+
+  const completion =
+    options.complete === false
+      ? { done: false, skipped: "disabled" as const }
+      : await completeTaskSpace(task.id, { keep: options.keep === true });
+  return { task, result, completion };
+}
+
 function normalizeTaskSpaces(raw) {
   if (Array.isArray(raw?.taskSpaces)) {
     return raw.taskSpaces.map(normalizeTaskSpace).filter(Boolean);
@@ -791,6 +846,7 @@ function createPageFacade() {
     evaluate,
     screenshot: observe.screenshot,
     debug: debugDriver.debug,
+    trace: debugDriver.trace,
     snapshot: observe.snapshot,
     snapshotRaw: observe.snapshotRaw,
     elementCenter: observe.elementCenter,
@@ -849,6 +905,7 @@ function createTaskSpacesFacade() {
     switch: switchTaskSpace,
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
+    run: runTaskSpace,
     claim: claimTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
@@ -869,13 +926,13 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
+    "taskSpaces: task-space facade. Use taskSpaces.run(nameOrId, fn, options) for one-round tasks, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

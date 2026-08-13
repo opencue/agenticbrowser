@@ -13,6 +13,9 @@ test("formatCliLogValue renders documented function properties in object output"
       browser: {
         openOrReuseTab() {},
       },
+      taskSpaces: {
+        run() {},
+      },
       site: {
         runTool: async function runSiteTool() {},
       },
@@ -34,6 +37,10 @@ test("formatCliLogValue renders documented function properties in object output"
     "page.waitForResponse(urlOrPredicate, options?) => Promise<Response>",
   );
   assert.equal(parsed.helpers.site.runTool.name, "runTool");
+  assert.equal(
+    parsed.helpers.taskSpaces.run.signature,
+    "taskSpaces.run(nameOrId, fn, options?) => Promise<object>",
+  );
   assert.equal(
     parsed.helpers.site.runTool.signature,
     "site.runTool(siteId, toolName, args?) => Promise<tool result>",

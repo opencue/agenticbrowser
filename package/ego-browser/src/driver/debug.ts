@@ -1,20 +1,30 @@
 import { state } from "../state.js";
 import { isEgoHardStopError } from "../ego-errors.js";
+import { drainBrowserTrace } from "../browser-runtime.js";
 import * as nav from "./nav.js";
 import * as observe from "./observe.js";
 
 type DebugOptions = {
   includeEvents?: boolean;
+  includeTrace?: boolean;
   includeScreenshot?: boolean;
   includeSnapshot?: boolean;
   snapshotScope?: "only_within_viewport" | "full_page";
   maxSnapshotChars?: number;
   eventLimit?: number;
+  traceLimit?: number;
+  redact?: boolean;
+};
+
+type TraceOptions = {
+  limit?: number;
   redact?: boolean;
 };
 
 const DEFAULT_EVENT_LIMIT = 20;
+const DEFAULT_TRACE_LIMIT = 80;
 const DEFAULT_SNAPSHOT_CHARS = 2000;
+const TRACE_SCHEMA = "ego-browser.trace.v1";
 const URL_REDACTED = "REDACTED";
 
 /**
@@ -25,12 +35,14 @@ const URL_REDACTED = "REDACTED";
  * helper/session state. Section failures are reported under `errors` so agents
  * can still see partial state. Task-space hard stops are rethrown.
  *
- * @param {{includeEvents?: boolean, includeScreenshot?: boolean, includeSnapshot?: boolean, snapshotScope?: "only_within_viewport"|"full_page", maxSnapshotChars?: number, eventLimit?: number, redact?: boolean}} [options]
+ * @param {{includeEvents?: boolean, includeTrace?: boolean, includeScreenshot?: boolean, includeSnapshot?: boolean, snapshotScope?: "only_within_viewport"|"full_page", maxSnapshotChars?: number, eventLimit?: number, traceLimit?: number, redact?: boolean}} [options]
  * @returns {Promise<object>}
  */
 export async function debug(options: DebugOptions = {}) {
   const redact = options.redact !== false;
   const errors: Record<string, object> = {};
+  const traceEntries =
+    options.includeTrace === false ? undefined : drainBrowserTrace();
   const dump: Record<string, any> = {
     timestamp: new Date(state.now()).toISOString(),
     session: {
@@ -105,10 +117,37 @@ export async function debug(options: DebugOptions = {}) {
     }
   }
 
+  if (options.includeTrace !== false) {
+    dump.trace = formatTrace(traceEntries || [], {
+      limit: effectiveLimit(options.traceLimit, DEFAULT_TRACE_LIMIT),
+      redact,
+    });
+    drainBrowserTrace();
+  }
+
   if (Object.keys(errors).length) {
     dump.errors = errors;
   }
   return dump;
+}
+
+/**
+ * Drain and summarize the chronological CDP activity timeline.
+ *
+ * The trace includes safe summaries of CDP requests, responses, errors, and
+ * browser events captured since the last `page.trace()` or `page.debug()`.
+ * It is intended for agent debugging, especially "what happened before this
+ * selector/click failed?" reports. URLs are redacted by default.
+ *
+ * @param {{limit?: number, redact?: boolean}} [options]
+ * @returns {Promise<{schema:string, createdAt:string, count:number, shown:number, items:object[]}>}
+ */
+export async function trace(options: TraceOptions = {}) {
+  const entries = drainBrowserTrace();
+  return formatTrace(entries, {
+    limit: effectiveLimit(options.limit, DEFAULT_TRACE_LIMIT),
+    redact: options.redact !== false,
+  });
 }
 
 async function safeSection(
@@ -211,6 +250,120 @@ function summarizeEvent(event: any, redact: boolean) {
     };
   }
   return out;
+}
+
+function formatTrace(entries: any[], options: { limit: number; redact: boolean }) {
+  const shown = options.limit === 0 ? [] : entries.slice(-options.limit);
+  return {
+    schema: TRACE_SCHEMA,
+    createdAt: new Date(state.now()).toISOString(),
+    count: entries.length,
+    shown: shown.length,
+    items: shown.map((entry) => summarizeTraceEntry(entry, options.redact)),
+  };
+}
+
+function summarizeTraceEntry(entry: any, redact: boolean) {
+  const params = entry?.params || {};
+  const result = entry?.result || {};
+  const error = entry?.error || {};
+  const out: Record<string, unknown> = {
+    seq: entry?.seq,
+    at: new Date(Number(entry?.at || state.now())).toISOString(),
+    kind: String(entry?.kind || "unknown"),
+    method: String(entry?.method || "unknown"),
+  };
+  if (entry?.sessionId) out.sessionId = String(entry.sessionId);
+  if (typeof entry?.durationMs === "number") {
+    out.durationMs = entry.durationMs;
+  }
+
+  copyScalar(out, params, "requestId");
+  copyScalar(out, params, "type");
+  copyScalar(out, params, "status");
+  copyScalar(out, params, "errorText");
+  copyScalar(out, result, "errorText");
+  if (params.url) out.url = redactUrl(params.url, redact);
+  if (result.exceptionText) {
+    out.exception = truncate(String(result.exceptionText), 300);
+  }
+  if (error.message) {
+    out.error = {
+      name: String(error.name || "Error"),
+      message: truncate(String(error.message), 500),
+      ...(error.code ? { code: String(error.code) } : {}),
+    };
+  }
+  out.summary = traceSummary(entry, redact);
+  return out;
+}
+
+function traceSummary(entry: any, redact: boolean) {
+  const method = String(entry?.method || "unknown");
+  const kind = String(entry?.kind || "unknown");
+  const params = entry?.params || {};
+  const result = entry?.result || {};
+  const error = entry?.error || {};
+  if (kind === "cdp.error") {
+    return `${method} failed: ${truncate(String(error.message || "error"), 200)}`;
+  }
+  if (kind === "cdp.response") {
+    const duration =
+      typeof entry.durationMs === "number" ? ` in ${entry.durationMs}ms` : "";
+    if (result.errorText) return `${method} returned ${result.errorText}${duration}`;
+    if (result.exceptionText) return `${method} returned exception${duration}`;
+    return `${method} completed${duration}`;
+  }
+  if (method === "Page.navigate") {
+    return `navigate ${redactUrl(params.url, redact)}`;
+  }
+  if (method === "Runtime.evaluate") {
+    return `evaluate ${Number(params.expressionChars || 0)} chars`;
+  }
+  if (method === "Input.dispatchMouseEvent") {
+    return `mouse ${params.type || "event"} at ${params.x},${params.y}`;
+  }
+  if (method === "Input.dispatchKeyEvent") {
+    return `keyboard ${params.type || "event"} ${params.key || params.code || ""}`.trim();
+  }
+  if (method === "Page.captureScreenshot") {
+    return params.hasClip ? "screenshot clip" : "screenshot";
+  }
+  if (method === "Network.requestWillBeSent") {
+    const verb = params.method ? `${params.method} ` : "";
+    return `request ${verb}${redactUrl(params.url, redact)}`;
+  }
+  if (method === "Network.responseReceived") {
+    const status = params.status ? `${params.status} ` : "";
+    const type = params.type ? `${String(params.type).toLowerCase()} ` : "";
+    return `response ${status}${type}${redactUrl(params.url, redact)}`.trim();
+  }
+  if (method === "Network.loadingFailed") {
+    return `request failed ${params.errorText || ""}`.trim();
+  }
+  if (method === "Page.domContentEventFired") {
+    return "domcontentloaded";
+  }
+  if (method === "Page.loadEventFired") {
+    return "load";
+  }
+  if (method === "Page.frameNavigated") {
+    return `frame navigated ${redactUrl(params.url, redact)}`;
+  }
+  if (method === "Runtime.consoleAPICalled") {
+    const args = Array.isArray(params.args) ? params.args.join(" ") : "";
+    return `console ${params.type || "log"}${args ? `: ${truncate(args, 200)}` : ""}`;
+  }
+  if (method === "Runtime.exceptionThrown") {
+    return `exception ${truncate(String(params.exceptionDescription || params.exceptionText || ""), 200)}`;
+  }
+  if (method === "Page.javascriptDialogOpening") {
+    return `dialog ${params.type || ""}: ${truncate(String(params.message || ""), 200)}`.trim();
+  }
+  if (method.endsWith(".downloadWillBegin")) {
+    return `download ${params.suggestedFilename || params.url || params.guid || ""}`.trim();
+  }
+  return method;
 }
 
 function copyScalar(out: Record<string, unknown>, params: any, key: string) {

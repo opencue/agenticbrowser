@@ -6,6 +6,7 @@ const SESSION_TTL_MS = 2000;
 // Upper bound for buffered CDP events. The runtime can be long-lived (installEgoSdk
 // inside the browser); without a cap, undrained events grow without bound.
 const MAX_BUFFERED_EVENTS = 10000;
+const MAX_TRACE_ENTRIES = 2000;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
 const BROWSER_LEVEL = (method) =>
@@ -16,8 +17,10 @@ type BrowserEventSubscriber = {
   listener: (event: any) => void;
 };
 let nextMessageId = 1;
+let nextTraceSeq = 1;
 const pending = new Map();
 const events = [];
+const traceEntries = [];
 const eventWaiters = [];
 const eventSubscribers = new Set<BrowserEventSubscriber>();
 const pageEnabledSessions = new Set();
@@ -52,26 +55,50 @@ function rawCdp(
     ...(sessionId ? { sessionId } : {}),
   });
   return new Promise<any>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      pending.delete(id);
-      reject(new Error(`CDP request timed out: ${method}`));
-    }, timeoutMs);
-    pending.set(id, {
+    const startedAt = state.now();
+    let timer: ReturnType<typeof setTimeout>;
+    recordTraceEntry({
+      kind: "cdp.request",
+      method,
+      sessionId,
+      params: summarizeRequestParams(method, params),
+    });
+    const entry = {
+      method,
+      startedAt,
       resolve: (response) => {
         clearTimeout(timer);
+        recordTraceEntry({
+          kind: "cdp.response",
+          method,
+          sessionId,
+          durationMs: state.now() - startedAt,
+          result: summarizeResponseResult(method, response),
+        });
         resolve(response);
       },
       reject: (error) => {
         clearTimeout(timer);
+        recordTraceEntry({
+          kind: "cdp.error",
+          method,
+          sessionId,
+          durationMs: state.now() - startedAt,
+          error: summarizeTraceError(error),
+        });
         reject(error);
       },
-    });
+    };
+    timer = setTimeout(() => {
+      pending.delete(id);
+      entry.reject(new Error(`CDP request timed out: ${method}`));
+    }, timeoutMs);
+    pending.set(id, entry);
     try {
       runtime.sendCDPMessage(payload);
     } catch (error) {
-      clearTimeout(timer);
       pending.delete(id);
-      reject(error);
+      entry.reject(error);
     }
   });
 }
@@ -163,6 +190,11 @@ export function clearPreferredTarget() {
 
 export function drainBrowserEvents() {
   const out = events.splice(0, events.length);
+  return out;
+}
+
+export function drainBrowserTrace() {
+  const out = traceEntries.splice(0, traceEntries.length);
   return out;
 }
 
@@ -289,6 +321,12 @@ function handleMessage(message) {
       events.splice(0, events.length - MAX_BUFFERED_EVENTS);
     }
   }
+  recordTraceEntry({
+    kind: "cdp.event",
+    method: data.method,
+    sessionId: data.sessionId,
+    params: summarizeEventParams(data.method, data.params || {}),
+  });
   for (const waiter of [...eventWaiters]) {
     let matched = false;
     try {
@@ -304,6 +342,152 @@ function handleMessage(message) {
     eventWaiters.splice(eventWaiters.indexOf(waiter), 1);
     waiter.resolve(data);
   }
+}
+
+function recordTraceEntry(entry) {
+  traceEntries.push({
+    seq: nextTraceSeq++,
+    at: state.now(),
+    ...entry,
+  });
+  if (traceEntries.length > MAX_TRACE_ENTRIES) {
+    traceEntries.splice(0, traceEntries.length - MAX_TRACE_ENTRIES);
+  }
+}
+
+function summarizeRequestParams(method, params: any = {}) {
+  const out: Record<string, unknown> = {};
+  if (method === "Page.navigate") {
+    copyTraceScalar(out, params, "url");
+  } else if (method === "Runtime.evaluate") {
+    if (typeof params.expression === "string") {
+      out.expressionChars = params.expression.length;
+    }
+    copyTraceScalar(out, params, "awaitPromise");
+    copyTraceScalar(out, params, "returnByValue");
+  } else if (method === "Input.dispatchMouseEvent") {
+    copyTraceScalar(out, params, "type");
+    copyTraceScalar(out, params, "x");
+    copyTraceScalar(out, params, "y");
+    copyTraceScalar(out, params, "button");
+    copyTraceScalar(out, params, "clickCount");
+  } else if (method === "Input.dispatchKeyEvent") {
+    copyTraceScalar(out, params, "type");
+    copyTraceScalar(out, params, "key");
+    copyTraceScalar(out, params, "code");
+    copyTraceScalar(out, params, "modifiers");
+  } else if (method === "Page.captureScreenshot") {
+    copyTraceScalar(out, params, "format");
+    out.hasClip = Boolean(params.clip);
+    out.captureBeyondViewport = Boolean(params.captureBeyondViewport);
+  } else {
+    copyTraceScalar(out, params, "targetId");
+    copyTraceScalar(out, params, "requestId");
+    copyTraceScalar(out, params, "frameId");
+    copyTraceScalar(out, params, "backendNodeId");
+    copyTraceScalar(out, params, "objectId");
+  }
+  return out;
+}
+
+function summarizeResponseResult(method, response: any = {}) {
+  const result = response?.result || {};
+  const out: Record<string, unknown> = {};
+  if (method === "Page.navigate") {
+    copyTraceScalar(out, result, "frameId");
+    copyTraceScalar(out, result, "loaderId");
+    copyTraceScalar(out, result, "errorText");
+  } else if (method === "Target.attachToTarget") {
+    copyTraceScalar(out, result, "sessionId");
+  } else if (method === "Runtime.evaluate") {
+    if (result.result) {
+      copyTraceScalar(out, result.result, "type");
+      copyTraceScalar(out, result.result, "subtype");
+      out.hasObjectId = Boolean(result.result.objectId);
+      out.hasValue = Object.hasOwn(result.result, "value");
+    }
+    if (result.exceptionDetails) {
+      out.exceptionText = String(result.exceptionDetails.text || "");
+    }
+  } else if (method === "Page.captureScreenshot") {
+    if (typeof result.data === "string") {
+      out.dataChars = result.data.length;
+    }
+  } else if (Object.keys(result).length) {
+    out.ok = true;
+  }
+  return out;
+}
+
+function summarizeEventParams(method, params: any = {}) {
+  const out: Record<string, unknown> = {};
+  copyTraceScalar(out, params, "requestId");
+  copyTraceScalar(out, params, "loaderId");
+  copyTraceScalar(out, params, "frameId");
+  copyTraceScalar(out, params, "type");
+  copyTraceScalar(out, params, "timestamp");
+  copyTraceScalar(out, params, "wallTime");
+  copyTraceScalar(out, params, "errorText");
+  copyTraceScalar(out, params, "reason");
+  copyTraceScalar(out, params, "name");
+  copyTraceScalar(out, params, "message");
+  copyTraceScalar(out, params, "suggestedFilename");
+  copyTraceScalar(out, params, "guid");
+
+  const url =
+    params.url ||
+    params.request?.url ||
+    params.response?.url ||
+    params.frame?.url ||
+    params.targetInfo?.url;
+  if (url) out.url = url;
+
+  if (params.request) {
+    copyTraceScalar(out, params.request, "method");
+  }
+  if (params.response) {
+    copyTraceScalar(out, params.response, "status");
+  }
+  if (Array.isArray(params.args)) {
+    out.args = params.args.slice(0, 5).map((arg) =>
+      String(
+        arg?.value ??
+          arg?.unserializableValue ??
+          arg?.description ??
+          arg?.type ??
+          "",
+      ),
+    );
+  }
+  if (params.exceptionDetails) {
+    out.exceptionText = String(params.exceptionDetails.text || "");
+    out.exceptionDescription = String(
+      params.exceptionDetails.exception?.description || "",
+    );
+  }
+  return out;
+}
+
+function summarizeTraceError(error) {
+  return {
+    name: error?.name || "Error",
+    message: error?.message || String(error),
+    code: error?.error_code,
+  };
+}
+
+function copyTraceScalar(out: Record<string, unknown>, params: any, key: string) {
+  const value = params?.[key];
+  if (
+    value === undefined ||
+    value === null ||
+    (typeof value !== "string" &&
+      typeof value !== "number" &&
+      typeof value !== "boolean")
+  ) {
+    return;
+  }
+  out[key] = value;
 }
 
 export function browserSnapshotRefsToRefMap(refMap, refs = []) {

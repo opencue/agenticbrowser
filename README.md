@@ -171,10 +171,9 @@ selected one and take no arguments:
 Spaces whose tabs you close by hand are reconciled away on the next call, so the
 state file never accumulates ghosts.
 
-> **Ownership is advisory here.** The native bridge enforces the user-control
-> boundary inside the macOS app. Nothing on Linux can stop an agent from driving
-> a window you have taken over, so `EGO_TASK_SPACE_USER_IN_CONTROL` is never
-> raised.
+> **Ownership is enforced at the bridge.** When you take over a space, Linux
+> blocks the agent's page operations with `EGO_TASK_SPACE_USER_IN_CONTROL` until
+> control is explicitly handed back.
 
 ### 5. Put it on your app launcher
 
@@ -283,9 +282,10 @@ differs is narrow, and structural rather than unfinished:
 | `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses — a passthrough, not a translation. |
 | `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools endpoint's most-recently-used ordering stands in. |
 | `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser`, `animationHighlightMouseToPosition` | no-ops | App-lifecycle and cosmetic; nothing to do on Linux. |
+| `upgradeBrowser` | no-op | App lifecycle; your own Chrome updates itself. |
+| `animationHighlightMouseToPosition`, `setAgentTaskState` | DOM overlay injected into the page | Equivalent, but drawn inside the page instead of above the web view. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** `@N` resolves against genuine `backendNodeId`s; roles, names and `loc=` locators are computed here and validated by upstream's own resolver. |
-| the 9 task-space methods | one window, per-space browser contexts seeded from your jar | Isolation and logins both. `listTabs` stays browser-wide — see below. |
+| the 9 task-space methods | per-space browser contexts seeded from your jar | Isolation, inherited logins, selected-space tab lists, and user-control hard stops. |
 
 ### Task spaces are isolated, and still signed in
 
@@ -309,16 +309,14 @@ loses its last tab.
 
 What still does not match the native app:
 
-- **A per-space `listTabs`.** The native app lists only the selected Space's
-  tabs; here `listTabs` is browser-wide. `Target.createTarget` accepts no window
-  id, so a tab opened for a space can land in a different window and the mapping
-  drifts. Three heuristics were measured against the upstream e2e suite and each
-  traded one failure for another, so reporting every page tab is what it does.
-- **Spaces get no window of their own.** That was the first design and it was
-  measurably worse: headless Chrome does not render tabs in background windows,
-  so `document.elementFromPoint` returned null for any page in a non-foreground
-  window, which broke hit-testing and tripped the harness's input fallback into
-  re-synthesising drags that had already landed.
+- **Live shared login state.** The seeded jar is a point-in-time cookie copy; a
+  login made inside one Space does not appear in the others.
+- **Storage beyond cookies.** `localStorage`, IndexedDB and service workers are
+  not seeded, so sites that keep auth tokens outside cookies may still land
+  logged out.
+- **Chrome window structure.** A context-backed Space gets its own Chrome window
+  because stock Chromium cannot place non-default-context tabs in the default
+  window. The Spaces overview is therefore an app window, not browser chrome.
 
 Full per-method detail lives in
 [`package/ego-linux/README.md`](package/ego-linux/README.md).
@@ -372,8 +370,9 @@ path before committing.
 
 Everything in this section describes **the official macOS application**, not this
 port. Some of it does not hold here: the snapshot is rebuilt from `DOMSnapshot`
-rather than produced by a customised browser kernel, and `listTabs` is
-browser-wide rather than per-Space. It is kept for context.
+rather than produced by a customised browser kernel, and the Linux UI is a stock
+Chromium app/window layer rather than native browser chrome. It is kept for
+context.
 
 Existing tools like browser-use and agent-browser are browser automation
 frameworks: they need a separate browser to drive, logins never carry cleanly,
