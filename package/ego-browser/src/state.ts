@@ -17,6 +17,7 @@ async function defaultSend(req) {
     req.method,
     req.params || {},
     req.session_id,
+    req.timeout_ms,
   );
   return { result: response.result || {} };
 }

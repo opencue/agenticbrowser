@@ -102,7 +102,11 @@ function createCastPool(cdp) {
     }
     // Chrome stops sending frames until each one is acknowledged.
     cdp
-      .call("Page.screencastFrameAck", { sessionId: params.sessionId }, sessionId)
+      .call(
+        "Page.screencastFrameAck",
+        { sessionId: params.sessionId },
+        sessionId,
+      )
       .catch(() => {});
   });
 
@@ -122,7 +126,11 @@ function createCastPool(cdp) {
     const cast = { sessionId, frame: null, seq: 0 };
     casts.set(targetId, cast);
     try {
-      await cdp.call("Page.startScreencast", { ...CAST, everyNthFrame: 1 }, sessionId);
+      await cdp.call(
+        "Page.startScreencast",
+        { ...CAST, everyNthFrame: 1 },
+        sessionId,
+      );
     } catch (error) {
       // Leaving the entry behind would serve a blank card for as long as the tab
       // lives: every later poll finds it, skips open(), and reads a stream that
@@ -138,7 +146,11 @@ function createCastPool(cdp) {
     try {
       const shot = await cdp.call(
         "Page.captureScreenshot",
-        { format: CAST.format, quality: CAST.quality, captureBeyondViewport: false },
+        {
+          format: CAST.format,
+          quality: CAST.quality,
+          captureBeyondViewport: false,
+        },
         sessionId,
       );
       if (shot.data && !cast.frame) cast.frame = shot.data;
@@ -173,7 +185,9 @@ function createCastPool(cdp) {
         if (liveTargetIds.has(targetId)) continue;
         casts.delete(targetId);
         cdp.releaseSession(cast.sessionId);
-        await cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
+        await cdp
+          .call("Target.detachFromTarget", { sessionId: cast.sessionId })
+          .catch(() => {});
       }
     },
 
@@ -184,7 +198,9 @@ function createCastPool(cdp) {
       // to the harness — into the buffer drainEvents() hands to agents, which is
       // the exact leak the claim exists to prevent.
       for (const cast of casts.values()) {
-        cdp.call("Target.detachFromTarget", { sessionId: cast.sessionId }).catch(() => {});
+        cdp
+          .call("Target.detachFromTarget", { sessionId: cast.sessionId })
+          .catch(() => {});
         cdp.releaseSession(cast.sessionId);
       }
       casts.clear();
@@ -325,19 +341,22 @@ export async function startSpacesServer(shim) {
     // takeover / stop are the panel's half of the ownership handshake the
     // native app puts on its Space overlay: stop hands the space back to you
     // (the agent's cursor goes away), takeover claims it for the agent again.
-    const match = /^\/api\/spaces\/(\d+)\/(use|close|stop|takeover)$/.exec(url.pathname);
+    const match = /^\/api\/spaces\/(\d+)\/(use|close|stop|takeover)$/.exec(
+      url.pathname,
+    );
     if (request.method === "POST" && match) {
       const id = Number(match[1]);
+      let result;
       if (match[2] === "use") {
-        await ego.useTaskSpace(id);
+        result = await ego.useTaskSpace(id);
       } else if (match[2] === "stop") {
-        await ego.handOffTaskSpace(id);
+        result = await ego.handOffTaskSpace(id);
       } else if (match[2] === "takeover") {
-        await ego.takeOverTaskSpace(id);
+        result = await ego.takeOverTaskSpace(id);
       } else {
-        await ego.closeTaskSpace(id);
+        result = await ego.closeTaskSpace(id);
       }
-      json(response, 200, { done: true });
+      json(response, 200, result || { done: true });
       return;
     }
 

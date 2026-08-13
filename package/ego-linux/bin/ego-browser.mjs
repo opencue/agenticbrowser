@@ -70,12 +70,16 @@ async function importChromeProfile() {
     );
     return 1;
   }
-  process.stderr.write(`importing ${join(source, "Default")} -> ${PROFILE_DIR}/Default\n`);
+  process.stderr.write(
+    `importing ${join(source, "Default")} -> ${PROFILE_DIR}/Default\n`,
+  );
   await cp(join(source, "Default"), join(PROFILE_DIR, "Default"), {
     recursive: true,
     force: true,
   });
-  process.stderr.write("done — logins and cookies now carry into agent tasks\n");
+  process.stderr.write(
+    "done — logins and cookies now carry into agent tasks\n",
+  );
   return 0;
 }
 
@@ -95,10 +99,14 @@ async function liveSpacesServer() {
 /** Open the panel as a chrome-less app window on the shared browser. */
 async function openPanelWindow(url) {
   const status = await browserStatus();
-  spawn(status.binary || "google-chrome", [`--user-data-dir=${PROFILE_DIR}`, `--app=${url}`], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  spawn(
+    status.binary || "google-chrome",
+    [`--user-data-dir=${PROFILE_DIR}`, `--app=${url}`],
+    {
+      detached: true,
+      stdio: "ignore",
+    },
+  ).unref();
 }
 
 /**
@@ -166,10 +174,14 @@ async function runSpacesDaemon() {
   await rm(SPACES_STATE_FILE, { force: true });
 
   if (outcome === "browser-gone") {
-    spawn(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"], {
-      detached: true,
-      stdio: "ignore",
-    }).unref();
+    spawn(
+      process.execPath,
+      [fileURLToPath(import.meta.url), "--spaces-daemon"],
+      {
+        detached: true,
+        stdio: "ignore",
+      },
+    ).unref();
   }
   return 0;
 }
@@ -237,16 +249,22 @@ async function pruneSpaces() {
     // take the agent's context out from under it mid-task.
     let selectedId = null;
     try {
-      ({ selectedId = null } = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8")));
+      ({ selectedId = null } = JSON.parse(
+        await readFile(TASK_SPACE_FILE, "utf8"),
+      ));
     } catch {
       // No state file means no selection to protect.
     }
     const { targetInfos = [] } = await shim.cdp.call("Target.getTargets");
-    const byTarget = new Map(targetInfos.map((target) => [target.targetId, target]));
+    const byTarget = new Map(
+      targetInfos.map((target) => [target.targetId, target]),
+    );
 
     let closed = 0;
     for (const space of taskSpaces) {
-      const tabs = (space.targetIds || []).map((id) => byTarget.get(id)).filter(Boolean);
+      const tabs = (space.targetIds || [])
+        .map((id) => byTarget.get(id))
+        .filter(Boolean);
       if (tabs.length === 0) continue;
       if (space.id === selectedId) continue;
       if (space.lastContentAt) continue;
@@ -315,20 +333,25 @@ async function main() {
     // to show, so trade it for a visible one.
     const status = await browserStatus();
     if (status.running && status.headless) {
-      process.stderr.write("replacing the headless browser with a visible one\n");
+      process.stderr.write(
+        "replacing the headless browser with a visible one\n",
+      );
       await stopBrowser();
     }
     const shim = await createEgoShim({ headless: false });
     try {
       const { tabs } = await shim.ego.listTabs();
       // A browser with no page target shows no window; give it one.
-      let targetId = tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
+      let targetId =
+        tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
       if (!targetId) ({ targetId } = await shim.ego.createTab("about:blank"));
 
       // The window usually already exists — it is just behind everything else.
       // Clicking a launcher icon has to raise it, not quietly confirm it is
       // running, which looks identical to nothing happening.
-      await shim.cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      await shim.cdp
+        .call("Target.activateTarget", { targetId })
+        .catch(() => {});
       const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
         targetId,
         flatten: true,

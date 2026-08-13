@@ -9,6 +9,7 @@ import {
   handOffTaskSpace,
   newTaskSpace,
   helperContext,
+  isEgoHardStopError,
   listTaskSpaces,
   useOrCreateTaskSpace,
   switchTaskSpace,
@@ -205,11 +206,13 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
+  assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
   assert.equal(typeof context.fetch.browser, "function");
   assert.equal(typeof context.cdp, "function");
   assert.equal(typeof context.help, "function");
+  assert.equal(typeof isEgoHardStopError, "function");
   assert.equal(typeof helperExports.focus, "function");
   assert.equal(typeof helperExports.waitForRequest, "function");
   assert.equal(typeof helperExports.waitForResponse, "function");
@@ -222,6 +225,22 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
+  const context = helperContext();
+  const userControl = Object.assign(new Error("anything"), {
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  const inactive = { error_code: "EGO_TASK_SPACE_INACTIVE" };
+  const ordinary = Object.assign(new Error("selector missing"), {
+    error_code: "EGO_OPERATION_FAILED",
+  });
+
+  assert.equal(context.taskSpaces.isHardStopError(userControl), true);
+  assert.equal(context.taskSpaces.isHardStopError(inactive), true);
+  assert.equal(context.taskSpaces.isHardStopError(ordinary), false);
+  assert.equal(isEgoHardStopError(userControl), true);
 });
 
 test("page.url reads the current URL asynchronously", async () => {
@@ -725,7 +744,9 @@ test("completeTaskSpace selects by numeric id before completing", async () => {
       },
     },
     async () => {
-      await completeTaskSpace("checkout-flow", { keep: true });
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      // A binding that says nothing about visibility is one that has a window.
+      assert.deepEqual(result, { done: true, visible: true });
     },
   );
   assert.deepEqual(calls, [
@@ -772,6 +793,37 @@ test("completeTaskSpace waits for async useTaskSpace before completing", async (
     ["useTaskSpace:end", 7],
     ["completeTaskSpace"],
   ]);
+});
+
+test("completeTaskSpace keep true reports a kept page the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace() {},
+      async completeTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
+    },
+    async () => {
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      assert.deepEqual(result, {
+        done: true,
+        visible: false,
+        reason: "headless",
+      });
+    },
+  );
 });
 
 test("completeTaskSpace claims user-owned spaces before closing", async () => {
@@ -902,7 +954,8 @@ test("handOffTaskSpace reports done for agent-owned spaces", async () => {
     },
     async () => {
       const result = await handOffTaskSpace("checkout-flow");
-      assert.deepEqual(result, { done: true });
+      // A binding that says nothing about visibility is one that has a window.
+      assert.deepEqual(result, { done: true, visible: true });
     },
   );
   assert.deepEqual(calls, [
@@ -910,6 +963,41 @@ test("handOffTaskSpace reports done for agent-owned spaces", async () => {
     ["useTaskSpace", 7],
     ["handOffTaskSpace"],
   ]);
+});
+
+test("handOffTaskSpace reports a handoff the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      // What the Linux port answers when the browser is running headless: the
+      // handoff happened, but there is no window for the user to act in.
+      async handOffTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
+    },
+    async () => {
+      const result = await handOffTaskSpace("checkout-flow");
+      assert.deepEqual(result, {
+        done: true,
+        visible: false,
+        reason: "headless",
+      });
+    },
+  );
 });
 
 test("useOrCreateTaskSpace rejects unknown ownership", async () => {

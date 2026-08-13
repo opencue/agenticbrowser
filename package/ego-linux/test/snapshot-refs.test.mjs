@@ -131,8 +131,5 @@ test("viewport scope still costs one layout-metrics round trip", async () => {
     calls.filter((m) => m === "DOMSnapshot.captureSnapshot").length,
     1,
   );
-  assert.equal(
-    calls.filter((m) => m === "Page.getLayoutMetrics").length,
-    1,
-  );
+  assert.equal(calls.filter((m) => m === "Page.getLayoutMetrics").length, 1);
 });

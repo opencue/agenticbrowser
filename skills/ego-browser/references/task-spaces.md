@@ -48,23 +48,33 @@ the facades treat user-owned spaces differently:
 | `taskSpaces.takeOver` / `waitForAgentControl` | no ownership check |
 
 `taskSpaces.handOff` and `taskSpaces.complete` resolve `{ done: true }` when
-the operation actually happened. Check `done` before telling the user the
+the operation actually happened. `handOff`, and `complete(..., { keep: true })`
+on window-aware backends, also include `visible` so you know whether the user
+can actually see the page. Check `done` before telling the user the
 handoff/cleanup is finished — a `skipped` result usually means you targeted a
 space that was never yours.
 
 ## Completion and cleanup
 
-**`taskSpaces.complete(nameOrId, { keep })` must occupy its own dedicated final
-heredoc, and run only after a prior heredoc's output has confirmed the task is
-genuinely done.** `keep` is required and defaults by policy to `false`: close
-the task space after completion unless there is a concrete reason to leave the
-live page visible.
+**`taskSpaces.complete(nameOrId, { keep })` must run only after the result is
+captured and verified.** For one-round tasks, completing at the end of the same
+heredoc is preferred so the browser cannot be left open after success. For
+multi-round tasks, use a dedicated final heredoc after a prior heredoc's output
+has confirmed the task is genuinely done. `keep` is required and defaults by
+policy to `false`: close the task space after completion unless there is a
+concrete reason to leave the live page visible.
 
 Use `{ keep: true }` only when the user explicitly asks to keep the page open,
 the task needs manual user action in that exact page, or the result cannot be
 delivered well as a URL, file, artifact, or summary. Do not keep a task space
 open merely because a page was visited, a document was created, or a screenshot
 was used for verification.
+
+`complete(nameOrId, { keep: true })` has the same visibility contract as
+`handOff`: it resolves `{ done: true, visible, reason? }`. Only `visible: true`
+means the kept page was raised on a screen for the user to review. If
+`visible: false`, `reason` is one of `headless`, `no-live-tab`, or
+`raise-failed`. `keep: false` closes the space and resolves `{ done: true }`.
 
 When passing a string that may create a new task space, the string should
 reflect the task's intent (e.g. `'search github issues'`); don't use literal
@@ -98,11 +108,48 @@ An "inactive", "not assigned to an agent", or similar task-space error is also
 a hard stop with the same confirmation requirement. Resume only after explicit
 user confirmation, then start with `await taskSpaces.claim(id)`.
 
+If a script catches browser errors internally, it must rethrow these hard stops
+before any retry/continue logic:
+
+```js
+if (taskSpaces.isHardStopError(error)) throw error
+```
+
+Swallowing hard-stop errors in a retry loop makes the agent appear stuck even
+though the user-control boundary is working correctly.
+
 **Handing off**: When the task requires user intervention (e.g. login, captcha,
 manual confirmation), call `await taskSpaces.handOff(nameOrId)` to give control
 to the user, and tell them exactly what to do. Omitting `nameOrId` uses the
 currently selected task space; pass `task.id` across heredoc rounds to avoid
-ambiguity.
+ambiguity. The handoff selects the space's tab, restores the window if it was
+minimized, and raises it — the user has to find that window on their own desktop,
+and a browser buried behind an editor looks identical to nothing happening.
+
+**What the user can actually see**: `handOff` and
+`complete(..., { keep: true })` resolve
+`{ done: true, visible: boolean, reason?: string }`.
+
+| `visible` | What it means | What you may say |
+|---|---|---|
+| `true` | The browser has a window and the space's page was raised on it. | Ask for the click, the login, the captcha. Still describe *where* to look ("the ego lite window"), because it may have opened on another workspace. |
+| `false` + `reason: "headless"` | The browser is running headless (`EGO_LINUX_HEADLESS`). There is no window on any display. | Nothing about clicking. Report that the browser is headless and give the fix below. |
+| `false` + `reason: "no-live-tab"` | The task space has no live tab left. | Nothing about clicking. Reopen the page or start a fresh task space before asking for user action. |
+| `false` + `reason: "raise-failed"` | The browser has a window, but the port could not bring it to the front. | Ask the user to open the ego lite browser window manually before acting. |
+
+The fix to hand the user for `visible: false`: unset `EGO_LINUX_HEADLESS`
+(under fish it is usually a universal variable, so `set -Ue EGO_LINUX_HEADLESS`
+rather than `set -e`), then run `ego-browser --open`. That trades the headless
+browser for a visible one, which **restarts Chrome** — the current spaces' tabs
+and their seeded cookie jars do not survive it, so treat the work in flight as
+lost and start the task again in a fresh space.
+
+A `visible: false` handoff or kept completion is not an error and does not need
+to be retried: the ownership change is real, headless is a supported way to run,
+and CI hands off with nobody watching. It is only wrong to *narrate* it as
+something the user is looking at. The port also writes a one-line warning to
+stderr for handoff in that case, so it shows up in the command output even if
+the resolved value goes unread.
 
 **Regaining control**: Take control back *only* after the user explicitly
 confirms — through an Ask (your harness's button/option prompt, e.g. "Continue"

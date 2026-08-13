@@ -42,15 +42,15 @@ JS
 
 Linux-only commands:
 
-| Command | What it does |
-|---|---|
-| `ego-browser --status` | connection state of the backing browser |
-| `ego-browser --open` | open the shared agent browser window |
-| `ego-browser --spaces` | open the Spaces overview panel |
-| `ego-browser --stop` | terminate the backing browser and clear its profile lock |
+| Command                               | What it does                                                         |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| `ego-browser --status`                | connection state of the backing browser                              |
+| `ego-browser --open`                  | open the shared agent browser window                                 |
+| `ego-browser --spaces`                | open the Spaces overview panel                                       |
+| `ego-browser --stop`                  | terminate the backing browser and clear its profile lock             |
 | `ego-browser --import-chrome-profile` | copy your real Chrome profile in, so agent tasks inherit your logins |
-| `ego-browser --install-desktop-entry` | add it to your app launcher, with an icon |
-| `ego-browser --headless` | run the backing browser headless (first launch only) |
+| `ego-browser --install-desktop-entry` | add it to your app launcher, with an icon                            |
+| `ego-browser --headless`              | run the backing browser headless (first launch only)                 |
 
 ### The Spaces panel
 
@@ -63,7 +63,7 @@ That is not reachable from outside a Chromium fork — Chrome 137 removed the
 `--load-extension` switch, and the CDP `Extensions` domain answers
 "Method not available", so nothing can inject UI into the browser frame. (A
 Chromium-based browser that still honours `--load-extension`, such as Brave,
-*can* load one — verified on this machine — which would additionally allow
+_can_ load one — verified on this machine — which would additionally allow
 native tab groups as space markers.)
 
 What is reachable on stock Chrome is an `--app` window: no tab strip, no
@@ -107,7 +107,14 @@ onboarding step.
 Environment overrides: `EGO_LINUX_CHROME` (browser binary),
 `EGO_LINUX_PROFILE` (profile dir), `EGO_LINUX_CDP_URL` (attach to an
 already-running DevTools endpoint instead of launching), `EGO_LINUX_CURSOR=0`
-(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (rename it from "Claude").
+(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (override the detected agent name).
+
+The cursor labels itself with whichever harness is driving — `codex` draws
+"Codex", `claude` draws "Claude", anything unrecognised draws "Agent" rather
+than claiming to be one of them. Detection reads the process ancestry from
+`/proc`, so it needs no cooperation from the harness; `EGO_LINUX_CURSOR_NAME`
+overrides it. Teaching it a new harness is one row in `HARNESS_NAMES`
+(`src/agent-identity.mjs`).
 
 ### The agent's cursor
 
@@ -129,14 +136,14 @@ It is deliberately unable to interfere with the automation it illustrates:
 - every render is fire-and-forget and swallows its errors, so a page that
   refuses the injection or navigates mid-flight can never fail an action.
 
-It *is* drawn into screenshots, which is usually what you want and occasionally
+It _is_ drawn into screenshots, which is usually what you want and occasionally
 not: `EGO_LINUX_CURSOR=0` turns it off.
 
 ### Watching it read
 
 Snapshotting is most of what an agent does, and it dispatches no input at all —
 so a window where the agent was reading showed a cursor parked in a corner under
-a badge that said "reading". True, but it never said *what*, which is the one
+a badge that said "reading". True, but it never said _what_, which is the one
 thing someone watching wants to know.
 
 Every snapshot now starts a **read sweep**: the cursor walks the lines that are
@@ -186,9 +193,9 @@ has no equivalent for — a marker the agent draws to show you what it is talkin
 about:
 
 ```js
-await ego.highlight('free shipping', { note: 'this is the bit that changed' })
-await ego.highlight('#total', { note: 'and this is the total' })
-await ego.clearHighlight()
+await ego.highlight("free shipping", { note: "this is the bit that changed" });
+await ego.highlight("#total", { note: "and this is the total" });
+await ego.clearHighlight();
 ```
 
 A string is tried as a CSS selector first and searched for as page text if that
@@ -232,15 +239,15 @@ The harness uses 15 native methods plus 2 callbacks. All are implemented; two
 areas are degraded, and both degradations are structural rather than unfinished
 work.
 
-| Native surface | Backed by | Fidelity |
-|---|---|---|
-| `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses, so this is a passthrough, not a translation. |
-| `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools HTTP endpoint's most-recently-used ordering stands in. It also tracks tabs the user switches to by hand. |
-| `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser` | no-op | App lifecycle; the user's own Chrome updates itself. |
-| `animationHighlightMouseToPosition`, `setAgentTaskState` | a DOM overlay injected into the page | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above. |
-| `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below. |
-| the 9 task-space methods | a seeded browser context per space | **Isolated, with inherited logins.** The seeded jar is a copy, not live shared state. See below. |
+| Native surface                                            | Backed by                                             | Fidelity                                                                                                                                                                                     |
+| --------------------------------------------------------- | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint                | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses, so this is a passthrough, not a translation.                                                |
+| `listTabs`, `createTab`                                   | `Target.getTargets` / `Target.createTarget`           | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools HTTP endpoint's most-recently-used ordering stands in. It also tracks tabs the user switches to by hand. |
+| `getBrowserVersion`                                       | `Browser.getVersion`                                  | Exact.                                                                                                                                                                                       |
+| `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
+| `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
+| `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
+| the 9 task-space methods                                  | a seeded browser context per space                    | **Isolated, with inherited logins.** The seeded jar is a copy, not live shared state. See below.                                                                                             |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -264,7 +271,7 @@ built from the same underlying facts.
 
 ### Task spaces
 
-A native Space is isolated *and* inherits your login state. On stock Chromium
+A native Space is isolated _and_ inherits your login state. On stock Chromium
 those two properties look like they pull apart:
 
 - `Target.createBrowserContext` → real isolation, but an empty cookie jar
@@ -279,7 +286,7 @@ two reproducible experiments are in
 [`docs/isolation-with-inherited-logins.md`](../../docs/isolation-with-inherited-logins.md);
 seeding a real 2038-cookie profile costs ~105 ms, once per space.
 
-What this is *not* is live shared state: the seeded jar is a point-in-time copy,
+What this is _not_ is live shared state: the seeded jar is a point-in-time copy,
 so logging into a site inside one space does not appear in the others, and
 `localStorage`, IndexedDB and service workers are not carried at all — a site
 holding its token outside cookies will still land logged out.
@@ -315,9 +322,9 @@ rather than proof — but contexts did not obviously bring it back.
 
 **What does not work:**
 
-- *Live shared login state.* The seeded jar is a point-in-time copy, so logging
+- _Live shared login state._ The seeded jar is a point-in-time copy, so logging
   into a site inside one space does not appear in the others.
-- *Storage beyond cookies.* `localStorage`, IndexedDB and service workers are
+- _Storage beyond cookies._ `localStorage`, IndexedDB and service workers are
   not seeded, so a site holding its token outside cookies lands logged out.
 
 Ownership is advisory here. The native bridge enforces the user-control boundary
@@ -345,10 +352,10 @@ this CLI exactly as it drives the macOS app.
 
 Two failures are permanent, and neither is a port defect:
 
-| Case | Why it cannot pass |
-|---|---|
-| `macOS bare Meta input isolation` | Asserts `process.platform === "darwin"`. |
-| `regression PWB-10 permission capability` | Asserts that `Browser.grantPermissions` with `clipboardReadWrite` is *rejected* — an ego lite limitation. Stock Chromium supports it, so the port is more capable than the assertion allows. |
+| Case                                      | Why it cannot pass                                                                                                                                                                           |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `macOS bare Meta input isolation`         | Asserts `process.platform === "darwin"`.                                                                                                                                                     |
+| `regression PWB-10 permission capability` | Asserts that `Browser.grantPermissions` with `clipboardReadWrite` is _rejected_ — an ego lite limitation. Stock Chromium supports it, so the port is more capable than the assertion allows. |
 
 Everything else passes: navigation, observation, task spaces, pointer input,
 keyboard, downloads, screencast, fetch, canvas drawing, the Playwright
@@ -357,7 +364,7 @@ regression set, and the adversarial cases.
 ### Known flake: canvas drawing under load
 
 The three canvas cases intermittently count one stroke too many
-(`expected 1, got 2`). This is a timing race in the *upstream* harness, not in
+(`expected 1, got 2`). This is a timing race in the _upstream_ harness, not in
 the shim, and it is worth knowing about because it can bite any drag-heavy work:
 
 `driver/pointer.ts` `finishDragProbe` waits **50 ms** for a trusted `mouseup` on

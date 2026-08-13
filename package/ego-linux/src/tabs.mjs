@@ -21,7 +21,9 @@ export function createTabsApi(cdp, { port, getScope }) {
       });
       if (!response.ok) return null;
       const list = await response.json();
-      return list.filter((entry) => entry.type === "page").map((entry) => entry.id);
+      return list
+        .filter((entry) => entry.type === "page")
+        .map((entry) => entry.id);
     } catch {
       return null;
     }
@@ -31,7 +33,8 @@ export function createTabsApi(cdp, { port, getScope }) {
     async listTabs() {
       const { targetInfos = [] } = await cdp.call("Target.getTargets");
       let pages = targetInfos.filter(
-        (target) => target.type === "page" && !target.url.startsWith("devtools://"),
+        (target) =>
+          target.type === "page" && !target.url.startsWith("devtools://"),
       );
 
       // Scoped to the selected space, the way the native app lists only the
@@ -99,7 +102,8 @@ export function createTabsApi(cdp, { port, getScope }) {
         url,
         ...(browserContextId ? { browserContextId } : {}),
       });
-      if (!targetId) throw new Error("Target.createTarget returned no targetId");
+      if (!targetId)
+        throw new Error("Target.createTarget returned no targetId");
       // Make it the active tab, matching the native behaviour where a freshly
       // created tab is the one the agent goes on to act on.
       await cdp.call("Target.activateTarget", { targetId }).catch(() => {});

@@ -780,6 +780,21 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<void>",
     example: "await taskSpaces.waitForAgentControl(task.id)",
   },
+  "taskSpaces.isHardStopError": {
+    signature: "taskSpaces.isHardStopError(error) => boolean",
+    description:
+      "Return true when an ego error means the user controls or ended the task space, so automation must stop instead of retrying.",
+    params: [
+      {
+        name: "error",
+        type: "unknown",
+        required: true,
+        description: "Caught error or ego error-shaped value.",
+      },
+    ],
+    returns: "boolean",
+    example: "if (taskSpaces.isHardStopError(error)) throw error",
+  },
   "site.skills": {
     signature: "site.skills(url?) => Promise<object[]>",
     description:
@@ -925,7 +940,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "const body = await fetch.browser('/api/data')",
   },
   cdp: {
-    signature: "cdp(method, params?) => Promise<any>",
+    signature: "cdp(method, params?, sessionId?, timeoutMs?) => Promise<any>",
     description:
       "Send a supported raw Chrome DevTools Protocol command to the current target. Browser.grantPermissions and Browser.setPermission are not exposed by the task-space bridge.",
     params: [
@@ -939,6 +954,18 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         name: "params",
         type: "object",
         description: "CDP command parameters.",
+      },
+      {
+        name: "sessionId",
+        type: "string",
+        description:
+          "Optional attached target session id. Omit for the current page target.",
+      },
+      {
+        name: "timeoutMs",
+        type: "number",
+        description:
+          "Optional response timeout in milliseconds for long-running CDP commands.",
       },
     ],
     returns: "Promise<any>",

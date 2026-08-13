@@ -84,7 +84,7 @@ export async function browserCdp(
 ) {
   // Test mock: cdpOverride bypasses everything including session injection.
   if (state.cdpOverride) {
-    return state.cdpOverride(method, params, sessionId);
+    return state.cdpOverride(method, params, sessionId, timeoutMs);
   }
   const explicit = sessionId !== undefined;
   let effective = sessionId;

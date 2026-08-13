@@ -21,12 +21,40 @@ function fakeCdp(anchorUrl) {
       if (method === "Target.getTargets") {
         return {
           targetInfos: [
-            { type: "page", targetId: "anchor", url: anchorUrl, browserContextId: "ctx" },
+            {
+              type: "page",
+              targetId: "anchor",
+              url: anchorUrl,
+              browserContextId: "ctx",
+            },
           ],
         };
       }
       if (method === "Target.attachToTarget") return { sessionId: "s1" };
       if (method === "Target.createTarget") return { targetId: "fresh-tab" };
+      return {};
+    },
+  };
+}
+
+function fakeCreateSpaceCdp() {
+  const calls = [];
+  return {
+    calls,
+    async call(method, params) {
+      calls.push({ method, params });
+      if (method === "Target.createBrowserContext") {
+        return { browserContextId: "ctx" };
+      }
+      if (method === "Storage.getCookies") {
+        return { cookies: [] };
+      }
+      if (method === "Target.createTarget") {
+        return { targetId: "anchor" };
+      }
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "s1" };
+      }
       return {};
     },
   };
@@ -58,6 +86,45 @@ const baseSpace = {
 };
 
 describe("the space's blank anchor tab is used, not stranded", () => {
+  it("opens the initial anchor without focusing a blank page", async () => {
+    const cdp = fakeCreateSpaceCdp();
+
+    await createTaskSpacesApi(cdp).createTaskSpace("work");
+
+    const create = cdp.calls.find(
+      (call) => call.method === "Target.createTarget",
+    );
+    assert.deepEqual(create?.params, {
+      url: "about:blank",
+      browserContextId: "ctx",
+      focus: false,
+    });
+    assert.ok(
+      !cdp.calls.some((call) => call.method === "Target.activateTarget"),
+      "the blank anchor is not brought to the foreground",
+    );
+    assert.ok(
+      cdp.calls.some(
+        (call) =>
+          call.method === "Runtime.evaluate" &&
+          call.params.expression.includes("If this page stays here"),
+      ),
+      "the fallback page explains why it is visible if it ever remains onscreen",
+    );
+  });
+
+  it("does not focus a never-used blank anchor when selecting a space", async () => {
+    await seed({ ...baseSpace });
+    const cdp = fakeCdp("about:blank");
+
+    await createTaskSpacesApi(cdp).useTaskSpace(1);
+
+    assert.ok(
+      !cdp.calls.some((call) => call.method === "Target.activateTarget"),
+      "selecting a new blank space is enough for CDP scope but should not flash a blank page",
+    );
+  });
+
   it("navigates the anchor instead of opening a second tab", async () => {
     await seed({ ...baseSpace });
     const cdp = fakeCdp("about:blank");
@@ -71,7 +138,9 @@ describe("the space's blank anchor tab is used, not stranded", () => {
     assert.equal(result.targetId, "anchor", "the anchor is what comes back");
     assert.ok(
       cdp.calls.some(
-        (c) => c.method === "Page.navigate" && c.params.url === "https://example.com",
+        (c) =>
+          c.method === "Page.navigate" &&
+          c.params.url === "https://example.com",
       ),
       "the anchor is navigated",
     );
@@ -108,6 +177,10 @@ describe("the space's blank anchor tab is used, not stranded", () => {
       "https://example.com",
     );
 
-    assert.equal(result.targetId, "fresh-tab", "an occupied tab is never taken");
+    assert.equal(
+      result.targetId,
+      "fresh-tab",
+      "an occupied tab is never taken",
+    );
   });
 });

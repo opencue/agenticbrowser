@@ -14,7 +14,8 @@ import { WM_CLASS } from "./chrome.mjs";
  * affordance is just an XDG desktop entry plus an icon, so this provides one.
  */
 
-const DATA_HOME = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+const DATA_HOME =
+  process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
 const APP_ID = "ego-lite-linux";
 const ICON_SOURCE = new URL("../assets/ego-lite-linux.svg", import.meta.url);
 const LAUNCHER = new URL("../bin/ego-browser.mjs", import.meta.url);
@@ -64,10 +65,16 @@ export async function installDesktopEntry() {
   await copyFile(fileURLToPath(ICON_SOURCE), iconPath);
 
   const entryPath = join(applications, `${APP_ID}.desktop`);
-  await writeFile(entryPath, desktopEntry(fileURLToPath(LAUNCHER)), { mode: 0o755 });
+  await writeFile(entryPath, desktopEntry(fileURLToPath(LAUNCHER)), {
+    mode: 0o755,
+  });
 
   await refresh("update-desktop-database", [applications]);
-  await refresh("gtk-update-icon-cache", ["-f", "-t", join(DATA_HOME, "icons", "hicolor")]);
+  await refresh("gtk-update-icon-cache", [
+    "-f",
+    "-t",
+    join(DATA_HOME, "icons", "hicolor"),
+  ]);
 
   return { entryPath, iconPath };
 }

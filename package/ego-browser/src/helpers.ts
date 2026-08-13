@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { setOverrides, state } from "./state.js";
-import { assertNoEgoError, isEgoUserControlError } from "./ego-errors.js";
+import {
+  assertNoEgoError,
+  isEgoHardStopError,
+  isEgoUserControlError,
+} from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { cdp, decodeUnserializableJsValue, evaluate } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
@@ -99,6 +103,7 @@ export {
 export { setInputFiles } from "./driver/files.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
+export { isEgoHardStopError } from "./ego-errors.js";
 
 /**
  * List all task spaces.
@@ -269,7 +274,11 @@ async function selectTaskSpaceIfProvided(
  * space first, then closes it.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when the space was completed or closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * For `{ keep: true }`, `visible` reports whether the page reached a screen.
+ * It is `false` when the browser is running headless — the completion is still
+ * recorded, but nobody can see or click the kept page. `reason`, when present,
+ * describes why the page was not visible.
+ * @returns {Promise<{done: boolean, visible?: boolean, reason?: string, skipped?: "user-owned"}>} `{ done: true, visible }` when the space was completed and kept; `{ done: true }` when closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function completeTaskSpace(
   nameOrId: string | number,
@@ -301,7 +310,15 @@ export async function completeTaskSpace(
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
-    assertNoEgoError(await ego.completeTaskSpace(), "completeTaskSpace");
+    const result = await ego.completeTaskSpace();
+    assertNoEgoError(result, "completeTaskSpace");
+    // A backing layer that does not report visibility is one that has a window;
+    // only the Linux port can be windowless, and it always answers.
+    return {
+      done: true,
+      visible: result?.visible !== false,
+      ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+    };
   } else {
     if (match.ownership === "user") {
       await claimResolvedTaskSpace(match, "completeTaskSpace");
@@ -317,11 +334,17 @@ export async function completeTaskSpace(
 }
 
 /**
- * Hand off a task space back to the user, hiding the agent overlay.
+ * Hand off a task space back to the user, hiding the agent overlay and raising
+ * the browser window so the user can find the page they are being asked to act on.
  * User-owned spaces are skipped (the user already controls them) and resolve
  * `{ done: false, skipped: "user-owned" }`.
+ *
+ * `visible` reports whether the page reached a screen. It is `false` when the
+ * browser is running headless — the handoff is still recorded, but nobody can
+ * see or click anything, so the caller must not ask the user to. `reason`, when
+ * present, describes why the page was not visible.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @returns {Promise<{done: boolean, visible?: boolean, reason?: string, skipped?: "user-owned"}>} `{ done: true, visible }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function handOffTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
@@ -335,8 +358,15 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     }
     await selectTaskSpace(ego, match, "handOffTaskSpace");
   }
-  assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
-  return { done: true };
+  const result = await ego.handOffTaskSpace();
+  assertNoEgoError(result, "handOffTaskSpace");
+  // A backing layer that does not report visibility is one that has a window;
+  // only the Linux port can be windowless, and it always answers.
+  return {
+    done: true,
+    visible: result?.visible !== false,
+    ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+  };
 }
 
 /**
@@ -793,6 +823,7 @@ function createTaskSpacesFacade() {
     handOff: handOffTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
+    isHardStopError: isEgoHardStopError,
   };
 }
 
@@ -813,7 +844,7 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

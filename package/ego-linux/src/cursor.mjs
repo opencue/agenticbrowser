@@ -1,3 +1,4 @@
+import { agentName } from "./agent-identity.mjs";
 import { createSessionResolver } from "./session.mjs";
 
 /**
@@ -24,9 +25,12 @@ import { createSessionResolver } from "./session.mjs";
  * The overlay is a Runtime.evaluate injection rather than a content script, so
  * it works on pages with a strict CSP and needs no extension.
  *
+ * The label names whichever harness is driving — see agentName in
+ * agent-identity.mjs.
+ *
  * Env: EGO_LINUX_CURSOR=0 turns it off (it is drawn into screenshots, which is
- * usually wanted and occasionally not); EGO_LINUX_CURSOR_NAME renames it from
- * the default "Claude".
+ * usually wanted and occasionally not); EGO_LINUX_CURSOR_NAME overrides the
+ * detected name.
  */
 
 const HOST_ID = "ego-agent-cursor-overlay";
@@ -46,7 +50,7 @@ const TYPING_IDLE_MS = 700;
 
 export function createCursorApi(cdp, { listTabs }) {
   const enabled = process.env.EGO_LINUX_CURSOR !== "0";
-  const name = process.env.EGO_LINUX_CURSOR_NAME || "Claude";
+  const name = agentName();
   const sessionForActiveTab = createSessionResolver(cdp, {
     listTabs,
     op: "cursor",
@@ -500,7 +504,10 @@ function resolveHighlight(request) {
 
   if (!range && request.text) {
     const needle = request.text.trim().toLowerCase();
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    const walker = document.createTreeWalker(
+      document.body,
+      NodeFilter.SHOW_TEXT,
+    );
     while (walker.nextNode()) {
       const node = walker.currentNode;
       const parent = node.parentElement;
@@ -514,7 +521,8 @@ function resolveHighlight(request) {
     }
   }
 
-  if (!range) return { rects: [], scrollX: window.scrollX, scrollY: window.scrollY };
+  if (!range)
+    return { rects: [], scrollX: window.scrollX, scrollY: window.scrollY };
 
   // A marker nobody can see explains nothing, so bring it on screen first.
   const first = range.getBoundingClientRect();
@@ -828,7 +836,8 @@ function renderOverlay(payload) {
   // on a label-only render would walk the cursor across the page on every
   // scroll, since the same viewport point is a different page point by then.
   const previous = host.__egoState;
-  const moved = !previous || previous.x !== payload.x || previous.y !== payload.y;
+  const moved =
+    !previous || previous.x !== payload.x || previous.y !== payload.y;
   let pageX = moved ? payload.x + window.scrollX : previous.pageX;
   let pageY = moved ? payload.y + window.scrollY : previous.pageY;
 
@@ -865,7 +874,9 @@ function renderOverlay(payload) {
     // One fixed duration for every move made a nudge between two fields crawl
     // and a jump across the page look like a teleport. Scaling it to the
     // distance is what a hand on a mouse does: near is quick, far takes a beat.
-    const far = previous ? Math.hypot(pageX - previous.pageX, pageY - previous.pageY) : 0;
+    const far = previous
+      ? Math.hypot(pageX - previous.pageX, pageY - previous.pageY)
+      : 0;
     pointer.style.transitionDuration =
       Math.round(Math.min(420, Math.max(90, far * 0.45))) + "ms";
     pointer.style.transform = "translate3d(" + pageX + "px," + pageY + "px,0)";
@@ -897,7 +908,9 @@ function renderOverlay(payload) {
   const nearby = describe(subject);
   const showingStale =
     !payload.typing && !current && !nearby && Boolean(payload.label);
-  const detail = payload.typing ? "typing…" : current || nearby || payload.label;
+  const detail = payload.typing
+    ? "typing…"
+    : current || nearby || payload.label;
   setBadgeText(detail ? payload.name + " · " + detail : payload.name);
 
   // Reading owns the blue scheme; anything else hands it straight back. The
@@ -983,8 +996,7 @@ function renderOverlay(payload) {
       const band = document.createElement("div");
       band.className = "band";
       band.style.height = rect.height + "px";
-      band.style.transform =
-        "translate3d(" + rect.x + "px," + rect.y + "px,0)";
+      band.style.transform = "translate3d(" + rect.x + "px," + rect.y + "px,0)";
       band.style.transitionDuration = rect.ms + "ms";
       bands.appendChild(band);
       void band.offsetWidth; // let the zero width land before the real one
@@ -1080,7 +1092,8 @@ function renderOverlay(payload) {
         const band = document.createElement("div");
         band.className = "band read";
         band.style.height = line.height + "px";
-        band.style.transform = "translate3d(" + line.x + "px," + line.y + "px,0)";
+        band.style.transform =
+          "translate3d(" + line.x + "px," + line.y + "px,0)";
         band.style.transitionDuration = scanMs + "ms";
         bands.appendChild(band);
         void band.offsetWidth; // let the zero width land before the real one
@@ -1170,7 +1183,9 @@ function renderOverlay(payload) {
 
   /** Short enough for a badge that is drawn into every screenshot. */
   function snip(text) {
-    const value = String(text || "").replace(/\s+/g, " ").trim();
+    const value = String(text || "")
+      .replace(/\s+/g, " ")
+      .trim();
     return value.length > 44 ? value.slice(0, 43) + "…" : value;
   }
 
@@ -1224,7 +1239,9 @@ function renderOverlay(payload) {
       badge.classList.remove("docked");
       badge.style.transform =
         toPage(atX + 20, atY + 22) +
-        (atX + 340 > window.innerWidth ? " translateX(calc(-100% - 40px))" : "") +
+        (atX + 340 > window.innerWidth
+          ? " translateX(calc(-100% - 40px))"
+          : "") +
         (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
       return;
     }
@@ -1232,8 +1249,14 @@ function renderOverlay(payload) {
     // Parked against the edge the cursor left by, and held there while the page
     // keeps moving under it.
     const width = badge.offsetWidth || 240;
-    const dockX = Math.min(Math.max(atX, 12), Math.max(12, window.innerWidth - width - 12));
-    const dockY = Math.min(Math.max(atY, 12), Math.max(12, window.innerHeight - 40));
+    const dockX = Math.min(
+      Math.max(atX, 12),
+      Math.max(12, window.innerWidth - width - 12),
+    );
+    const dockY = Math.min(
+      Math.max(atY, 12),
+      Math.max(12, window.innerHeight - 40),
+    );
     badge.classList.add("docked");
     badge.style.transform = toPage(dockX, dockY);
   }
@@ -1283,7 +1306,11 @@ function renderOverlay(payload) {
 
   function focusedRect() {
     const active = document.activeElement;
-    if (!active || active === document.body || active === document.documentElement) {
+    if (
+      !active ||
+      active === document.body ||
+      active === document.documentElement
+    ) {
       return null;
     }
     const rect = active.getBoundingClientRect();

@@ -20,21 +20,32 @@ async function profileWith(profileBlock) {
   if (profileBlock !== undefined) {
     await writeFile(
       join(dir, "Default", "Preferences"),
-      JSON.stringify({ profile: profileBlock, bookmark_bar: { show_on_all_tabs: true } }),
+      JSON.stringify({
+        profile: profileBlock,
+        bookmark_bar: { show_on_all_tabs: true },
+      }),
     );
   }
   return dir;
 }
 
 async function exitTypeOf(dir) {
-  return JSON.parse(await readFile(join(dir, "Default", "Preferences"), "utf8")).profile?.exit_type;
+  return JSON.parse(await readFile(join(dir, "Default", "Preferences"), "utf8"))
+    .profile?.exit_type;
 }
 
 describe("clearStaleCrashMark", () => {
   it("clears a mark left by an ungraceful kill", async () => {
-    const dir = await profileWith({ exit_type: "Crashed", name: "ego lite — agent" });
+    const dir = await profileWith({
+      exit_type: "Crashed",
+      name: "ego lite — agent",
+    });
     try {
-      assert.equal(await clearStaleCrashMark(dir), true, "reports that it changed something");
+      assert.equal(
+        await clearStaleCrashMark(dir),
+        true,
+        "reports that it changed something",
+      );
       assert.equal(await exitTypeOf(dir), "Normal");
     } finally {
       await rm(dir, { recursive: true, force: true });
@@ -42,13 +53,27 @@ describe("clearStaleCrashMark", () => {
   });
 
   it("keeps every other preference intact", async () => {
-    const dir = await profileWith({ exit_type: "Crashed", name: "ego lite — agent", avatar_index: 26 });
+    const dir = await profileWith({
+      exit_type: "Crashed",
+      name: "ego lite — agent",
+      avatar_index: 26,
+    });
     try {
       await clearStaleCrashMark(dir);
-      const prefs = JSON.parse(await readFile(join(dir, "Default", "Preferences"), "utf8"));
-      assert.equal(prefs.profile.name, "ego lite — agent", "sibling keys survive");
+      const prefs = JSON.parse(
+        await readFile(join(dir, "Default", "Preferences"), "utf8"),
+      );
+      assert.equal(
+        prefs.profile.name,
+        "ego lite — agent",
+        "sibling keys survive",
+      );
       assert.equal(prefs.profile.avatar_index, 26);
-      assert.deepEqual(prefs.bookmark_bar, { show_on_all_tabs: true }, "other top-level blocks survive");
+      assert.deepEqual(
+        prefs.bookmark_bar,
+        { show_on_all_tabs: true },
+        "other top-level blocks survive",
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -57,9 +82,19 @@ describe("clearStaleCrashMark", () => {
   it("leaves an unmarked profile untouched", async () => {
     const dir = await profileWith({ exit_type: "Normal" });
     try {
-      const before = await readFile(join(dir, "Default", "Preferences"), "utf8");
-      assert.equal(await clearStaleCrashMark(dir), false, "reports that it changed nothing");
-      assert.equal(await readFile(join(dir, "Default", "Preferences"), "utf8"), before);
+      const before = await readFile(
+        join(dir, "Default", "Preferences"),
+        "utf8",
+      );
+      assert.equal(
+        await clearStaleCrashMark(dir),
+        false,
+        "reports that it changed nothing",
+      );
+      assert.equal(
+        await readFile(join(dir, "Default", "Preferences"), "utf8"),
+        before,
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
@@ -68,7 +103,11 @@ describe("clearStaleCrashMark", () => {
   it("is a no-op on a profile that has no Preferences yet", async () => {
     const dir = await profileWith(undefined);
     try {
-      assert.equal(await clearStaleCrashMark(dir), false, "a fresh profile is not an error");
+      assert.equal(
+        await clearStaleCrashMark(dir),
+        false,
+        "a fresh profile is not an error",
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

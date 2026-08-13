@@ -64,7 +64,8 @@ export async function connectCdp(wsUrl) {
         // Whether a space ever held a real page can only be seen as it happens:
         // a tab is about:blank again the moment it navigates away, so polling
         // its url later cannot tell "never used" from "between pages".
-        if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
+        if (message.params.url !== "about:blank")
+          navWatcher?.(message.params.url);
       } else if (message.method === "Emulation.setDeviceMetricsOverride") {
         // Emulation resizes the page's viewport, never the OS window — so a
         // mobile layout renders as a narrow strip inside a desktop-sized window.
@@ -73,9 +74,15 @@ export async function connectCdp(wsUrl) {
         // Explicitly the other half: leaving emulation has to put the window
         // back, or it stays phone-shaped for the rest of the session.
         viewportWatcher?.({ width: 0, height: 0 });
-      } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
+      } else if (
+        message.method === "Target.activateTarget" &&
+        message.params?.targetId
+      ) {
         activeTargetId = message.params.targetId;
-      } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
+      } else if (
+        message.method === "Target.attachToTarget" &&
+        message.params?.targetId
+      ) {
         // ensureSession() attaches to whatever the harness considers current —
         // its preferredTargetId, which the shim cannot see any other way. The
         // shim's own page reads (snapshot) must target the same tab, or the
@@ -94,7 +101,10 @@ export async function connectCdp(wsUrl) {
 
   await new Promise((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`CDP WebSocket did not open within ${OPEN_TIMEOUT_MS}ms`)),
+      () =>
+        reject(
+          new Error(`CDP WebSocket did not open within ${OPEN_TIMEOUT_MS}ms`),
+        ),
       OPEN_TIMEOUT_MS,
     );
     socket.addEventListener(
@@ -134,7 +144,9 @@ export async function connectCdp(wsUrl) {
       internalPending.delete(data.id);
       clearTimeout(entry.timer);
       if (data.error) {
-        entry.reject(new Error(data.error.message || JSON.stringify(data.error)));
+        entry.reject(
+          new Error(data.error.message || JSON.stringify(data.error)),
+        );
       } else {
         entry.resolve(data.result ?? {});
       }

@@ -63,6 +63,25 @@ test("installEgoSdk preserves the asynchronous page.url contract", async () => {
   }
 });
 
+test("installEgoSdk keeps taskSpaces.isHardStopError synchronous for catch guards", () => {
+  const originalLog = console.log;
+  const target = {};
+  try {
+    installEgoSdk(target, { cliLog() {} });
+    const userControl = Object.assign(new Error("paused"), {
+      error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+    });
+
+    assert.equal(target.taskSpaces.isHardStopError(userControl), true);
+    assert.equal(
+      target.taskSpaces.isHardStopError(new Error("ordinary failure")),
+      false,
+    );
+  } finally {
+    console.log = originalLog;
+  }
+});
+
 test("installEgoSdk exposes the site facade under ego.learnings", () => {
   const originalLog = console.log;
   const target = { ego: {} };

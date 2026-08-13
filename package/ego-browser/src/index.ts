@@ -58,6 +58,7 @@ const SYNC_FACTORY_HELPERS = new Set([
   "page.locator.getByTitle",
   "page.locator.getByTestId",
   "page.locator.filter",
+  "taskSpaces.isHardStopError",
 ]);
 const SYNC_FACTORY_METHODS = new Set([
   "locator",

@@ -29,7 +29,7 @@ pre-commit:
         exit 1
     style-check:
       run: |
-        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-(browser|linux)/.*\.(ts|mjs|js|json|md)$' || true)
         [ -z "$files" ] && exit 0
         package/ego-browser/node_modules/.bin/prettier --check $files
     vulnerability-audit:
@@ -52,3 +52,9 @@ pre-commit:
       run: |
         git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
         cd package/ego-browser && npm run e2e
+    # The port drives the harness's build output, so a change to either can break
+    # it. Both paths run it; the suite is headless and uses its own profile.
+    linux-port-test:
+      run: |
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^package/ego-(browser|linux)/' || exit 0
+        cd package/ego-linux && npm test
