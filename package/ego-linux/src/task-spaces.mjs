@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 
 import { agentIdentity } from "./agent-identity.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
@@ -80,9 +80,124 @@ export function createTaskSpacesApi(cdp) {
     }
   }
 
+  /**
+   * Replace the file in one step, never in two.
+   *
+   * writeFile truncates and then fills, so a reader that landed between the two
+   * got invalid JSON — and readState swallows a parse failure as "no spaces at
+   * all", which reads to the agent as its work having disappeared. rename() is
+   * atomic on POSIX: a reader sees either the whole old file or the whole new
+   * one. The temp name carries the pid so two writers cannot share a scratch
+   * file.
+   */
   async function writeState(state) {
     await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
+    const scratch = `${TASK_SPACE_FILE}.${process.pid}.tmp`;
+    await writeFile(scratch, JSON.stringify(state, null, 2));
+    try {
+      await rename(scratch, TASK_SPACE_FILE);
+    } catch (err) {
+      await unlink(scratch).catch(() => {});
+      throw err;
+    }
+  }
+
+  /**
+   * Serialise read-modify-write against the other agents on this machine.
+   *
+   * The file is shared by every session, and each heredoc is its own process, so
+   * two agents working at once are two writers. Without this, both read the same
+   * nextId, both build a space with it, and the later write erases the earlier
+   * one — measured at 6 of 21 spaces lost in test/state-concurrency.test.mjs.
+   *
+   * Cross-process exclusion is an O_EXCL lock file, which is the one primitive
+   * every filesystem agrees on. Two rules keep a lock from outliving its owner:
+   * a lock older than LOCK_STALE_MS is assumed abandoned (a killed agent cannot
+   * clean up after itself), and waiting is bounded — past the deadline the lock
+   * is broken rather than failing the agent's action, because a stuck lock must
+   * never be the reason a browser command dies.
+   */
+  const LOCK_FILE = `${TASK_SPACE_FILE}.lock`;
+  const LOCK_STALE_MS = 15000;
+  const LOCK_RETRY_MS = 15;
+  const LOCK_WAIT_MS = 10000;
+
+  // In-process, acquisitions queue on this chain, so only one logical operation
+  // is ever inside the lock here. That is what makes the depth check below sound:
+  // while depth > 0 the only code running is the holder's own, so a nested call
+  // is genuinely nested rather than a second operation racing in.
+  let lockChain = Promise.resolve();
+  let lockDepth = 0;
+
+  const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function lockIsStale() {
+    try {
+      const info = await stat(LOCK_FILE);
+      return Date.now() - info.mtimeMs > LOCK_STALE_MS;
+    } catch {
+      // Gone while we looked: not stale, just free.
+      return false;
+    }
+  }
+
+  async function acquireFileLock() {
+    const deadline = Date.now() + LOCK_WAIT_MS;
+    for (;;) {
+      await mkdir(STATE_DIR, { recursive: true });
+      try {
+        const handle = await open(LOCK_FILE, "wx");
+        await handle.writeFile(String(process.pid));
+        await handle.close();
+        return;
+      } catch (err) {
+        if (err.code !== "EEXIST") throw err;
+        if ((await lockIsStale()) || Date.now() > deadline) {
+          // The holder is gone, or has had long enough that waiting further
+          // would cost more than the race we are avoiding.
+          await unlink(LOCK_FILE).catch(() => {});
+          continue;
+        }
+        await pause(LOCK_RETRY_MS);
+      }
+    }
+  }
+
+  function withStateLock(run) {
+    if (lockDepth > 0) return run();
+    const next = lockChain.then(async () => {
+      await acquireFileLock();
+      lockDepth += 1;
+      try {
+        return await run();
+      } finally {
+        lockDepth -= 1;
+        await unlink(LOCK_FILE).catch(() => {});
+      }
+    });
+    // The chain must survive a failed operation, or one thrown error would wedge
+    // every later write in this process.
+    lockChain = next.then(
+      () => {},
+      () => {},
+    );
+    return next;
+  }
+
+  /**
+   * The safe shape for every mutation: read, change, write, all inside the lock.
+   *
+   * Callers that need the browser for something do that first and hand in only
+   * the finished values — the lock is meant to cover the file, not a CDP round
+   * trip whose latency every other agent would then wait on.
+   */
+  function updateState(mutate) {
+    return withStateLock(async () => {
+      const state = await readState();
+      const result = await mutate(state);
+      await writeState(state);
+      return result;
+    });
   }
 
   async function livePageTargets() {
@@ -511,7 +626,7 @@ export function createTaskSpacesApi(cdp) {
     return browserContextId;
   }
 
-  return {
+  const api = {
     selectedContextId,
 
     /**
@@ -768,4 +883,31 @@ export function createTaskSpacesApi(cdp) {
       return result;
     },
   };
+
+  /**
+   * Take the lock around the whole public surface, not just the writes.
+   *
+   * Reads are locked too because reading is not read-only here: listTaskSpaces
+   * and selectedScope both run reconcile, which repairs the file and writes when
+   * something changed. A "read" that can write is a writer.
+   *
+   * Wrapping the boundary rather than each of the ten writeState sites is what
+   * keeps this honest — a mutation added later is covered by construction
+   * instead of by remembering. Nested calls (createTabInSelectedSpace reaching
+   * selectedScope through the tabs API) are free: the lock is reentrant, so the
+   * inner call runs straight through.
+   *
+   * selectedContextId is excluded on purpose. It is synchronous by contract —
+   * the transport calls it while building a CDP payload — and it reads with
+   * readFileSync, which the atomic rename already makes safe.
+   */
+  const UNLOCKED = new Set(["selectedContextId"]);
+  const locked = {};
+  for (const [name, value] of Object.entries(api)) {
+    locked[name] =
+      typeof value === "function" && !UNLOCKED.has(name)
+        ? (...args) => withStateLock(() => value(...args))
+        : value;
+  }
+  return locked;
 }
