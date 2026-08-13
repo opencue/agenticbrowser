@@ -20,7 +20,9 @@ concurrency:
 jobs:
   sync:
     # Do not run in further forks of this fork.
-    if: github.repository == 'opencue/ego-lite-linux'
+    # Must track the repository's current name — this was 'opencue/ego-lite-linux'
+    # before the rename, which silently disables the job rather than failing it.
+    if: github.repository == 'opencue/agenticbrowser'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
