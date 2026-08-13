@@ -24,7 +24,11 @@ async function startFakeDevTools() {
     }
     const { port } = server.address();
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake` }));
+    res.end(
+      JSON.stringify({
+        webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/browser/fake`,
+      }),
+    );
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return { server, port: server.address().port };
@@ -46,13 +50,22 @@ describe("waitForEndpoint", () => {
     await writeFile(join(profileDir, PORT_FILE), portFile(await deadPort()));
     const live = await startFakeDevTools();
     const rewrite = setTimeout(() => {
-      writeFile(join(profileDir, PORT_FILE), portFile(live.port)).catch(() => {});
+      writeFile(join(profileDir, PORT_FILE), portFile(live.port)).catch(
+        () => {},
+      );
     }, 400);
 
     try {
       const endpoint = await waitForEndpoint(profileDir, { timeoutMs: 8000 });
-      assert.equal(endpoint.port, live.port, "returns the port that actually answers");
-      assert.match(endpoint.wsUrl, /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//);
+      assert.equal(
+        endpoint.port,
+        live.port,
+        "returns the port that actually answers",
+      );
+      assert.match(
+        endpoint.wsUrl,
+        /^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//,
+      );
     } finally {
       clearTimeout(rewrite);
       await new Promise((resolve) => live.server.close(resolve));
@@ -66,7 +79,10 @@ describe("waitForEndpoint", () => {
     await writeFile(join(profileDir, PORT_FILE), portFile(dead));
 
     try {
-      await assert.rejects(() => waitForEndpoint(profileDir, { timeoutMs: 1200 }), new RegExp(String(dead)));
+      await assert.rejects(
+        () => waitForEndpoint(profileDir, { timeoutMs: 1200 }),
+        new RegExp(String(dead)),
+      );
     } finally {
       await rm(profileDir, { recursive: true, force: true });
     }

@@ -1,5 +1,6 @@
 const fixture = process.env.FIXTURE_URL;
-const read = (id) => page.evaluate(`document.getElementById('${id}').textContent`);
+const read = (id) =>
+  page.evaluate(`document.getElementById('${id}').textContent`);
 const value = (id) => page.evaluate(`document.getElementById('${id}').value`);
 
 await page.goto(fixture);
@@ -8,7 +9,8 @@ await page.waitForLoadState();
 const snap = await page.snapshotRaw({ scope: "full_page" });
 const refOf = (predicate) => snap.refs.find(predicate)?.backendNodeId;
 const buttonRef = refOf(
-  (ref) => ref.role === "button" && String(ref.name).includes("Increment counter"),
+  (ref) =>
+    ref.role === "button" && String(ref.name).includes("Increment counter"),
 );
 console.log("1. button ref:            " + buttonRef);
 
@@ -33,12 +35,20 @@ console.log("6. locator fill:          " + (await value("name-input")));
 
 // Refs inside the deeply nested iframe.
 const deepRef = refOf((ref) => String(ref.name).includes("Deep button"));
-console.log("7. deep iframe ref:       " + JSON.stringify(await page.elementCenter("@" + deepRef)));
+console.log(
+  "7. deep iframe ref:       " +
+    JSON.stringify(await page.elementCenter("@" + deepRef)),
+);
 
 // getByRole over the accessible names the snapshot reports.
-console.log("8. getByRole count:       " + (await page.getByRole("button", { name: "Increment counter" }).count()));
+console.log(
+  "8. getByRole count:       " +
+    (await page.getByRole("button", { name: "Increment counter" }).count()),
+);
 
 const shot = await page.screenshot();
 console.log("9. screenshot:            " + shot);
 
-console.log("10. tabs:                 " + JSON.stringify(await browser.listTabs()));
+console.log(
+  "10. tabs:                 " + JSON.stringify(await browser.listTabs()),
+);

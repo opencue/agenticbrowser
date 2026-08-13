@@ -199,6 +199,20 @@ test("an ordinary uncaught error still flushes the output logged before it", asy
   assert.equal(result.stdout, "partial result\n");
 });
 
+test("a toString TypeError explains the ego-browser logging pattern", async () => {
+  const result = await runScript(`
+    const pageData = { toString: null };
+    pageData.toString();
+  `);
+
+  assert.ok(result.error, "expected runMain to reject");
+  assert.match(result.error.message, /ego-browser hint:/);
+  assert.match(result.error.message, /console\.log\(value\)/);
+  assert.match(result.error.message, /page\.screenshot\(\) returns a file path/);
+  assert.equal(result.error.stack.match(/ego-browser hint:/g).length, 1);
+  assert.equal(result.stdout, "");
+});
+
 test("runMain finalizes an active screencast when the script ends", async () => {
   let stopCalls = 0;
   const restore = screencastTesting.setOverrides({

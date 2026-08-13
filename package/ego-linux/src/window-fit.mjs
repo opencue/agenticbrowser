@@ -33,7 +33,9 @@ export function createWindowFit(cdp) {
   let original = null;
 
   async function windowFor(targetId) {
-    const { windowId } = await cdp.call("Browser.getWindowForTarget", { targetId });
+    const { windowId } = await cdp.call("Browser.getWindowForTarget", {
+      targetId,
+    });
     return windowId;
   }
 
@@ -81,9 +83,16 @@ export function createWindowFit(cdp) {
       try {
         const windowId = await windowFor(targetId);
         if (!original) {
-          const { bounds } = await cdp.call("Browser.getWindowBounds", { windowId });
+          const { bounds } = await cdp.call("Browser.getWindowBounds", {
+            windowId,
+          });
           if (bounds) {
-            original = { left: bounds.left, top: bounds.top, width: bounds.width, height: bounds.height };
+            original = {
+              left: bounds.left,
+              top: bounds.top,
+              width: bounds.width,
+              height: bounds.height,
+            };
           }
         }
         await cdp.call("Browser.setWindowBounds", {

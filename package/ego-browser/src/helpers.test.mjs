@@ -9,6 +9,7 @@ import {
   handOffTaskSpace,
   newTaskSpace,
   helperContext,
+  isEgoHardStopError,
   listTaskSpaces,
   useOrCreateTaskSpace,
   switchTaskSpace,
@@ -109,6 +110,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.page.waitForURL, "function");
   assert.equal(typeof context.page.waitForRequest, "function");
   assert.equal(typeof context.page.waitForResponse, "function");
+  assert.equal(typeof context.page.debug, "function");
   assert.equal(typeof context.page.screencast, "object");
   assert.equal(typeof context.page.screencast.start, "function");
   assert.equal(typeof context.page.screencast.stop, "function");
@@ -205,11 +207,13 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
+  assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
   assert.equal(typeof context.fetch.browser, "function");
   assert.equal(typeof context.cdp, "function");
   assert.equal(typeof context.help, "function");
+  assert.equal(typeof isEgoHardStopError, "function");
   assert.equal(typeof helperExports.focus, "function");
   assert.equal(typeof helperExports.waitForRequest, "function");
   assert.equal(typeof helperExports.waitForResponse, "function");
@@ -222,6 +226,22 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
+  const context = helperContext();
+  const userControl = Object.assign(new Error("anything"), {
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  const inactive = { error_code: "EGO_TASK_SPACE_INACTIVE" };
+  const ordinary = Object.assign(new Error("selector missing"), {
+    error_code: "EGO_OPERATION_FAILED",
+  });
+
+  assert.equal(context.taskSpaces.isHardStopError(userControl), true);
+  assert.equal(context.taskSpaces.isHardStopError(inactive), true);
+  assert.equal(context.taskSpaces.isHardStopError(ordinary), false);
+  assert.equal(isEgoHardStopError(userControl), true);
 });
 
 test("page.url reads the current URL asynchronously", async () => {
@@ -248,6 +268,96 @@ test("page.url reads the current URL asynchronously", async () => {
     const value = helperContext().page.url();
     assert.equal(typeof value.then, "function");
     assert.equal(await value, "https://example.com/current");
+  } finally {
+    restore();
+  }
+});
+
+test("page.debug returns a structured redacted dump for agents", async () => {
+  await helperExports.drainEvents();
+  const writes = [];
+  const restore = setOverrides({
+    now: () => Date.parse("2026-08-13T00:00:00.000Z"),
+    writeFile: async (path, data) => {
+      writes.push({ path, data });
+    },
+    cdpOverride: async (method, params) => {
+      if (method === "Runtime.evaluate") {
+        if (params.expression === "window.devicePixelRatio") {
+          return { result: { value: 1 } };
+        }
+        return {
+          result: {
+            value: JSON.stringify({
+              url: "https://example.com/path?token=secret#frag",
+              title: "Debug target",
+              w: 800,
+              h: 600,
+              sx: 10,
+              sy: 20,
+              pw: 1000,
+              ph: 1200,
+            }),
+          },
+        };
+      }
+      if (method === "Page.captureScreenshot") {
+        return { data: Buffer.from("png").toString("base64") };
+      }
+      throw new Error(`unexpected CDP method ${method}`);
+    },
+  });
+  try {
+    await withEgo(
+      {
+        async listTabs() {
+          return {
+            tabs: [
+              {
+                targetId: "tab-1",
+                title: "Debug target",
+                url: "https://example.com/path?token=secret#frag",
+                active: true,
+                index: 0,
+              },
+            ],
+          };
+        },
+        async snapshot(options) {
+          assert.equal(options.scope, "only_within_viewport");
+          return {
+            content: "button Save [ref=1]",
+            refs: [{ backendNodeId: 1, role: "button", name: "Save" }],
+          };
+        },
+      },
+      async () => {
+        const dump = await helperContext().page.debug({
+          maxSnapshotChars: 8,
+          eventLimit: 0,
+        });
+
+        assert.equal(dump.timestamp, "2026-08-13T00:00:00.000Z");
+        assert.equal(
+          dump.info.url,
+          "https://example.com/path?token=REDACTED#REDACTED",
+        );
+        assert.equal(dump.info.title, "Debug target");
+        assert.equal(dump.tabs[0].url, dump.info.url);
+        assert.equal(dump.currentTab.targetId, "tab-1");
+        assert.deepEqual(dump.snapshot, {
+          scope: "only_within_viewport",
+          chars: 19,
+          excerpt: "button S\n...[truncated 11 chars]",
+          refCount: 1,
+        });
+        assert.match(dump.screenshot.path, /ego-browser-shot-/);
+        assert.equal(writes.length, 1);
+        assert.equal(dump.events.drained, true);
+        assert.equal(dump.events.count, 0);
+        assert.deepEqual(dump.errors, undefined);
+      },
+    );
   } finally {
     restore();
   }
@@ -764,7 +874,9 @@ test("completeTaskSpace selects by numeric id before completing", async () => {
       },
     },
     async () => {
-      await completeTaskSpace("checkout-flow", { keep: true });
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      // A binding that says nothing about visibility is one that has a window.
+      assert.deepEqual(result, { done: true, visible: true });
     },
   );
   assert.deepEqual(calls, [
@@ -811,6 +923,37 @@ test("completeTaskSpace waits for async useTaskSpace before completing", async (
     ["useTaskSpace:end", 7],
     ["completeTaskSpace"],
   ]);
+});
+
+test("completeTaskSpace keep true reports a kept page the user cannot see", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace() {},
+      async completeTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
+    },
+    async () => {
+      const result = await completeTaskSpace("checkout-flow", { keep: true });
+      assert.deepEqual(result, {
+        done: true,
+        visible: false,
+        reason: "headless",
+      });
+    },
+  );
 });
 
 test("completeTaskSpace claims user-owned spaces before closing", async () => {
@@ -1003,12 +1146,16 @@ test("handOffTaskSpace reports a handoff the user cannot see", async () => {
       // What the Linux port answers when the browser is running headless: the
       // handoff happened, but there is no window for the user to act in.
       async handOffTaskSpace() {
-        return { done: true, visible: false };
+        return { done: true, visible: false, reason: "headless" };
       },
     },
     async () => {
       const result = await handOffTaskSpace("checkout-flow");
-      assert.deepEqual(result, { done: true, visible: false });
+      assert.deepEqual(result, {
+        done: true,
+        visible: false,
+        reason: "headless",
+      });
     },
   );
 });

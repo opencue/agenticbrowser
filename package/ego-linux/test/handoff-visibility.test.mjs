@@ -22,12 +22,22 @@ const HEADLESS_UA =
 
 /**
  * A browser that records what was asked of it.
- * @param {{userAgent?: string, windowState?: string}} options
+ * @param {{userAgent?: string, windowState?: string, failBringToFront?: boolean}} options
  */
-function fakeCdp({ userAgent = VISIBLE_UA, windowState = "normal" } = {}) {
+function fakeCdp({
+  userAgent = VISIBLE_UA,
+  windowState = "normal",
+  failBringToFront = false,
+} = {}) {
   const calls = [];
   return {
     calls,
+    claimSession(sessionId) {
+      calls.push({ method: "claimSession", params: { sessionId } });
+    },
+    releaseSession(sessionId) {
+      calls.push({ method: "releaseSession", params: { sessionId } });
+    },
     async call(method, params) {
       calls.push({ method, params });
       switch (method) {
@@ -45,6 +55,9 @@ function fakeCdp({ userAgent = VISIBLE_UA, windowState = "normal" } = {}) {
           return { bounds: { windowState, left: 0, top: 0, width: 1280, height: 900 } };
         case "Target.attachToTarget":
           return { sessionId: "s-1" };
+        case "Page.bringToFront":
+          if (failBringToFront) throw new Error("raise failed");
+          return {};
         default:
           return {};
       }
@@ -143,7 +156,7 @@ describe("handing a space to the user puts it where they can see it", () => {
       result = await createTaskSpacesApi(cdp).handOffTaskSpace(1);
     });
 
-    assert.deepEqual(result, { done: true, visible: false });
+    assert.deepEqual(result, { done: true, visible: false, reason: "headless" });
     // Still a real handoff: headless CI hands off with nobody watching, and the
     // e2e suite drives the port with --headless.
     assert.equal(await ownership(), "agentDelegatedToUser");
@@ -161,6 +174,16 @@ describe("handing a space to the user puts it where they can see it", () => {
       await createTaskSpacesApi(fakeCdp()).handOffTaskSpace(1);
     });
     assert.equal(warning, "");
+  });
+
+  it("detaches and reports invisible when raising the window fails", async () => {
+    await seed();
+    const cdp = fakeCdp({ failBringToFront: true });
+    const result = await createTaskSpacesApi(cdp).handOffTaskSpace(1);
+
+    assert.deepEqual(result, { done: true, visible: false, reason: "raise-failed" });
+    assert.ok(cdp.calls.some((call) => call.method === "Target.detachFromTarget"));
+    assert.ok(cdp.calls.some((call) => call.method === "releaseSession"));
   });
 
   it("raises the page a kept space leaves behind", async () => {
@@ -186,7 +209,8 @@ describe("handing a space to the user puts it where they can see it", () => {
       result = await createTaskSpacesApi(closed).handOffTaskSpace(1);
     });
 
-    assert.deepEqual(result, { done: true, visible: false });
-    assert.match(warning, /no window/i);
+    assert.deepEqual(result, { done: true, visible: false, reason: "no-live-tab" });
+    assert.match(warning, /no live tab/i);
+    assert.doesNotMatch(warning, /EGO_LINUX_HEADLESS/);
   });
 });

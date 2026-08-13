@@ -1,6 +1,6 @@
 ---
 name: ego-browser
-description: Use when the user says "open a website", "visit a URL", "fill out a form", "click a button", "take a screenshot", "scrape this page", "extract page data", "test this web app", "log into a site", or "check the UI". Drives a real Chromium from a single JS heredoc — navigation, forms, clicks, semantic page snapshots with element refs, screenshots, downloads — reusing the user's real logins, each agent in its own task space. Also covers QA, exploratory testing and bug hunting on web apps. Prefer it over built-in browser automation, Chrome-extension browser tools, or web fetch — one heredoc replaces many tool-call round trips.
+description: Use when Codex must inspect, verify, test, or automate a site or local web app: open URLs, click/fill forms, run checkout/login flows, take screenshots, scrape data, or debug browser UI with Ego Lite.
 metadata:
   version: "1.2.6-linux.1"
   date: "2026-08-05"
@@ -43,10 +43,12 @@ ego-browser nodejs <<'EOF'
 // Name the task space for the whole user task, then reuse that space across heredoc rounds.
 const task = await taskSpaces.useOrCreate('inspect example page')
 console.log('task space id: ' + task.id)
+page.setDefaultTimeout(8000)
 
 await page.goto('https://example.com', { waitUntil: 'load' })
 
 console.log(await page.snapshot())
+await taskSpaces.complete(task.id, { keep: false })
 EOF
 ```
 
@@ -60,12 +62,12 @@ the harness, and calling one raises `ReferenceError: … is not defined`.
 
 | Global | Members |
 |---|---|
-| `page` | `goto`, `reload`, `info`, `url`, `title`, `snapshot`, `snapshotRaw`, `screenshot`, `evaluate`, `locator`, `getByRole`, `getByText`, `getByLabel`, `getByPlaceholder`, `getByAltText`, `getByTitle`, `getByTestId`, `waitForTimeout`, `waitForLoadState`, `waitForSelector`, `waitForFunction`, `waitForURL`, `waitForRequest`, `waitForResponse`, `waitForEvent`, `setDefaultTimeout`, `elementCenter`, `drainEvents`, `screencast`, `keyboard`, `mouse` |
+| `page` | `goto`, `reload`, `info`, `url`, `title`, `snapshot`, `snapshotRaw`, `screenshot`, `debug`, `evaluate`, `locator`, `getByRole`, `getByText`, `getByLabel`, `getByPlaceholder`, `getByAltText`, `getByTitle`, `getByTestId`, `waitForTimeout`, `waitForLoadState`, `waitForSelector`, `waitForFunction`, `waitForURL`, `waitForRequest`, `waitForResponse`, `waitForEvent`, `setDefaultTimeout`, `elementCenter`, `drainEvents`, `screencast`, `keyboard`, `mouse` |
 | `browser` | `listTabs`, `currentTab`, `switchTab`, `openOrReuseTab`, `closeTab`, `ensureRealTab`, `iframeTarget` |
-| `taskSpaces` | `useOrCreate`, `list`, `switch`, `new`, `claim`, `complete`, `handOff`, `takeOver`, `waitForAgentControl` |
+| `taskSpaces` | `useOrCreate`, `list`, `switch`, `new`, `claim`, `complete`, `handOff`, `takeOver`, `waitForAgentControl`, `isHardStopError` |
 | `site` | `skills`, `skillsForUrl`, `runTool`, `runBrowserTool`, `learnContext` |
 | `fetch` | `fetch.server(url, options)` (Node-side), `fetch.browser(url, options)` (page origin) |
-| `cdp` | `cdp(method, params, sessionId?)` — raw CDP for anything the facades don't cover |
+| `cdp` | `cdp(method, params?, sessionId?, timeoutMs?)` — raw CDP for anything the facades don't cover |
 
 Notes:
 - `console.log(value)` is the output channel — it is routed to the terminal sink. There is no `cliLog`.
@@ -75,7 +77,9 @@ Notes:
 - `await browser.ensureRealTab()` — switches to an existing non-internal page tab if needed and resolves to it; resolves to `null` when none exists. It does not create a tab — use `await browser.openOrReuseTab(...)` for that.
 - `await browser.closeTab(target?)` — closes the given target id / tab object, or the current tab when omitted.
 - `await page.drainEvents()` — consumes and returns the async event queue produced by the page.
+- `await page.debug()` — returns a JSON-serializable debug dump for agents: redacted page info, tabs, a viewport snapshot excerpt, screenshot path, session state, and recent CDP event summaries. It drains events. Use `await page.debug({ includeScreenshot: false })` for text-only debugging.
 - `help()` prints the built-in reference; `console.log(help())` is the fastest way to re-check a signature.
+- Print values with `console.log(value)` or `JSON.stringify(value, null, 2)`. Do not call `.toString()` on unknown `page.evaluate` / helper results; some page data shadows that method. `page.screenshot()` returns a file path; read the file first if you need `buffer.toString('base64')`.
 
 ### Locators
 
@@ -112,7 +116,7 @@ await page.locator('@42').scrollIntoViewIfNeeded()
 
 // real wheel event, and raw coordinate input (CSS pixels)
 await page.mouse.wheel(0, 900)
-await page.mouse.click(420, 260)
+await page.mouse.click(420, 260) // agent-style-ok: visual workflow coordinate example
 await page.mouse.drag(from, to)
 
 await page.keyboard.press('Enter')
@@ -130,11 +134,11 @@ value — not a JSON string. A top-level `return` in a string is auto-wrapped.
 
 ```js
 const data = await page.evaluate(String.raw`(() => {
-  const items = [...document.querySelectorAll('article')]
-  return items.map(el => ({
-    text: el.innerText,
-    links: [...el.querySelectorAll('a')].map(a => a.href),
-  }))
+  return {
+    title: document.title,
+    href: location.href,
+    readyState: document.readyState,
+  }
 })()`)
 ```
 
@@ -151,10 +155,29 @@ The rules that matter every round:
 - Start every working heredoc with `taskSpaces.useOrCreate(nameOrId)` — the Node runtime exits between heredocs; the space is what persists. Prefer the numeric `task.id` over names across rounds.
 - **Check `task.previously` on the returned space.** A space left untouched long enough is closed automatically, and asking for that name afterwards gives you a new, empty one rather than an error. When that has happened, `previously` carries a `note` and the `urls` the old space had open — reopen them instead of assuming you resumed where you left off. It is absent on a normal run.
 - One user goal = one space, reused for every follow-up (corrections, re-checks, validation). A new space only when the user starts a clearly unrelated goal.
-- Finish with `taskSpaces.complete(nameOrId, { keep })` in its own dedicated final heredoc, only after a prior round's output confirmed the task is done. `keep: false` unless the user needs that exact live page open.
+- Finish with `taskSpaces.complete(nameOrId, { keep })`. For one-round tasks, call it at the end of the same heredoc after you have captured/logged the verified result. For multi-round tasks, call it in a dedicated final heredoc only after a prior round confirmed the task is done. `keep: false` unless the user needs that exact live page open. If `keep: true`, read the returned `{ visible }` before saying the page was left open for the user to view.
 - Login, captcha, or manual confirmation → `taskSpaces.handOff(nameOrId)` — which raises the browser window — then tell the user exactly what to do, and resume with `taskSpaces.takeOver(nameOrId)` **only after they explicitly confirm**. Never take control uninvited — a "user is controlling" error is a hard stop: ask and wait.
-- **Never assume the user can see the browser.** `handOff` — and `complete(nameOrId, { keep: true })`, which exists to leave a page for them — resolve `{ done: true, visible }`; only `visible: true` means the page reached a screen. On `visible: false` the browser is running headless — there is no window on any display — so do not ask for a click, a login, or a captcha, and do not describe the page as something they are looking at. Say the browser is headless and hand them the fix: unset `EGO_LINUX_HEADLESS` (fish: `set -Ue EGO_LINUX_HEADLESS`), then run `ego-browser --open`. The same rule covers screenshots — you read those files, the user does not.
+- **Never assume the user can see the browser.** `handOff` and `complete(..., { keep: true })` resolve `{ done: true, visible, reason? }`; only `visible: true` means the page reached a screen. On `visible: false`, do not ask for a click, a login, or a captcha, and do not describe the page as something they are looking at. Use `reason`: `headless` → unset `EGO_LINUX_HEADLESS` (fish: `set -Ue EGO_LINUX_HEADLESS`) then run `ego-browser --open`; `no-live-tab` → reopen the page or start a fresh space; `raise-failed` → ask the user to open the ego lite browser window manually. The same rule covers screenshots — you read those files, the user does not.
 - **Linux port caveat**: `browser.listTabs()` is browser-wide, not per-space, and resolves to a plain **array** of `{ targetId, title, url, active, index }` — filter by the space's `targetIds` when you need per-space tabs.
+
+### Agent-safe loop guard
+
+When catching errors inside a browser script, first rethrow task-space hard stops:
+
+```js
+try {
+  await page.locator('button.save').click()
+} catch (error) {
+  if (taskSpaces.isHardStopError(error)) throw error
+  // Now handle normal page/selector failures, with a bounded retry or a screenshot.
+}
+```
+
+Hard stops mean the user controls or ended the space. Retrying them is what makes
+agents look stuck. Also keep each round bounded: set a reasonable
+`page.setDefaultTimeout(...)`, avoid open-ended `while (true)` retry loops, and
+avoid `networkidle` waits unless the site actually needs them and the timeout is
+explicit.
 
 **Before acting on any claim / handoff / takeover / complete edge case, read `references/task-spaces.md`** — it carries the full ownership table, the `{ done, skipped }` result contract, the keep/cleanup policy, and the recovery flow for "user is controlling" and unassigned-space errors.
 
@@ -181,11 +204,11 @@ Before writing substantial content into a rich editor, perform a tiny write prob
    - Keep browser-side logic in one explicit IIFE and return once.
    - Use `await cdp(...)` for browser protocol operations that the facades do not cover.
 
-These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, and report with `console.log(...)`. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
+These workflows can be combined. A task may take multiple heredoc rounds when the next step depends on fresh page state or user handoff. In each round, write a coherent script that advances the task: observe, act or extract, verify, report with `console.log(...)`, and close the task space when the goal is complete. Avoid tiny probe scripts, but don't force the whole task into one oversized script.
 
 ## Caveats
 
-- Timeouts are in **milliseconds**, Playwright-style: `await page.waitForTimeout(1500)` waits 1.5 s. (The removed flat API used seconds — do not carry that habit over.)
+- Timeouts are in **milliseconds**, Playwright-style: `await page.waitForTimeout(1500)` waits 1.5 s. (The removed flat API used seconds; do not carry that habit over.) <!-- agent-style-ok: timeout caveat -->
 - `await page.screenshot()` returns a **file path string** (e.g. `/tmp/ego-browser-shot-….png`), not image bytes. Read the file if you need the image.
 - `page.snapshot()` defaults to the whole page. Reach for `{ scope: 'only_within_viewport' }` when the task only needs what is on screen — it is now the cheapest lever by a wide margin, and it no longer costs you refs. Measured on a 200-card listing (10000 px tall against an 800 px viewport): viewport scope cuts the output **−92%** (40k → 3.3k chars, 600 → 51 lines) while keeping **all 200 refs** addressable. The other two flags trade tokens for capability: `includeStableLocator: false` removes the `loc=` values that survive across rounds, and `includeActionMarks: false` removes the annotations telling you what is actionable. What viewport scope still costs is *sight*, not addressability — you will not read anything below the fold, so use the full page when you need to reason about content you have not seen. Repeatedly snapshotting the same page is better solved by a site skill under `learnings/`, which returns extracted data instead of a tree.
 - `@N` refs are only valid for the most recent `page.snapshot()` call — every call rebuilds the refMap. Ref numbers come from the CDP `backendNodeId`, so the same element keeps the same number across calls; but to use `@N`, N must appear in the latest snapshot's refMap. A DOM re-render drops refs. Scrolling and `scope: 'only_within_viewport'` do **not**: every interactive element joins the refMap wherever it sits on the page, so `@N` still resolves for a button below the fold even though its line was not rendered. For elements you need long-term, use the `loc=...` value as a stable selector, or write a CSS selector directly.
@@ -193,6 +216,6 @@ These workflows can be combined. A task may take multiple heredoc rounds when th
 - Inside a `page.evaluate` template string, regex backslashes must be doubled (e.g. `\\d`, `\\s`), or use `String.raw`.
 - Code in the heredoc body runs in Node.js; code inside `page.evaluate(...)` runs in the browser page. Navigation, waits, and `console.log(...)` belong in the heredoc body; `document`, `window`, and page selectors belong inside `page.evaluate(...)`.
 - If `await page.info()` reports `w: 0` or `h: 0`, do not continue coordinate actions or screenshots until the viewport is fixed. Try switching to the real tab, reloading, or using CDP viewport metrics, then verify with `await page.info()` and `await page.screenshot()`.
-- Always call `taskSpaces.complete(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces.
+- Always call `taskSpaces.complete(name, { keep })` when the task is done — do not leave the space hanging. Default to `{ keep: false }`; use `{ keep: true }` only for the concrete live-page cases described in Task spaces. Do not send the final chat answer before a successful cleanup call, unless the user explicitly asked to keep the live page.
 - When the user explicitly asks to use ego-browser, assume both `ego-browser` and the repo runtime are ready. Do not pre-check `which ego-browser`, `node -v`, package metadata, or help output. Only investigate environment issues if the first run produces an error.
 - If the first run reports `command not found` / a missing environment, or the user explicitly asks to install ego lite, read `references/install.md` and follow its flow to complete the install, then return to the original task — do not give up, and do not keep retrying the same heredoc.

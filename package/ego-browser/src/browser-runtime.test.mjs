@@ -111,6 +111,28 @@ test("isBrowserRuntime returns false when ego lacks sendCDPMessage", () => {
   }
 });
 
+test("browserCdp forwards explicit timeout to cdpOverride", async () => {
+  const calls = [];
+  state.cdpOverride = async (method, params, sessionId, timeoutMs) => {
+    calls.push([method, params, sessionId, timeoutMs]);
+    return { result: { ok: true } };
+  };
+  try {
+    const result = await browserCdp(
+      "Runtime.evaluate",
+      { expression: "1" },
+      "session-1",
+      4321,
+    );
+    assert.deepEqual(result, { result: { ok: true } });
+    assert.deepEqual(calls, [
+      ["Runtime.evaluate", { expression: "1" }, "session-1", 4321],
+    ]);
+  } finally {
+    cleanup();
+  }
+});
+
 /* ------------------------------------------------------------------ */
 /*  rawCdp — request/response                                         */
 /* ------------------------------------------------------------------ */

@@ -169,7 +169,36 @@ async function execute(code: string, stdout: WritableLike) {
   // A thrown Error surfaces a hard-stop message on its own, so flush as a thrown
   // completion (drop the buffer, stay silent) and let it propagate.
   flushSink(stdout, Boolean(thrown));
-  if (thrown) throw thrown;
+  if (thrown) throw withExecutionHint(thrown);
+}
+
+function withExecutionHint(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return error;
+  }
+  const err = error as { message?: unknown; stack?: unknown };
+  if (
+    typeof err.message !== "string" ||
+    !/\.toString is not a function/.test(err.message) ||
+    err.message.includes("ego-browser hint:")
+  ) {
+    return error;
+  }
+
+  const original = err.message;
+  const originalStack = typeof err.stack === "string" ? err.stack : undefined;
+  const hinted =
+    `${original}\n\n` +
+    "ego-browser hint: print helper results with console.log(value) or " +
+    "JSON.stringify(value, null, 2) instead of calling .toString() on " +
+    "unknown page data. page.screenshot() returns a file path; if you need " +
+    "image bytes, read that path with fs.readFile first, then call " +
+    "buffer.toString('base64').";
+  err.message = hinted;
+  if (originalStack) {
+    err.stack = originalStack.replace(original, hinted);
+  }
+  return error;
 }
 
 export async function executionContext() {

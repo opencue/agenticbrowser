@@ -42,6 +42,11 @@ type ScreenshotOptions = {
   clip?: ScreenshotClip;
 };
 
+// Rendering a large or image-heavy page can legitimately exceed the generic
+// CDP response deadline. Keep the larger allowance local to screenshot capture
+// so a stalled command elsewhere still fails fast.
+const SCREENSHOT_TIMEOUT_MS = 60000;
+
 /**
  * Drain the page/CDP events buffered since the last call.
  *
@@ -144,7 +149,12 @@ export async function screenshot(options: ScreenshotOptions = {}) {
       }
     }
   }
-  const result = await cdp("Page.captureScreenshot", params);
+  const result = await cdp(
+    "Page.captureScreenshot",
+    params,
+    undefined,
+    SCREENSHOT_TIMEOUT_MS,
+  );
   await mkdir(dirname(path), { recursive: true });
   await state.writeFile(path, Buffer.from(result.data, "base64"));
   return path;

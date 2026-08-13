@@ -245,6 +245,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
       newType: typeof taskSpaces.new,
       switchType: typeof taskSpaces.switch,
       claimType: typeof taskSpaces.claim,
+      isHardStopErrorType: typeof taskSpaces.isHardStopError,
       oldNewType: typeof newTaskSpace,
       rawClaimType: typeof ego.claimTaskSpace
     }));
@@ -257,6 +258,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
     newType: "function",
     switchType: "function",
     claimType: "function",
+    isHardStopErrorType: "function",
     oldNewType: "undefined",
     rawClaimType: "function",
   });

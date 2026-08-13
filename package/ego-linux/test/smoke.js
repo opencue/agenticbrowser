@@ -8,9 +8,18 @@ console.log("URL:      " + info.url);
 console.log("TITLE:    " + info.title);
 
 const tabs = await browser.listTabs();
-console.log("TABS:     " + tabs.length + " (active: " + tabs.filter((t) => t.active).length + ")");
+console.log(
+  "TABS:     " +
+    tabs.length +
+    " (active: " +
+    tabs.filter((t) => t.active).length +
+    ")",
+);
 
-const snap = await page.snapshotRaw({ scope: "full_page", includeStableLocator: true });
+const snap = await page.snapshotRaw({
+  scope: "full_page",
+  includeStableLocator: true,
+});
 console.log("REFS:     " + snap.refs.length);
 console.log("--- SNAPSHOT ---");
 console.log(snap.content);

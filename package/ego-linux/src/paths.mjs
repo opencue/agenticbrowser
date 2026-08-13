@@ -15,7 +15,8 @@ export const STATE_DIR = join(
   "ego-lite-linux",
 );
 
-export const PROFILE_DIR = process.env.EGO_LINUX_PROFILE || join(DATA_DIR, "profile");
+export const PROFILE_DIR =
+  process.env.EGO_LINUX_PROFILE || join(DATA_DIR, "profile");
 export const BROWSER_STATE_FILE = join(STATE_DIR, "browser.json");
 export const SPACES_STATE_FILE = join(STATE_DIR, "spaces-server.json");
 export const TASK_SPACE_FILE = join(STATE_DIR, "task-spaces.json");

@@ -51,7 +51,9 @@ function runCli(args, { stdin = null, timeout = 120000 } = {}) {
  */
 async function readExitType() {
   try {
-    return JSON.parse(await readFile(PREFERENCES, "utf8")).profile?.exit_type ?? null;
+    return (
+      JSON.parse(await readFile(PREFERENCES, "utf8")).profile?.exit_type ?? null
+    );
   } catch {
     return null;
   }
@@ -76,12 +78,19 @@ after(async () => {
     // nothing running
   }
   await new Promise((r) => setTimeout(r, 1000));
-  await rm(SANDBOX, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(() => {});
+  await rm(SANDBOX, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 300,
+  }).catch(() => {});
 });
 
 describe("stopping the backing browser", () => {
   it("exits cleanly, so the next launch offers no crash restore", async () => {
-    await runCli(["--headless"], { stdin: 'console.log("tabs=" + (await browser.listTabs()).length)' });
+    await runCli(["--headless"], {
+      stdin: 'console.log("tabs=" + (await browser.listTabs()).length)',
+    });
     // Chrome writes Preferences a beat after start, so this is the precondition
     // the real assertion below depends on, not a race of its own.
     assert.equal(
