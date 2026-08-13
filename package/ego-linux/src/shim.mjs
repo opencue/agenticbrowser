@@ -23,12 +23,18 @@ export async function createEgoShim({ headless = false } = {}) {
   // harness's context-less setDownloadBehavior has to be aimed at the space the
   // agent is actually in. See aimDownloadsAtCurrentSpace in transport.mjs.
   cdp.setDownloadContext(() => taskSpaces.selectedContextId());
+  // The transport refuses writes while this process is only watching a space;
+  // it asks the task-space API, which owns that flag. See assertNotObserving.
+  cdp.setObserving(() => taskSpaces.isObserving());
   const tabs = createTabsApi(cdp, {
     port,
     getScope: () => taskSpaces.selectedScope(),
   });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
-  const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
+  const cursor = createCursorApi(cdp, {
+    listTabs: tabs.listTabs,
+    isObserving: () => taskSpaces.isObserving(),
+  });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples
   // where it landed — so a user watching the window sees the agent work.
@@ -103,6 +109,10 @@ export async function createEgoShim({ headless = false } = {}) {
       return result;
     },
     claimTaskSpace: taskSpaces.claimTaskSpace,
+    // Watching a space rather than driving it. No cursor.watchPage() here on
+    // purpose: re-arming the overlay is what a driver does to keep its own mark
+    // on screen, and an observer has no mark to keep.
+    observeTaskSpace: taskSpaces.observeTaskSpace,
     // Handing a space back to the user drops the agent overlay, and taking it
     // over brings it back — the same signal the native app's Space overlay gives.
     async handOffTaskSpace(id) {

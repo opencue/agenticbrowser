@@ -127,6 +127,7 @@ const LEGACY_GLOBAL_HELPERS = [
   "newTaskSpace",
   "useOrCreateTaskSpace",
   "claimTaskSpace",
+  "observeTaskSpace",
   "completeTaskSpace",
   "handOffTaskSpace",
   "takeOverTaskSpace",
@@ -140,6 +141,7 @@ const LEGACY_GLOBAL_HELPERS = [
 // Marks an ego runtime whose mutating methods have already been wrapped, so a
 // second installEgoSdk call cannot double-wrap createTab / task-space methods.
 const EGO_WRAPPED = Symbol.for("egoBrowser.sdkWrapped");
+
 
 export function installEgoSdk(
   target: InstallTarget = globalThis,

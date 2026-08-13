@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { setOverrides, state } from "./state.js";
+import { assertNotObserving, setOverrides, state } from "./state.js";
 import { assertNoEgoError, isEgoUserControlError } from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { cdp, decodeUnserializableJsValue, evaluate } from "./cdp-eval.js";
@@ -128,6 +128,11 @@ export async function listTaskSpaces() {
  *   completeTaskSpace { keep: true }    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
  *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
+ *   observeTaskSpace                    -> no ownership check (watching a user-owned space is fine)
+ *
+ * observeTaskSpace is the one entry that does not want the space: it attaches
+ * read-only, leaves ownership where it is, and makes every mutating helper throw
+ * until takeOverTaskSpace is called. See OBSERVER_BLOCKED_HELPERS in index.ts.
  *
  * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
  */
@@ -254,11 +259,51 @@ async function claimResolvedTaskSpace(space, op = "claimTaskSpace") {
   return selectTaskSpace(ego, claimed, op);
 }
 
+/**
+ * Watch a task space another agent is driving, without touching it.
+ *
+ * The only other way to attach to a space someone else has was to take it over,
+ * which does not join — it seizes, and the agent already working there keeps
+ * going, so both drive the same page and neither knows. Observing is the honest
+ * version: snapshot and screenshot work, every mutating helper refuses.
+ *
+ * Deliberately not routed through selectTaskSpace: that calls ego.useTaskSpace,
+ * which means "I am driving this" on the backing layer and would raise the
+ * driver's window and clear the observing flag it just set.
+ *
+ * Any space may be observed whatever its ownership, so there is no isAgentOwned
+ * check here — watching a user-owned space is as legitimate as watching another
+ * agent's. Call takeOverTaskSpace(nameOrId) to stop watching and take control.
+ *
+ * The guarantee is cooperative, not enforced: each heredoc runs its own backing
+ * shim against the shared browser, so this stops an observer disturbing the page
+ * by accident, which is the case that happens. It is not a boundary against a
+ * peer that means to write anyway.
+ * @param {string|number} nameOrId Task space id or name.
+ * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
+ */
+export async function observeTaskSpace(nameOrId) {
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.observeTaskSpace !== "function") {
+    throw new Error("observeTaskSpace requires ego.observeTaskSpace");
+  }
+  const space = await findTaskSpace(nameOrId);
+  assertNoEgoError(
+    await ego.observeTaskSpace(taskSpaceNumericId(space, "observeTaskSpace")),
+    "observeTaskSpace",
+  );
+  state.observing = true;
+  return space;
+}
+
 async function selectTaskSpace(ego, space, op: string) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
   assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
+  // Selecting a space to work in is the opposite of watching one. The backing
+  // layer clears its own flag on useTaskSpace; this keeps the two in step.
+  state.observing = false;
   return space;
 }
 
@@ -301,6 +346,8 @@ export async function completeTaskSpace(
   if (!options || typeof options.keep !== "boolean") {
     throw new Error("completeTaskSpace requires { keep: boolean }");
   }
+  // Deciding a space is finished is the driver's call, not a watcher's.
+  assertNotObserving("completeTaskSpace");
   const ego = globalThis.ego;
   if (!ego) {
     throw new Error("completeTaskSpace requires ego runtime");
@@ -351,6 +398,9 @@ export async function completeTaskSpace(
  */
 export async function handOffTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
+  // Passing control on is the driver's call, not a watcher's. Checked before the
+  // runtime lookup so an observer is told why, not told the binding is missing.
+  assertNotObserving("handOffTaskSpace");
   if (!ego || typeof ego.handOffTaskSpace !== "function") {
     throw new Error("handOffTaskSpace requires ego.handOffTaskSpace");
   }
@@ -380,6 +430,9 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
   }
   await selectTaskSpaceIfProvided(ego, nameOrId, "takeOverTaskSpace");
   assertNoEgoError(await ego.takeOverTaskSpace(), "takeOverTaskSpace");
+  // The documented way out of observing. Cleared after the call succeeds, so a
+  // failed take-over leaves the session watching rather than half-driving.
+  state.observing = false;
 }
 
 /**
@@ -644,8 +697,10 @@ function createLocator(selector) {
     allTextContents: () => locator.allTextContents(selector),
     evaluate: (pageFunction, arg = undefined) =>
       locator.evaluateLocator(selector, pageFunction, arg),
-    evaluateAll: (pageFunction, arg = undefined) =>
-      locator.evaluateAll(selector, pageFunction, arg),
+    evaluateAll: (pageFunction, arg = undefined) => {
+      assertNotObserving("locator.evaluateAll");
+      return locator.evaluateAll(selector, pageFunction, arg);
+    },
     waitFor: (options = {}) => waits.waitForSelector(selector, options),
   };
 }
@@ -768,7 +823,15 @@ function createPageFacade() {
     waitForRequest: waits.waitForRequest,
     waitForResponse: waits.waitForResponse,
     waitForEvent: downloads.waitForEvent,
-    evaluate,
+    // Guarded here rather than at evaluate() itself: page.info, screenshot and
+    // waitForLoadState all read through that same function, and an observer needs
+    // every one of them. Arbitrary JS is a write vector whatever it is meant for —
+    // document.querySelector("button").click() is a click — and the backing layer
+    // cannot tell it apart from the snapshot it has to allow.
+    evaluate: (pageFunction, arg = undefined) => {
+      assertNotObserving("page.evaluate");
+      return evaluate(pageFunction, arg);
+    },
     screenshot: observe.screenshot,
     snapshot: observe.snapshot,
     snapshotRaw: observe.snapshotRaw,
@@ -829,6 +892,7 @@ function createTaskSpacesFacade() {
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
     claim: claimTaskSpace,
+    observe: observeTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
     takeOver: takeOverTaskSpace,
@@ -840,8 +904,16 @@ function createSiteFacade() {
   return {
     skills: siteSkills,
     skillsForUrl: siteSkillsForUrl,
-    runTool: runSiteTool,
-    runBrowserTool: runSiteBrowserTool,
+    // Site tools act on the page, and runBrowserTool is arbitrary JS by another
+    // name — the same reason page.evaluate is guarded here.
+    runTool: (siteId, toolName, args: any = {}) => {
+      assertNotObserving("site.runTool");
+      return runSiteTool(siteId, toolName, args);
+    },
+    runBrowserTool: (siteId, toolName, args: any = {}) => {
+      assertNotObserving("site.runBrowserTool");
+      return runSiteBrowserTool(siteId, toolName, args);
+    },
     learnContext,
   };
 }

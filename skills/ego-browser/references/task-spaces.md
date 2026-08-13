@@ -46,6 +46,7 @@ the facades treat user-owned spaces differently:
 | `taskSpaces.complete(…, { keep: true })` | skipped — resolves `{ done: false, skipped: 'user-owned' }` |
 | `taskSpaces.complete(…, { keep: false })` | claims it, then closes it |
 | `taskSpaces.takeOver` / `waitForAgentControl` | no ownership check |
+| `taskSpaces.observe` | no ownership check — watching a user-owned space is fine |
 
 `taskSpaces.handOff` and `taskSpaces.complete` resolve `{ done: true }` when
 the operation actually happened. Check `done` before telling the user the
@@ -80,6 +81,56 @@ go rather than letting them all accumulate for the end. When finishing with
 tabs so only the pages worth showing stay open. Close a single tab with
 `await browser.closeTab(targetId)` (`targetId` comes from `browser.listTabs()`
 or an `openOrReuseTab` return value).
+
+## Watching a space someone else is driving
+
+`await taskSpaces.observe(nameOrId)` attaches to a space **read-only**: reads keep
+working, every mutating call throws until you take control. Use it when a second
+agent needs to see a flow in progress — reviewing another agent's work, QA'ing a
+checkout as it happens — rather than joining in and driving the same page.
+
+The alternative was `taskSpaces.takeOver`, and it is worth being clear about why
+that is not the same thing: take-over does not join a space, it **seizes** it. The
+agent already working there keeps its own pin and goes on acting, so both drive
+the same page and neither knows. That is the failure this exists to avoid.
+
+```js
+await taskSpaces.observe("Checkout flow");   // attach, read-only
+const snap = await page.snapshot();          // works
+await page.screenshot({ path: "qa.png" });   // works
+await page.locator("#buy").click();          // throws: observing, not driving
+await taskSpaces.takeOver("Checkout flow");  // now you drive; input works again
+```
+
+**What still works**: `snapshot`, `snapshotRaw`, `screenshot`, `page.info`,
+`textContent` / `innerText` / `count` / `getAttribute`, the `waitFor*` family,
+`browser.listTabs`, `taskSpaces.list`.
+
+**What throws**: everything that changes the page or the space — pointer and
+keyboard (`locator.click`, `fill`, `check`, `selectOption`, `page.mouse.*`,
+`page.keyboard.*`), `page.goto` / `page.reload`, tab churn (`switchTab`,
+`openOrReuseTab`, `closeTab`), the site tools, and `taskSpaces.complete` /
+`taskSpaces.handOff` — deciding a space is finished is the driver's call.
+
+`page.evaluate` throws too, even though it is often used to read. It is arbitrary
+JS, and `document.querySelector("button").click()` is a click; the backing layer
+cannot tell those apart, so this is where the line gets drawn. Use `snapshot` and
+the locator read helpers instead.
+
+Observing does not select the space, raise its window, change its ownership, or
+write shared state — the overview keeps naming the agent that is actually
+responsible for the page. The observer also draws no cursor: the overlay is a
+single element in the page, so a watcher that drew one would overwrite the
+driver's mark rather than appear beside it.
+
+**The guarantee is cooperative, not enforced.** Each heredoc runs its own backing
+shim against the shared browser, so there is no arbiter that can stop a session
+that means to write anyway. This reliably prevents an observer disturbing a space
+*by accident*, which is the case that actually happens. Do not treat it as a
+security boundary between agents you do not trust.
+
+Any ownership may be observed, including `user`. Leave observing by calling
+`taskSpaces.takeOver`, `claim`, `switch`, `new`, or `useOrCreate`.
 
 ## Control handoff
 

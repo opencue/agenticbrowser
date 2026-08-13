@@ -23,6 +23,43 @@ const OPEN_TIMEOUT_MS = 10000;
 const CALL_TIMEOUT_MS = 30000;
 const INTERNAL_ID_BASE = 1_000_000;
 
+/**
+ * What an observer is not allowed to send.
+ *
+ * The harness blocks its own public methods by name, which is where a useful
+ * error can be written; this is the layer under that, so a path nobody thought
+ * to guard still cannot move the page out from under the agent driving it.
+ *
+ * Runtime.evaluate is deliberately absent. The shim's own snapshot runs through
+ * it, so blocking it here would break the one thing an observer exists to do —
+ * and since it is arbitrary JS, allowing it means the read-only promise holds
+ * only as far as the harness's page.evaluate() guard. That is a real limit, and
+ * it is documented rather than papered over.
+ */
+const OBSERVER_BLOCKED_METHODS = new Set([
+  // Input, the whole point.
+  "Input.dispatchMouseEvent",
+  "Input.dispatchKeyEvent",
+  "Input.insertText",
+  "Input.dispatchTouchEvent",
+  // Moving the page the driver is working in.
+  "Page.navigate",
+  "Page.reload",
+  "Page.navigateToHistoryEntry",
+  // Adding or removing tabs changes what the space *is*.
+  "Target.createTarget",
+  "Target.closeTarget",
+  // Stealing the window from whoever is meant to be looking at it.
+  "Page.bringToFront",
+  "Target.activateTarget",
+  "Browser.setWindowBounds",
+]);
+
+/** Whether a CDP method is one an observing session must not send. */
+export function isObserverBlocked(method) {
+  return OBSERVER_BLOCKED_METHODS.has(method);
+}
+
 export async function connectCdp(wsUrl) {
   const socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
@@ -42,6 +79,7 @@ export async function connectCdp(wsUrl) {
   let navWatcher = null;
   let viewportWatcher = null;
   let downloadContextResolver = null;
+  let observingResolver = null;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
@@ -206,10 +244,36 @@ export async function connectCdp(wsUrl) {
     }
   }
 
+  /**
+   * Refuse a write while this process is only watching.
+   *
+   * Throws rather than dropping the message: the harness waits for a reply by id,
+   * so a silently swallowed payload would hang until the call timed out and then
+   * report the wrong cause. assertOpen already throws from here, so a synchronous
+   * throw is what callers of sendRaw are built for.
+   */
+  function assertNotObserving(payload) {
+    if (!observingResolver?.()) return;
+    let method;
+    try {
+      method = JSON.parse(payload)?.method;
+    } catch {
+      // A payload we cannot read is not one we can judge; the socket will say so.
+      return;
+    }
+    if (!isObserverBlocked(method)) return;
+    throw new Error(
+      `${method} is not allowed while observing a task space: this session is ` +
+        `watching it, not driving it. Call takeOverTaskSpace(<name or id>) to ` +
+        `take control first, or drop the write.`,
+    );
+  }
+
   return {
     /** Raw passthrough for harness-authored payloads (ids below the shim's base). */
     sendRaw(payload) {
       assertOpen();
+      assertNotObserving(payload);
       noteActivation(payload);
       socket.send(aimDownloadsAtCurrentSpace(payload));
     },
@@ -220,6 +284,14 @@ export async function connectCdp(wsUrl) {
      */
     setDownloadContext(resolver) {
       downloadContextResolver = resolver;
+    },
+
+    /**
+     * Tell the transport whether this process is only watching. Set by the shim
+     * to the task-space API's isObserving; see assertNotObserving.
+     */
+    setObserving(resolver) {
+      observingResolver = resolver;
     },
 
     /**

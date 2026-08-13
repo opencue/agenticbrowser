@@ -44,7 +44,7 @@ const MIN_PRESS_MS = 130;
 /** Keystrokes stop arriving well before the agent is done thinking; hold on. */
 const TYPING_IDLE_MS = 700;
 
-export function createCursorApi(cdp, { listTabs }) {
+export function createCursorApi(cdp, { listTabs, isObserving = () => false }) {
   const enabled = process.env.EGO_LINUX_CURSOR !== "0";
   const name = process.env.EGO_LINUX_CURSOR_NAME || "Claude";
   const sessionForActiveTab = createSessionResolver(cdp, {
@@ -145,6 +145,12 @@ export function createCursorApi(cdp, { listTabs }) {
    * lands mid-flight is carried over to the next render rather than dropped.
    */
   function schedule() {
+    // An observer draws nothing. The overlay is a singleton in the page (one
+    // HOST_ID, one __egoState), so a watcher that rendered would not appear
+    // beside the driver — it would overwrite it, and the badge would name the
+    // wrong agent for whatever the driver did next. Staying invisible keeps the
+    // one cursor on screen honest about who is acting.
+    if (isObserving()) return;
     dirty = true;
     if (inFlight) return;
     void flush();

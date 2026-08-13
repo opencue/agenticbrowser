@@ -60,6 +60,23 @@ export function createTaskSpacesApi(cdp) {
    */
   let pinnedSpaceId = null;
 
+  /**
+   * Whether this process is only watching the space it pinned.
+   *
+   * A second agent attaching to a space someone else is driving used to have one
+   * option — take it over — which does not join, it seizes: the first agent keeps
+   * its own pin and goes on acting, so both drive the same page and neither knows.
+   * Observing is the honest version of "let me see what you are doing".
+   *
+   * The flag lives in this process, and that is the whole guarantee. Each heredoc
+   * runs its own shim against the shared browser (see bin/ego-browser.mjs), so
+   * there is no arbiter that could refuse a rogue writer; what this prevents is an
+   * observer disturbing the space *by accident*, which is the case that actually
+   * happens. It is not a security boundary, and the docs say so rather than
+   * implying otherwise.
+   */
+  let observing = false;
+
   /** The pinned space if it still exists, else whatever the file last recorded. */
   function effectiveSelectedId(state) {
     if (
@@ -569,6 +586,9 @@ export function createTaskSpacesApi(cdp) {
       state.nextId += 1;
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+      // A space this process just opened is one it drives, whatever it was doing
+      // before.
+      observing = false;
 
       // useOrCreate lands here whenever it cannot find the name it was given —
       // including when the idle sweep closed that very space while its agent was
@@ -602,6 +622,7 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "useTaskSpace");
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+      observing = false;
       // Selected first, so the space this session came back for is the one the
       // sweep protects rather than the one it closes.
       await pruneIdle(state);
@@ -610,10 +631,42 @@ export function createTaskSpacesApi(cdp) {
       return { done: true };
     },
 
+    /**
+     * Watch a space someone else is driving, without touching it.
+     *
+     * Every line this does *not* run is the point, so they are worth naming:
+     *
+     *   - no writeState. The observer has nothing to record, and the state file
+     *     is an unlocked read-modify-write shared with the agent that is actively
+     *     working — a write from here would be a lost update waiting to happen.
+     *   - no focusSpace. Raising the window would yank it out from under the very
+     *     person the driver may be mid-handoff to.
+     *   - no pruneIdle. Sweeping is a driver's business; an observer must never
+     *     close a space it merely looked at.
+     *   - no ownership change. The driver stays the owner, and the overview keeps
+     *     telling the truth about who is responsible for the page.
+     *
+     * Any space may be observed whatever its ownership — watching one the user
+     * owns is as legitimate as watching another agent's.
+     */
+    async observeTaskSpace(id) {
+      const state = await readState();
+      const space = await requireSpace(state, id, "observeTaskSpace");
+      pinnedSpaceId = space.id;
+      observing = true;
+      return { done: true, observing: true, id: space.id, name: space.name };
+    },
+
+    /** Whether this process is watching rather than driving. */
+    isObserving() {
+      return observing;
+    },
+
     async claimTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "claimTaskSpace");
       space.ownership = "agent";
+      observing = false;
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
       await writeState(state);
@@ -651,6 +704,9 @@ export function createTaskSpacesApi(cdp) {
       space.ownership = "agent";
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+      // The documented way out of observing: an agent that has seen enough takes
+      // control, and its input starts landing again from this line on.
+      observing = false;
       await writeState(state);
       await focusSpace(space);
       return { done: true };
