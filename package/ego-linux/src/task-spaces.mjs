@@ -192,6 +192,20 @@ export function createTaskSpacesApi(cdp) {
    * is working, and a space parked on a live dashboard is not. Live work keeps
    * itself alive by continuing, since every round touches the space it uses.
    *
+   * It runs when a session commits to a space, not when spaces are listed.
+   * Coming back to one starts by listing them — useOrCreate(id) resolves the id
+   * against the list before it selects — so sweeping on the read path reaped the
+   * very space the returning agent had just named, one call before the touch
+   * that would have spared it. The symptom is a `task space not found: 172` for
+   * a space that was alive until it was asked for, and a session quiet for
+   * longer than the gap between two user turns is the ordinary case, not an
+   * abandoned one. A poll of the Spaces panel had the same effect, so an open
+   * overview quietly shortened every space's life.
+   *
+   * Selecting is the first moment the sweep knows which space is wanted, and
+   * every path the harness takes ends there — switch, claim, create and reuse
+   * all select afterwards — so nothing goes unswept by waiting for it.
+   *
    * The selected space is never swept — it is the one someone is on right now —
    * and EGO_LINUX_SPACE_IDLE_MIN=0 turns the sweep off for anyone who would
    * rather clean up by hand.
@@ -291,7 +305,6 @@ export function createTaskSpacesApi(cdp) {
 
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
-    if (await pruneIdle(state)) changed = true;
 
     const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
     if (surviving.length !== state.spaces.length) {
@@ -357,6 +370,77 @@ export function createTaskSpacesApi(cdp) {
     if (targetId) {
       await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
     }
+  }
+
+  /**
+   * Whether this browser draws windows at all.
+   *
+   * Cached: a running browser cannot change mode, and every handoff asks.
+   * `--headless=new` reports an ordinary product string ("Chrome/148.0.7778.167"),
+   * so the user agent is the only field of Browser.getVersion that still names
+   * the mode.
+   */
+  let windowed = null;
+  async function hasWindow() {
+    if (windowed === null) {
+      try {
+        const { userAgent } = await cdp.call("Browser.getVersion");
+        windowed = !/headless/i.test(String(userAgent ?? ""));
+      } catch {
+        // A protocol hiccup is not evidence of a missing window. Assume there
+        // is one rather than warn about a browser the user is looking at.
+        windowed = true;
+      }
+    }
+    return windowed;
+  }
+
+  /**
+   * Put the space where a person can actually see it.
+   *
+   * focusSpace() selects the tab, which is all an agent ever needs — it observes
+   * through CDP either way, so a buried window costs it nothing. Handing control
+   * to the user is the one moment someone has to find that window on their own
+   * desktop, and a minimized window behind an IDE looks exactly like nothing
+   * happened.
+   *
+   * Resolves to whether there is a window on screen at all, so the caller can
+   * say so instead of asking the user to click something that does not exist.
+   */
+  async function presentSpace(space) {
+    const live = await livePageTargets().catch(() => new Map());
+    const targetId = (space.targetIds || []).find((id) => live.has(id));
+    if (!targetId) return false;
+    await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    if (!(await hasWindow())) return false;
+
+    try {
+      const { windowId } = await cdp.call("Browser.getWindowForTarget", { targetId });
+      const { bounds } = await cdp.call("Browser.getWindowBounds", { windowId });
+      // Only a minimized window is restored. Sending "normal" unconditionally
+      // would un-maximize a window the user maximized themselves — taking the
+      // browser away from them on the call that hands it to them.
+      if (bounds?.windowState === "minimized") {
+        await cdp.call("Browser.setWindowBounds", {
+          windowId,
+          bounds: { windowState: "normal" },
+        });
+      }
+    } catch {
+      // No window manager, or a compositor that refuses the bounds change.
+    }
+
+    try {
+      const { sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      });
+      await cdp.call("Page.bringToFront", {}, sessionId);
+      await cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+    } catch {
+      // Raising is best-effort — activateTarget above already selected the tab.
+    }
+    return true;
   }
 
   /**
@@ -518,6 +602,9 @@ export function createTaskSpacesApi(cdp) {
       const space = await requireSpace(state, id, "useTaskSpace");
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
+      // Selected first, so the space this session came back for is the one the
+      // sweep protects rather than the one it closes.
+      await pruneIdle(state);
       await writeState(state);
       await focusSpace(space);
       return { done: true };
@@ -537,9 +624,25 @@ export function createTaskSpacesApi(cdp) {
     async handOffTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "handOffTaskSpace");
+      // Raised before ownership moves: past this line the agent stops driving,
+      // so it is the last moment anything can put the page in front of the
+      // person who is about to be asked to act on it.
+      const visible = await presentSpace(space);
       space.ownership = "agentDelegatedToUser";
       await writeState(state);
-      return { done: true };
+      if (!visible) {
+        // Not an error. Headless is a supported way to run and CI hands off
+        // with nobody watching; the handoff itself is still valid. It only
+        // becomes a lie when the agent goes on to say "click the button in the
+        // browser", so this says otherwise on the channel the agent reads.
+        process.stderr.write(
+          `ego-browser: handed off task space ${space.id}, but this browser has no window ` +
+            `on screen — the user cannot see the page or act on it. Do not ask them to click, ` +
+            `log in, or solve a captcha here. Get a visible browser first: unset ` +
+            `EGO_LINUX_HEADLESS, then run \`ego-browser --open\`.\n`,
+        );
+      }
+      return { done: true, visible };
     },
 
     async takeOverTaskSpace(id) {
@@ -558,9 +661,13 @@ export function createTaskSpacesApi(cdp) {
     async completeTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "completeTaskSpace");
+      // `keep: true` exists to leave a page for the user to look at, so the same
+      // rule as handoff applies: raise it, and report whether there was
+      // anything to raise.
+      const visible = await presentSpace(space);
       space.ownership = "user";
       await writeState(state);
-      return { done: true };
+      return { done: true, visible };
     },
 
     async closeTaskSpace(id) {

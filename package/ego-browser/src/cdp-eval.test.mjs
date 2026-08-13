@@ -140,7 +140,58 @@ test("runtimeValue throws on exception details", () => {
         },
         "throw new Error()",
       ),
-    /JavaScript evaluation failed at line 0, column 5/,
+    // CDP counts from 0; the message counts from 1, like the V8 stack trace
+    // printed beneath it and like every editor the caller will go look in.
+    /JavaScript evaluation failed at line 1, column 6/,
+  );
+});
+
+test("runtimeValue reports the line the V8 stack trace names, not one above it", () => {
+  const expression = [
+    "(() => {",
+    "  const li = document.querySelector('li.snap-start')",
+    "  return li.getBoundingClientRect()",
+    "})()",
+  ].join("\n");
+  assert.throws(
+    () =>
+      runtimeValue(
+        {
+          result: { type: "object", subtype: "error" },
+          exceptionDetails: {
+            text: "Uncaught",
+            // 0-based: the `return li.getBoundingClientRect()` line.
+            lineNumber: 2,
+            columnNumber: 12,
+          },
+        },
+        expression,
+      ),
+    (error) => {
+      assert.match(error.message, /at line 3, column 13/);
+      // The 160-char snippet stops before the failing line on a real script,
+      // so the line itself has to be quoted.
+      assert.match(error.message, /return li\.getBoundingClientRect\(\)/);
+      return true;
+    },
+  );
+});
+
+test("runtimeValue leaves a single-line expression unquoted, since the snippet already shows it", () => {
+  assert.throws(
+    () =>
+      runtimeValue(
+        {
+          result: { type: "object", subtype: "error" },
+          exceptionDetails: {
+            text: "Uncaught",
+            lineNumber: 0,
+            columnNumber: 0,
+          },
+        },
+        "boom()",
+      ),
+    /failed at line 1, column 1: Uncaught; expression: boom\(\)/,
   );
 });
 

@@ -19,6 +19,7 @@ function fakeCdp() {
         return {
           targetInfos: [
             { type: "page", targetId: "t-1", url: "https://foxglove.example/a" },
+            { type: "page", targetId: "t-2", url: "https://foxglove.example/b" },
           ],
         };
       }
@@ -29,30 +30,47 @@ function fakeCdp() {
   };
 }
 
-async function seedIdleSpace() {
+function space(id, name, targetId, touchedAt) {
   const at = Date.now() - 90 * MINUTE;
+  return {
+    id,
+    taskId: id,
+    name,
+    createdAt: at,
+    touchedAt,
+    lastContentAt: at,
+    ownership: "agent",
+    targetIds: [targetId],
+    urls: [`https://foxglove.example/${targetId}`, "about:blank"],
+  };
+}
+
+/**
+ * The idle space, plus the space whose selection runs the sweep — that is where
+ * it runs now, so a seed of one space would have nothing to sweep it.
+ */
+async function seedIdleSpace() {
   await mkdir(STATE_DIR, { recursive: true });
   await writeFile(
     TASK_SPACE_FILE,
     JSON.stringify({
       spaces: [
         {
-          id: 1,
-          taskId: 1,
-          name: "long running work",
-          createdAt: at,
-          touchedAt: at,
-          lastContentAt: at,
-          ownership: "agent",
-          targetIds: ["t-1"],
+          ...space(1, "long running work", "t-1", Date.now() - 90 * MINUTE),
           urls: ["https://foxglove.example/a", "about:blank"],
         },
+        space(2, "the work in hand", "t-2", Date.now()),
       ],
       selectedId: null,
-      nextId: 2,
+      nextId: 3,
       closedSpaces: [],
     }),
   );
+}
+
+/** Sweep the way a session does: by settling into a space of its own. */
+async function sweep(api) {
+  await api.useTaskSpace(2);
 }
 
 describe("an idle-closed space leaves something to come back to", () => {
@@ -60,10 +78,14 @@ describe("an idle-closed space leaves something to come back to", () => {
     process.env.EGO_LINUX_SPACE_IDLE_MIN = "30";
     await seedIdleSpace();
 
-    await createTaskSpacesApi(fakeCdp()).listTaskSpaces();
+    await sweep(createTaskSpacesApi(fakeCdp()));
 
     const state = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
-    assert.equal(state.spaces.length, 0, "the space is closed");
+    assert.deepEqual(
+      state.spaces.map((s) => s.id),
+      [2],
+      "the idle space is closed",
+    );
     assert.equal(state.closedSpaces.length, 1, "and remembered");
 
     const [closure] = state.closedSpaces;
@@ -80,7 +102,7 @@ describe("an idle-closed space leaves something to come back to", () => {
     process.env.EGO_LINUX_SPACE_IDLE_MIN = "30";
     await seedIdleSpace();
     const api = createTaskSpacesApi(fakeCdp());
-    await api.listTaskSpaces();
+    await sweep(api);
 
     // What useOrCreate does once it cannot find the name it was given.
     const space = await api.createTaskSpace("long running work");

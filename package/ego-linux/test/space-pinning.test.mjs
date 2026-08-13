@@ -86,7 +86,7 @@ describe("a process stays in the space it chose", () => {
 
     // requireSpace with no id is what every unqualified call resolves through.
     const current = await api.completeTaskSpace();
-    assert.deepEqual(current, { done: true });
+    assert.equal(current.done, true);
     const after = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
     assert.equal(
       after.spaces.find((s) => s.id === 1).ownership,

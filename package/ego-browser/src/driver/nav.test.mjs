@@ -8,6 +8,7 @@ import {
   pendingDialog,
 } from "../../dist/src/browser-runtime.js";
 import {
+  goto,
   listTabs,
   newTab,
   openOrReuseTab,
@@ -533,4 +534,99 @@ test("pageInfo tolerates a transient document without documentElement", async ()
   } finally {
     restore();
   }
+});
+
+// A runtime whose Page.navigate answers with the given result, so the tests can
+// drive the failure modes the network layer reports back through CDP.
+function withNavigateResult(navigateResult, fn) {
+  const previous = globalThis.ego;
+  invalidateSession();
+  globalThis.ego = {
+    async listTabs() {
+      return {
+        tabs: [
+          {
+            targetId: "target-1",
+            active: true,
+            title: "localhost",
+            url: "about:blank",
+          },
+        ],
+      };
+    },
+    sendCDPMessage(payload) {
+      const request = JSON.parse(payload);
+      let result = {};
+      if (request.method === "Target.attachToTarget") {
+        result = { sessionId: "session-1" };
+      } else if (request.method === "Page.navigate") {
+        result = navigateResult;
+      }
+      queueMicrotask(() =>
+        globalThis.ego.onCDPMessage?.(
+          JSON.stringify({ id: request.id, result }),
+        ),
+      );
+      return true;
+    },
+  };
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      invalidateSession();
+      if (previous === undefined) {
+        delete globalThis.ego;
+      } else {
+        globalThis.ego = previous;
+      }
+    });
+}
+
+test("goto reports a navigation the network refused", async () => {
+  await withNavigateResult(
+    { frameId: "frame-1", errorText: "net::ERR_CONNECTION_REFUSED" },
+    async () => {
+      await assert.rejects(
+        () => goto("http://localhost:5173/", { waitUntil: "commit" }),
+        /net::ERR_CONNECTION_REFUSED/,
+      );
+    },
+  );
+});
+
+test("goto names the URL that failed, not just the reason", async () => {
+  await withNavigateResult(
+    { frameId: "frame-1", errorText: "net::ERR_NAME_NOT_RESOLVED" },
+    async () => {
+      await assert.rejects(
+        () => goto("http://nope.invalid/", { waitUntil: "commit" }),
+        /nope\.invalid/,
+      );
+    },
+  );
+});
+
+test("goto lets an aborted navigation through, since a download reports one", async () => {
+  await withNavigateResult(
+    { frameId: "frame-1", errorText: "net::ERR_ABORTED" },
+    async () => {
+      const result = await goto("https://example.com/report.pdf", {
+        waitUntil: "commit",
+      });
+      assert.equal(result.navigation.errorText, "net::ERR_ABORTED");
+    },
+  );
+});
+
+test("goto stays quiet when the navigation committed", async () => {
+  await withNavigateResult(
+    { frameId: "frame-1", loaderId: "loader-1" },
+    async () => {
+      const result = await goto("https://example.com/", {
+        waitUntil: "commit",
+      });
+      assert.equal(result.loaded, false);
+      assert.equal(result.navigation.loaderId, "loader-1");
+    },
+  );
 });

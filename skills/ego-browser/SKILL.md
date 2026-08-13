@@ -12,7 +12,10 @@ metadata:
 > the macOS app: `browser.listTabs()` is browser-wide rather than per task space,
 > and a space's login state is a copy of yours taken when the space is created —
 > spaces are isolated from each other, but a login made inside one does not
-> appear in the others, and non-cookie storage is not carried.
+> appear in the others, and non-cookie storage is not carried. A third thing to
+> know: `EGO_LINUX_HEADLESS` runs the browser with no window at all, which makes
+> every request for the user to click something impossible to satisfy — see the
+> visibility rule under Task spaces.
 
 # ego-browser
 
@@ -149,7 +152,8 @@ The rules that matter every round:
 - **Check `task.previously` on the returned space.** A space left untouched long enough is closed automatically, and asking for that name afterwards gives you a new, empty one rather than an error. When that has happened, `previously` carries a `note` and the `urls` the old space had open — reopen them instead of assuming you resumed where you left off. It is absent on a normal run.
 - One user goal = one space, reused for every follow-up (corrections, re-checks, validation). A new space only when the user starts a clearly unrelated goal.
 - Finish with `taskSpaces.complete(nameOrId, { keep })` in its own dedicated final heredoc, only after a prior round's output confirmed the task is done. `keep: false` unless the user needs that exact live page open.
-- Login, captcha, or manual confirmation → `taskSpaces.handOff(nameOrId)`, tell the user exactly what to do, and resume with `taskSpaces.takeOver(nameOrId)` **only after they explicitly confirm**. Never take control uninvited — a "user is controlling" error is a hard stop: ask and wait.
+- Login, captcha, or manual confirmation → `taskSpaces.handOff(nameOrId)` — which raises the browser window — then tell the user exactly what to do, and resume with `taskSpaces.takeOver(nameOrId)` **only after they explicitly confirm**. Never take control uninvited — a "user is controlling" error is a hard stop: ask and wait.
+- **Never assume the user can see the browser.** `handOff` — and `complete(nameOrId, { keep: true })`, which exists to leave a page for them — resolve `{ done: true, visible }`; only `visible: true` means the page reached a screen. On `visible: false` the browser is running headless — there is no window on any display — so do not ask for a click, a login, or a captcha, and do not describe the page as something they are looking at. Say the browser is headless and hand them the fix: unset `EGO_LINUX_HEADLESS` (fish: `set -Ue EGO_LINUX_HEADLESS`), then run `ego-browser --open`. The same rule covers screenshots — you read those files, the user does not.
 - **Linux port caveat**: `browser.listTabs()` is browser-wide, not per-space, and resolves to a plain **array** of `{ targetId, title, url, active, index }` — filter by the space's `targetIds` when you need per-space tabs.
 
 **Before acting on any claim / handoff / takeover / complete edge case, read `references/task-spaces.md`** — it carries the full ownership table, the `{ done, skipped }` result contract, the keep/cleanup policy, and the recovery flow for "user is controlling" and unassigned-space errors.

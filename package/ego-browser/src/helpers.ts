@@ -187,7 +187,11 @@ export async function newTaskSpace(name) {
  * Use an existing agent-owned task space, or create it when missing. User-owned
  * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
  * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
- * @param {string|number} nameOrId Task space name or numeric id.
+ *
+ * Only a name can be created. Ids are assigned by the browser rather than chosen
+ * by the caller, so a numeric nameOrId can only select a space that already
+ * exists — despite the name, this never creates one from an id.
+ * @param {string|number} nameOrId Task space name, or the numeric id of a space that already exists.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
 export async function useOrCreateTaskSpace(nameOrId) {
@@ -195,7 +199,15 @@ export async function useOrCreateTaskSpace(nameOrId) {
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
     if (typeof nameOrId === "number") {
-      throw new Error(`task space not found: ${nameOrId}`);
+      // The "orCreate" half of the name does not apply to ids, and a bare
+      // "not found" left the caller with no way to tell whether the space had
+      // vanished or had never been creatable this way. Say which it is, and
+      // point at the ids that do exist.
+      throw new Error(
+        `useOrCreateTaskSpace: no task space with id ${nameOrId}. ` +
+          `Ids are assigned by the browser, so an id can only select an existing ` +
+          `space — pass a name to create one. ${describeTaskSpaces(spaces)}`,
+      );
     }
     return newTaskSpace(nameOrId);
   }
@@ -267,9 +279,14 @@ async function selectTaskSpaceIfProvided(
  * User-owned spaces: `keep:true` is skipped (the user already has the page) and
  * resolves `{ done: false, skipped: "user-owned" }`; `keep:false` claims the
  * space first, then closes it.
+ *
+ * `keep:true` also raises the window and reports `visible` — the same contract as
+ * handOffTaskSpace, because "I left the page open for you" is the same claim about
+ * something the user has to be able to see. `keep:false` has nothing to report: the
+ * page is gone either way.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when the space was completed or closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @returns {Promise<{done: boolean, visible?: boolean, skipped?: "user-owned"}>} `{ done: true, visible }` when the space was completed with `keep:true`, `{ done: true }` when it was closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function completeTaskSpace(
   nameOrId: string | number,
@@ -301,7 +318,11 @@ export async function completeTaskSpace(
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
-    assertNoEgoError(await ego.completeTaskSpace(), "completeTaskSpace");
+    const kept = await ego.completeTaskSpace();
+    assertNoEgoError(kept, "completeTaskSpace");
+    // The point of keeping a space is that the user looks at it, so whether they
+    // can is part of the answer. See handOffTaskSpace for the fallback.
+    return { done: true, visible: kept?.visible !== false };
   } else {
     if (match.ownership === "user") {
       await claimResolvedTaskSpace(match, "completeTaskSpace");
@@ -317,11 +338,16 @@ export async function completeTaskSpace(
 }
 
 /**
- * Hand off a task space back to the user, hiding the agent overlay.
+ * Hand off a task space back to the user, hiding the agent overlay and raising
+ * the browser window so the user can find the page they are being asked to act on.
  * User-owned spaces are skipped (the user already controls them) and resolve
  * `{ done: false, skipped: "user-owned" }`.
+ *
+ * `visible` reports whether the page reached a screen. It is `false` when the
+ * browser is running headless — the handoff is still recorded, but nobody can
+ * see or click anything, so the caller must not ask the user to.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<{done: boolean, skipped?: "user-owned"}>} `{ done: true }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @returns {Promise<{done: boolean, visible?: boolean, skipped?: "user-owned"}>} `{ done: true, visible }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function handOffTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
@@ -335,8 +361,11 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     }
     await selectTaskSpace(ego, match, "handOffTaskSpace");
   }
-  assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
-  return { done: true };
+  const result = await ego.handOffTaskSpace();
+  assertNoEgoError(result, "handOffTaskSpace");
+  // A backing layer that does not report visibility is one that has a window;
+  // only the Linux port can be windowless, and it always answers.
+  return { done: true, visible: result?.visible !== false };
 }
 
 /**
@@ -442,6 +471,17 @@ async function findTaskSpace(nameOrId) {
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) throw new Error(`task space not found: ${nameOrId}`);
   return match;
+}
+
+/** Name the task spaces that do exist, so a miss points somewhere. */
+function describeTaskSpaces(spaces) {
+  if (!spaces.length) return "No task spaces exist yet.";
+  const shown = spaces
+    .slice(0, 10)
+    .map((space) => `${space.id} (${space.name})`)
+    .join(", ");
+  const rest = spaces.length > 10 ? `, and ${spaces.length - 10} more` : "";
+  return `Existing: ${shown}${rest}.`;
 }
 
 function findMatchingTaskSpace(spaces, nameOrId) {
