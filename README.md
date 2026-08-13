@@ -142,16 +142,18 @@ look round trip per step.
 
 ### 4. Work in a task space
 
-A task space is a named set of tabs with its own cookie jar and an owner, so
-parallel work does not collide and you can take a task over halfway through.
-Each space is genuinely isolated from the others, and still signed in to
-everything you are — see [below](#task-spaces-are-isolated-and-still-signed-in).
+A task space is a named set of tabs with an owner, so parallel work does not
+collide and you can take a task over halfway through. Spaces use the live agent
+profile by default, so cookies, `localStorage`, IndexedDB and service-worker
+state carry everywhere you are signed in — see
+[below](#task-spaces-share-live-login-state).
 
 ```bash
 ego-browser <<'JS'
-const task = await taskSpaces.useOrCreate('research task')
-await page.goto('https://example.com')
-console.log(await page.snapshot())
+await taskSpaces.run('research task', async (task) => {
+  await page.goto('https://example.com')
+  console.log(await page.snapshot())
+})
 JS
 ```
 
@@ -285,38 +287,30 @@ differs is narrow, and structural rather than unfinished:
 | `upgradeBrowser` | no-op | App lifecycle; your own Chrome updates itself. |
 | `animationHighlightMouseToPosition`, `setAgentTaskState` | DOM overlay injected into the page | Equivalent, but drawn inside the page instead of above the web view. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** `@N` resolves against genuine `backendNodeId`s; roles, names and `loc=` locators are computed here and validated by upstream's own resolver. |
-| the 9 task-space methods | per-space browser contexts seeded from your jar | Isolation, inherited logins, selected-space tab lists, and user-control hard stops. |
+| the 9 task-space methods | tracked tab sets in the live agent profile | Shared live login/storage state, selected-space tab lists, and user-control hard stops. |
 
-### Task spaces are isolated, and still signed in
+### Task spaces share live login state
 
-A native Space is isolated *and* inherits your login state. On stock Chromium
-those two look like they pull apart:
+The default Linux mode puts task-space tabs in the agent profile's default
+browser context. That is the only stock-Chromium path that shares **all** login
+state live: cookies, `localStorage`, IndexedDB, CacheStorage and service-worker
+registrations are the same state the rest of the agent browser uses. A login
+made in one Space is therefore visible in the next one without a copy step.
 
-- `Target.createBrowserContext` → real isolation, but an empty cookie jar
-- sharing the default profile → your real logins, but no isolation
-
-The conclusion does not follow, because **the jar can be filled**. Every space
-gets its own browser context, seeded from your default jar with
-`Storage.getCookies` → `Storage.setCookies` at the browser level. Measured on
-Chrome 148: 2,038 cookies transferred in 105 ms, a page loaded in that context
-genuinely sees them, and nothing leaks back into the default jar. The
-measurements and two reproducible experiments are in
+If you need storage isolation more than live login parity, set
+`EGO_LINUX_TASK_SPACE_STORAGE=isolated`. That opt-in mode creates a separate
+browser context and seeds only cookies from the default jar with
+`Storage.getCookies` → `Storage.setCookies`; it is documented in
 [`docs/isolation-with-inherited-logins.md`](docs/isolation-with-inherited-logins.md).
-
-If the browser refuses a context, the space degrades to plain window-only
-behaviour rather than failing to open. A context is disposed once its space
-loses its last tab.
+It is not the default because it cannot carry non-cookie auth stores live.
 
 What still does not match the native app:
 
-- **Live shared login state.** The seeded jar is a point-in-time cookie copy; a
-  login made inside one Space does not appear in the others.
-- **Storage beyond cookies.** `localStorage`, IndexedDB and service workers are
-  not seeded, so sites that keep auth tokens outside cookies may still land
-  logged out.
-- **Chrome window structure.** A context-backed Space gets its own Chrome window
-  because stock Chromium cannot place non-default-context tabs in the default
-  window. The Spaces overview is therefore an app window, not browser chrome.
+- **Storage isolation.** Default Linux task spaces isolate ownership and tab
+  membership, not browser storage. Use the opt-in isolated mode when storage
+  privacy between spaces is more important than live logins.
+- **Chrome window structure.** Default spaces are tabs in the stock Chromium
+  app; the Spaces overview is a separate app window, not browser chrome.
 
 Full per-method detail lives in
 [`package/ego-linux/README.md`](package/ego-linux/README.md).

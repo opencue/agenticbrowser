@@ -49,8 +49,8 @@ export function createTabsApi(cdp, { port, getScope }) {
       // opened for a space is created in that context, so membership is now a
       // fact rather than an inference.
       //
-      // Spaces without a context — the fallback path, and spaces re-adopted
-      // after a restart — fall back to the tracked target ids, which are exact
+      // Default shared-profile spaces and restart-adopted spaces have no
+      // context, so they fall back to the tracked target ids, which are exact
       // for tabs the shim opened.
       const scope = getScope ? await getScope() : null;
       if (scope) {
@@ -94,9 +94,8 @@ export function createTabsApi(cdp, { port, getScope }) {
       };
     },
 
-    // browserContextId places the tab in a task space's own cookie jar; without
-    // one the tab lands in the default context, which is the pre-context
-    // behaviour and still correct for spaces that have no context.
+    // browserContextId places the tab in an opt-in isolated task space; without
+    // one the tab lands in the default profile, sharing live login/storage state.
     async createTab(url = "about:blank", browserContextId = undefined) {
       const { targetId } = await cdp.call("Target.createTarget", {
         url,

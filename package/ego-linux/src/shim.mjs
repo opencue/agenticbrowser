@@ -60,7 +60,14 @@ export async function createEgoShim({ headless = false } = {}) {
     void windowFit.follow(metrics, cdp.attachedHint()).catch(() => {});
   });
 
-  cdp.watchNavigation(() => {
+  cdp.watchNavigation((_url, targetId) => {
+    // Shared-profile task spaces start as unfocused blank anchors, which avoids
+    // the "agent opened a blank browser" flash. Once the agent navigates the
+    // anchor to a real page, focus it before the next click/keystroke; CDP input
+    // into a background tab can time out and fall back to synthetic events.
+    if (targetId) {
+      void cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    }
     void taskSpaces.noteContent().catch(() => {});
     // A navigation destroys the overlay with the document it lives in. This is
     // the earliest point the shim hears about one, and arming here is what lets

@@ -34,9 +34,10 @@ Identical to upstream — a heredoc of JS on stdin:
 
 ```bash
 ego-browser <<'JS'
-const task = await taskSpaces.useOrCreate('research task')
-await page.goto('https://example.com')
-console.log(await page.snapshot())
+await taskSpaces.run('research task', async () => {
+  await page.goto('https://example.com')
+  console.log(await page.snapshot())
+})
 JS
 ```
 
@@ -246,7 +247,7 @@ remaining differences are structural rather than unfinished native methods.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | a seeded browser context per space                    | **Isolated, with inherited logins and enforced handoff.** The seeded jar is a copy, not live shared state. See below.                                                                        |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                     |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -270,34 +271,27 @@ built from the same underlying facts.
 
 ### Task spaces
 
-A native Space is isolated _and_ inherits your login state. On stock Chromium
-those two properties look like they pull apart:
+Task spaces now use the live agent profile by default. That deliberately chooses
+profile-level login parity over per-space storage privacy: cookies,
+`localStorage`, IndexedDB, CacheStorage and service-worker registrations are
+shared with the rest of the agent browser, so a login made in one space is
+visible in the next one without a seed or sync pass.
 
-- `Target.createBrowserContext` → real isolation, but an empty cookie jar
-- a separate window → your real logins, but no isolation
-
-They don't, because the empty jar can be filled. A space now owns a browser
-context that is seeded from the default jar when the space is created, so it
-gets both: cookies written in one space are invisible in every other and in the
-default jar, while the logins you already had are there from the start. Closing
-the space disposes the context, which drops that jar with it. Measurements and
-two reproducible experiments are in
+Set `EGO_LINUX_TASK_SPACE_STORAGE=isolated` to opt into the older
+browser-context mode. In that mode a space owns a context seeded from the
+default cookie jar when the space is created. Cookies written in one isolated
+space stay invisible to the others and to the default jar, but non-cookie auth
+stores do not come along. Measurements and two reproducible cookie experiments
+are in
 [`docs/isolation-with-inherited-logins.md`](../../docs/isolation-with-inherited-logins.md);
-seeding a real 2038-cookie profile costs ~105 ms, once per space.
-
-What this is _not_ is live shared state: the seeded jar is a point-in-time copy,
-so logging into a site inside one space does not appear in the others, and
-`localStorage`, IndexedDB and service workers are not carried at all — a site
-holding its token outside cookies will still land logged out.
+seeding a real 2038-cookie profile costs ~105 ms, once per isolated space.
 
 A space also owns a tracked set of tabs plus its ownership state (`agent` /
 `agentDelegatedToUser` / `user`), with working `switch` / `claim` / `handOff` /
 `takeOver` / `complete` semantics; switching to a space puts the agent back on
 that space's page. When the user owns control, the agent bridge rejects page
 operations with `EGO_TASK_SPACE_USER_IN_CONTROL`; the Spaces panel can still
-switch cards because that is the user, not the agent. A space that cannot get a
-context, and any space created before contexts existed, falls back to the
-window-only behaviour described below.
+switch cards because that is the user, not the agent.
 
 `listTabs` is scoped to the selected space, as it is in the native app. That was
 dropped once and has been restored, because the reason it failed is gone:
@@ -305,28 +299,13 @@ membership used to be inferred from which window a tab landed in, and
 `Target.createTarget` accepts no window id, so every heuristic tried (MRU
 ordering, "the tab the harness is attached to", "the tab we just created")
 either hid a tab the harness still held — `switchTab` then failed with "target
-not found" — or leaked one space's tabs into another's list. A context answers
-the question outright: `Target.getTargets` reports each target's
-`browserContextId`, and a tab opened for a space is created in that context.
-Spaces without one fall back to their tracked target ids.
+not found" — or leaked one space's tabs into another's list. Context-backed
+spaces still scope by `browserContextId`; default shared-profile spaces scope by
+the tracked target ids the shim opened.
 
-A context-backed space **does** get its own browser window, not by choice: a
-target in a non-default context cannot share a window with the default one. That
-reverses the earlier design, which deliberately used a single window because
-headless Chrome does not render tabs in background windows —
-`document.elementFromPoint` returned null there, which broke hit-testing and
-tripped the harness's input fallback (`driver/pointer.ts` `finishDragProbe`)
-into re-synthesising drags that had already landed, so the canvas cases failed
-or counted double strokes. Re-measured with contexts in place: 43/45, all three
-canvas cases passing. That flake is load-sensitive, so one clean run is evidence
-rather than proof — but contexts did not obviously bring it back.
-
-**What does not work:**
-
-- _Live shared login state._ The seeded jar is a point-in-time copy, so logging
-  into a site inside one space does not appear in the others.
-- _Storage beyond cookies._ `localStorage`, IndexedDB and service workers are
-  not seeded, so a site holding its token outside cookies lands logged out.
+**What does not work:** default spaces do not isolate browser storage from each
+other. Use `EGO_LINUX_TASK_SPACE_STORAGE=isolated` when that privacy boundary is
+more important than live login parity.
 
 The user-control boundary is enforced at the bridge: selecting a user-owned
 space returns `EGO_TASK_SPACE_USER_IN_CONTROL`, and page-domain CDP / snapshot /

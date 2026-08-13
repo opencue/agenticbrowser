@@ -1,6 +1,11 @@
-# Task-space isolation *and* inherited logins, without forking Chromium
+# Optional task-space storage isolation with inherited cookies
 
-`package/ego-linux/README.md` currently states the constraint this way:
+The Linux port defaults to shared-profile task spaces now, because that is the
+only stock-Chromium path that carries live cookie and non-cookie login state
+between spaces. This note documents the opt-in isolated mode enabled by
+`EGO_LINUX_TASK_SPACE_STORAGE=isolated`.
+
+The original constraint was:
 
 > A native Space is isolated *and* inherits your login state. On stock Chromium
 > those two properties pull apart:
@@ -45,21 +50,20 @@ So: full-size login state transfers into an isolated context in about a tenth of
 a second, a page loaded in that context genuinely sees the cookies, and nothing
 leaks back into the default jar.
 
-## What this changes
+## What this enables
 
-A task space could own a browser context instead of just a window, and seed it
-from the default jar at creation. That yields what the native macOS Space has —
-isolation plus the user's logins — on stock Chromium.
+A task space can own a browser context instead of just a tracked tab set, and
+seed it from the default jar at creation. That yields storage isolation plus
+cookie-backed logins on stock Chromium.
 
 ## What it does not solve
 
 Be precise about the difference from native, because it is not nothing:
 
-- **The login state is a copy, taken at seed time.** The native Space shares live
-  state; here, logging into a site inside one space does not appear in the
-  others, and a session refreshed in the default profile does not propagate.
-  For agent tasks this is usually the desired behaviour, but it is a difference,
-  not parity.
+- **The login state is a copy, taken at seed time.** Default shared-profile
+  spaces share live state; isolated spaces do not. Logging into a site inside one
+  isolated space does not appear in the others, and a session refreshed in the
+  default profile does not propagate.
 - **Cookies are not all of login state.** `localStorage`, IndexedDB and service
   workers are per-origin storage that this does not carry. Sites holding tokens
   outside cookies will still land logged out. Worth measuring before promising
@@ -70,7 +74,7 @@ Be precise about the difference from native, because it is not nothing:
 ## Implementation
 
 Implemented in `package/ego-linux/src/task-spaces.mjs` (`createSeededContext`).
-Creating a space now does:
+When `EGO_LINUX_TASK_SPACE_STORAGE=isolated`, creating a space does:
 
 1. `Target.createBrowserContext` → `browserContextId`, stored on the space record.
 2. `Storage.getCookies` (browser level, unscoped) → the default jar.
@@ -85,9 +89,9 @@ restriction is in the *harness's* `cdp()` helper, which promotes only `Target`
 and `Browser` — which is why this looks impossible from a heredoc but is
 straightforward from inside the shim.
 
-A space that fails to get a context keeps the previous window-only behaviour
-rather than failing to open, and spaces created before this change have no
-context id and are treated the same way — so upgrading strands nothing.
+A space that fails to get a context keeps the shared-profile default rather than
+failing to open, and shared-profile spaces have no context id and are scoped by
+their tracked target ids.
 
 ### Verified
 

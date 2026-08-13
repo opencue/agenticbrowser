@@ -438,7 +438,7 @@ async function refresh() {
     }
 
     note.textContent = spaces.length
-      ? "Each space gets its own cookie jar, seeded from your logins when it is created."
+      ? "Spaces share the live agent profile by default, so logins and site storage carry between them."
       : "";
   } catch (error) {
     note.textContent = "cannot reach the browser: " + error.message;

@@ -367,7 +367,22 @@ describe("ego-browser Linux port", () => {
     );
   });
 
-  it("emulates task spaces with their own windows, ownership and lifecycle", async () => {
+  it("shares live non-cookie profile storage across task spaces", async () => {
+    const out = await runScript(join(HERE, "storage.js"));
+
+    assert.match(
+      out,
+      /1\. first read:\s+from-first-space/,
+      "the first space writes localStorage",
+    );
+    assert.match(
+      out,
+      /2\. second read:\s+from-first-space/,
+      "a different space sees the same live profile storage",
+    );
+  });
+
+  it("emulates task spaces with scoped tabs, ownership and lifecycle", async () => {
     const out = await runScript(join(HERE, "spaces.js"));
 
     assert.match(

@@ -156,9 +156,8 @@ The fix to hand the user for `reason: "headless"`: unset
 `EGO_LINUX_HEADLESS` (under fish it is usually a universal variable, so
 `set -Ue EGO_LINUX_HEADLESS` rather than `set -e`), then run
 `ego-browser --open`. That trades the headless browser for a visible one, which
-**restarts Chrome** — the current spaces' tabs and their seeded cookie jars do
-not survive it, so treat the work in flight as lost and start the task again in
-a fresh space.
+**restarts Chrome** — the current spaces' tabs do not survive it, so treat the
+work in flight as lost and start the task again in a fresh space.
 
 A `visible: false` handoff or kept completion is not an error and does not need
 to be retried: the ownership change is real, headless is a supported way to run,

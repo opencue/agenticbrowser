@@ -86,31 +86,65 @@ const baseSpace = {
 };
 
 describe("the space's blank anchor tab is used, not stranded", () => {
-  it("opens the initial anchor without focusing a blank page", async () => {
+  it("opens the initial anchor in the shared profile without focusing a blank page", async () => {
+    const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+    delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
     const cdp = fakeCreateSpaceCdp();
+    try {
+      await createTaskSpacesApi(cdp).createTaskSpace("work");
 
-    await createTaskSpacesApi(cdp).createTaskSpace("work");
+      assert.ok(
+        !cdp.calls.some((call) => call.method === "Target.createBrowserContext"),
+        "shared storage is the default, so no isolated context is created",
+      );
+      const create = cdp.calls.find(
+        (call) => call.method === "Target.createTarget",
+      );
+      assert.deepEqual(create?.params, {
+        url: "about:blank",
+        focus: false,
+      });
+      assert.ok(
+        !cdp.calls.some((call) => call.method === "Target.activateTarget"),
+        "the blank anchor is not brought to the foreground",
+      );
+      assert.ok(
+        cdp.calls.some(
+          (call) =>
+            call.method === "Runtime.evaluate" &&
+            call.params.expression.includes("If this page stays here"),
+        ),
+        "the fallback page explains why it is visible if it ever remains onscreen",
+      );
+    } finally {
+      if (previous === undefined) delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+      else process.env.EGO_LINUX_TASK_SPACE_STORAGE = previous;
+    }
+  });
 
-    const create = cdp.calls.find(
-      (call) => call.method === "Target.createTarget",
-    );
-    assert.deepEqual(create?.params, {
-      url: "about:blank",
-      browserContextId: "ctx",
-      focus: false,
-    });
-    assert.ok(
-      !cdp.calls.some((call) => call.method === "Target.activateTarget"),
-      "the blank anchor is not brought to the foreground",
-    );
-    assert.ok(
-      cdp.calls.some(
-        (call) =>
-          call.method === "Runtime.evaluate" &&
-          call.params.expression.includes("If this page stays here"),
-      ),
-      "the fallback page explains why it is visible if it ever remains onscreen",
-    );
+  it("can still create a cookie-seeded isolated context when explicitly requested", async () => {
+    const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+    process.env.EGO_LINUX_TASK_SPACE_STORAGE = "isolated";
+    const cdp = fakeCreateSpaceCdp();
+    try {
+      await createTaskSpacesApi(cdp).createTaskSpace("work");
+
+      assert.ok(
+        cdp.calls.some((call) => call.method === "Storage.getCookies"),
+        "the default jar is read for the isolated cookie-copy mode",
+      );
+      const create = cdp.calls.find(
+        (call) => call.method === "Target.createTarget",
+      );
+      assert.deepEqual(create?.params, {
+        url: "about:blank",
+        browserContextId: "ctx",
+        focus: false,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+      else process.env.EGO_LINUX_TASK_SPACE_STORAGE = previous;
+    }
   });
 
   it("does not focus a never-used blank anchor when selecting a space", async () => {

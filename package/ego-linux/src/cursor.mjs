@@ -160,6 +160,7 @@ export function createCursorApi(cdp, { listTabs }) {
     try {
       while (dirty) {
         dirty = false;
+        const pulse = pendingPulse;
         const payload = {
           x: state.x,
           y: state.y,
@@ -182,21 +183,26 @@ export function createCursorApi(cdp, { listTabs }) {
           note: state.note,
           highlight: state.highlight,
           read: state.read,
-          pulse: pendingPulse,
+          pulse,
         };
-        pendingPulse = false;
+        if (pulse) pendingPulse = false;
         const sessionId = await sessionForActiveTab();
         await watchLoads(sessionId);
-        await cdp.call(
-          "Runtime.evaluate",
-          {
-            expression: `(${renderOverlay.toString()})(${JSON.stringify(payload)})`,
-            returnByValue: false,
-            awaitPromise: false,
-            userGesture: false,
-          },
-          sessionId,
-        );
+        try {
+          await cdp.call(
+            "Runtime.evaluate",
+            {
+              expression: `(${renderOverlay.toString()})(${JSON.stringify(payload)})`,
+              returnByValue: false,
+              awaitPromise: false,
+              userGesture: false,
+            },
+            sessionId,
+          );
+        } catch (error) {
+          if (pulse) pendingPulse = true;
+          throw error;
+        }
       }
     } catch {
       // Cosmetic only: a closed tab, a page mid-navigation or a target that

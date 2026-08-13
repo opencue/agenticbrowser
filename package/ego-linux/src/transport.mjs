@@ -66,7 +66,7 @@ export async function connectCdp(wsUrl) {
         // a tab is about:blank again the moment it navigates away, so polling
         // its url later cannot tell "never used" from "between pages".
         if (message.params.url !== "about:blank")
-          navWatcher?.(message.params.url);
+          navWatcher?.(message.params.url, attachedTargetId);
       } else if (message.method === "Emulation.setDeviceMetricsOverride") {
         // Emulation resizes the page's viewport, never the OS window — so a
         // mobile layout renders as a narrow strip inside a desktop-sized window.

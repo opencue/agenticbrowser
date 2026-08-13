@@ -8,11 +8,11 @@ metadata:
 ---
 
 > **This is the Linux port**, not the macOS app: the same harness over a stock
-> Chromium via CDP. See `references/install.md`. Main behavioural difference from
-> the macOS app: a space's login state is a copy of yours taken when the space is
-> created — spaces are isolated from each other, but a login made inside one does
-> not appear in the others, and non-cookie storage is not carried. Another thing
-> to know: `EGO_LINUX_HEADLESS` runs the browser with no window at all, which makes
+> Chromium via CDP. See `references/install.md`. Task spaces use the live agent
+> profile by default, so cookies and non-cookie browser storage carry between
+> spaces; use `EGO_LINUX_TASK_SPACE_STORAGE=isolated` only when storage privacy
+> matters more than live logins. Another thing to know: `EGO_LINUX_HEADLESS` runs
+> the browser with no window at all, which makes
 > every request for the user to click something impossible to satisfy — see the
 > visibility rule under Task spaces.
 
@@ -57,8 +57,11 @@ The heredoc body runs as a Node.js script that controls the selected ego-browser
 ## API surface
 
 Everything hangs off six preloaded globals. There are **no flat helper functions**:
-`snapshotText()`, `click()`, `fillInput()`, `cliLog()` and friends were removed from
-the harness, and calling one raises `ReferenceError: … is not defined`.
+`goto()`, `navigate()`, `waitForLoad()`, `currentUrl()`, `js()`, `snapshotText()`,
+`click()`, `fillInput()`, `cliLog()` and friends were removed from the harness,
+and calling one raises `ReferenceError: … is not defined`. Do not invent aliases:
+use `page.goto(...)` for navigation, `page.waitForLoadState(...)` for load waits,
+`page.url()` for the current URL, and `page.evaluate(...)` for page-side JS.
 
 | Global | Members |
 |---|---|
@@ -79,7 +82,7 @@ Notes:
 - `await page.drainEvents()` — consumes and returns the async event queue produced by the page.
 - `await page.debug()` — returns a JSON-serializable debug dump for agents: redacted page info, tabs, a viewport snapshot excerpt, screenshot path, session state, and recent CDP event summaries. It drains events. Use `await page.debug({ includeScreenshot: false })` for text-only debugging.
 - `await page.trace()` drains a compact chronological timeline of CDP requests, responses, errors, and browser events. Use it after a failed click, fill, navigation, or wait to see what happened before retrying.
-- On uncaught ordinary errors, the CLI writes a redacted local JSON failure artifact and prints `ego-browser: failure artifact written to ...` on stderr. Open that file before retrying; it contains the thrown error plus the same kind of `page.debug()` dump. Hard-stop user-control errors skip this artifact so the control handoff guidance stays clean.
+- On uncaught ordinary errors, the CLI writes a redacted local JSON failure artifact and prints `ego-browser: failure artifact written to ...` on stderr. Open that file before retrying. Read `recovery.readThisFirst` first, then inspect `error.message`, locator diagnostics, `debug.trace.items`, `debug.snapshot.excerpt`, and the screenshot path in that order. Hard-stop user-control errors skip this artifact so the control handoff guidance stays clean.
 - `help()` prints the built-in reference; `console.log(help())` is the fastest way to re-check a signature.
 - Print values with `console.log(value)` or `JSON.stringify(value, null, 2)`. Do not call `.toString()` on unknown `page.evaluate` / helper results; some page data shadows that method. `page.screenshot()` returns a file path; read the file first if you need `buffer.toString('base64')`.
 
@@ -154,7 +157,7 @@ that a function passed here is stringified, so closures are not captured.
 
 ### Task spaces
 
-A task space is an **isolated browsing context**: its own set of tabs and its own cookie jar, seeded from the user's login state, so Agents operate on authenticated sites without competing with the user's normal browser windows. Ownership is `agent` / `agentDelegatedToUser` / `user`, and only one side drives a space at a time.
+A task space is an owned set of tabs in the live agent profile by default, so agents operate on authenticated sites with cookies, `localStorage`, IndexedDB and service-worker state intact. Ownership is `agent` / `agentDelegatedToUser` / `user`, and only one side drives a space at a time.
 
 The rules that matter every round:
 
@@ -165,7 +168,7 @@ The rules that matter every round:
 - Finish with `taskSpaces.complete(nameOrId, { keep })` unless `taskSpaces.run(...)` is already doing that for you. For one-round tasks not using `run`, call `complete` at the end of the same heredoc after you have captured/logged the verified result. For multi-round tasks, call it in a dedicated final heredoc only after a prior round confirmed the task is done. `keep: false` unless the user needs that exact live page open. If `keep: true`, read the returned `{ visible }` before saying the page was left open for the user to view.
 - Login, captcha, or manual confirmation → `taskSpaces.handOff(nameOrId)` — which raises the browser window — then tell the user exactly what to do, and resume with `taskSpaces.takeOver(nameOrId)` **only after they explicitly confirm**. Never take control uninvited — a "user is controlling" error is a hard stop: ask and wait.
 - **Never assume the user can see the browser.** `handOff` and `complete(..., { keep: true })` resolve `{ done: true, visible, reason? }`; only `visible: true` means the page reached a screen. On `visible: false`, do not ask for a click, a login, or a captcha, and do not describe the page as something they are looking at. Use `reason`: `headless` → unset `EGO_LINUX_HEADLESS` (fish: `set -Ue EGO_LINUX_HEADLESS`) then run `ego-browser --open`; `no-live-tab` → reopen the page or start a fresh space; `raise-failed` → ask the user to open the ego lite browser window manually. The same rule covers screenshots — you read those files, the user does not.
-- **Linux port caveat**: login state is seeded from cookies when a space is created; non-cookie storage is not copied between spaces.
+- **Linux port caveat**: default spaces share browser storage with each other. Set `EGO_LINUX_TASK_SPACE_STORAGE=isolated` before creating a space if you need per-space storage isolation; that mode copies cookies only and does not share non-cookie login state live.
 
 ### Agent-safe loop guard
 

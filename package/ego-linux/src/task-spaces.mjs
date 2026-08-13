@@ -7,21 +7,19 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 /**
  * Task spaces, emulated as tracked sets of tabs.
  *
- * The app's Space is isolated *and* inherits your login state. On stock Chromium
- * those two properties look like they pull apart:
+ * The native app's Space inherits the user's live login state, including the
+ * origin storage sites use instead of cookies. Stock Chromium only gives us that
+ * by using the profile's default browser context, so this port treats a Space as
+ * an owned, tracked tab set in the shared agent profile. That makes cookies,
+ * localStorage, IndexedDB and service-worker state live across Spaces.
  *
- *   Target.createBrowserContext -> real isolation, but a blank cookie jar
- *   sharing the default profile -> your real logins, but no isolation
+ * If you need stronger storage isolation more than live login parity, set
+ * EGO_LINUX_TASK_SPACE_STORAGE=isolated. That revives the older context-backed
+ * mode: a space owns a browser context seeded with a point-in-time cookie copy
+ * from the default jar, while non-cookie storage stays isolated.
  *
- * They don't: the empty jar can be filled. A space owns a browser context seeded
- * from the default jar at creation, so it gets both — see createSeededContext
- * below and docs/isolation-with-inherited-logins.md. The seed is a point-in-time
- * copy, not live shared state, and a space that fails to get a context falls
- * back to the shared default jar.
- *
- * A context-backed Space gets its own browser window because stock Chromium
- * cannot place non-default-context tabs in the default window. Membership still
- * comes from browserContextId first, then tracked target ids for fallback spaces.
+ * Membership comes from tracked target ids by default, and from browserContextId
+ * first for opt-in isolated or restart-adopted context-backed spaces.
  *
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
@@ -29,6 +27,8 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
 const USER_CONTROL_ERROR = "The task is under user control";
 const USER_CONTROL_CODE = "EGO_TASK_SPACE_USER_IN_CONTROL";
+const ISOLATED_STORAGE_RE =
+  /^(1|true|yes|on|isolated|context|browser-context|cookie-copy)$/i;
 
 /**
  * How many idle-closed spaces to remember.
@@ -57,6 +57,12 @@ export function createTaskSpacesApi(cdp) {
    * process acts on.
    */
   let pinnedSpaceId = null;
+
+  function useIsolatedStorage() {
+    return ISOLATED_STORAGE_RE.test(
+      String(process.env.EGO_LINUX_TASK_SPACE_STORAGE || ""),
+    );
+  }
 
   function userControlResult() {
     return { error: USER_CONTROL_ERROR, error_code: USER_CONTROL_CODE };
@@ -369,9 +375,9 @@ export function createTaskSpacesApi(cdp) {
     );
     if (surviving.length !== state.spaces.length) {
       // Losing its last tab is how a space ends when the user closes tabs by
-      // hand, so its context has to go the same way closeTaskSpace disposes
-      // one. Dropping the record alone would strand a live context holding a
-      // full copy of the seeded cookie jar until the browser restarts.
+      // hand, so an opt-in isolated context has to go the same way
+      // closeTaskSpace disposes one. Dropping the record alone would strand a
+      // live context holding a full cookie copy until the browser restarts.
       for (const space of state.spaces) {
         if (space.targetIds.length === 0 && space.browserContextId) {
           await disposeContext(space.browserContextId);
@@ -555,21 +561,6 @@ export function createTaskSpacesApi(cdp) {
   }
 
   /**
-   * Give a space its own cookie jar, pre-filled with the user's.
-   *
-   * Target.createBrowserContext isolates for real, but starts empty — which on
-   * its own would log the agent out of everything, so this port used to take a
-   * bare window instead and accept a shared jar. Seeding the new context from
-   * the default jar gets both properties at once: measurements and the two
-   * reproducible experiments are in docs/isolation-with-inherited-logins.md.
-   *
-   * These calls carry no sessionId, so the transport sends them at the browser
-   * level, which is where browserContextId is accepted.
-   *
-   * Returns null if the browser refuses a context, so a space degrades to the
-   * previous window-only behaviour rather than failing to open at all.
-   */
-  /**
    * The selected space's context id, read synchronously.
    *
    * Sync because its only caller is the transport rewriting an outgoing payload
@@ -654,7 +645,7 @@ export function createTaskSpacesApi(cdp) {
             ].join(";");
             card.innerHTML = [
               "<h1 style='margin:0 0 10px;font-size:22px'>Ego Lite agent space is ready</h1>",
-              "<p style='margin:0;color:#cbd5e1;line-height:1.55'>The agent has created an isolated browser space and should navigate this tab shortly.</p>",
+              "<p style='margin:0;color:#cbd5e1;line-height:1.55'>The agent has created a browser task space and should navigate this tab shortly.</p>",
               "<p style='margin:14px 0 0;color:#94a3b8;line-height:1.55'>If this page stays here, the agent stopped before opening the requested site. It is safe to close this task space.</p>"
             ].join("");
             document.body.append(card);
@@ -681,6 +672,18 @@ export function createTaskSpacesApi(cdp) {
       .catch(() => {});
   }
 
+  /**
+   * Give an opt-in isolated space its own cookie jar, pre-filled with the user's.
+   *
+   * Target.createBrowserContext isolates storage for real, but starts empty.
+   * Seeding the new context from the default jar recovers cookie-backed logins
+   * while deliberately keeping non-cookie storage private. These calls carry no
+   * sessionId, so the transport sends them at the browser level, where
+   * browserContextId is accepted.
+   *
+   * Returns null if the browser refuses a context, so a space degrades to the
+   * shared-profile default rather than failing to open at all.
+   */
   async function createSeededContext() {
     let browserContextId;
     try {
@@ -730,7 +733,9 @@ export function createTaskSpacesApi(cdp) {
 
     async createTaskSpace(name) {
       const state = await readState();
-      const browserContextId = await createSeededContext();
+      const browserContextId = useIsolatedStorage()
+        ? await createSeededContext()
+        : null;
       let targetId;
       try {
         ({ targetId } = await createBlankAnchor(browserContextId));
@@ -864,7 +869,7 @@ export function createTaskSpacesApi(cdp) {
         await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
       }
       if (space.browserContextId) {
-        // Also drops the space's cookie jar, which is the point of having one.
+        // Also drops an opt-in isolated space's private cookie/storage jar.
         await disposeContext(space.browserContextId);
       }
       state.spaces = state.spaces.filter(
@@ -937,8 +942,9 @@ export function createTaskSpacesApi(cdp) {
         return { targetId: anchor };
       }
 
-      // Open it inside the space's context, so every tab of a space shares that
-      // space's jar rather than the first tab being isolated and the rest not.
+      // Open it inside the space's context when opt-in isolated storage is
+      // enabled; otherwise omit browserContextId so the tab shares the live
+      // agent profile and its non-cookie storage.
       let result;
       try {
         result = await tabs.createTab(url, space?.browserContextId);
@@ -947,8 +953,8 @@ export function createTaskSpacesApi(cdp) {
         // outlives it in the state file. Chrome then rejects the create with
         // "Failed to find browser context", which used to leave the port unable
         // to open any tab at all after a restart. Fall back to the default jar
-        // and forget the dead id — the space stops being isolated, which is
-        // already true, rather than stopping working.
+        // and forget the dead id — the space falls back to the shared live
+        // profile rather than stopping working.
         if (
           !space?.browserContextId ||
           !/browser context/i.test(String(error?.message))
