@@ -6,6 +6,12 @@ The ego-browser skill depends on a working `ego-browser` command on `PATH`. On *
 
 ego lite website (macOS product): https://lite.ego.app/
 
+Source: [`opencue/agenticbrowser`](https://github.com/opencue/agenticbrowser)
+(formerly `opencue/ego-lite-linux`; old URLs still redirect),
+an unofficial fork of `citrolabs/ego-lite`, published on branch `linux-port`
+(checked out locally as `main`, which tracks it). On this machine the checkout
+is at `~/Documents/ego-lite-linux`. Full details: `package/ego-linux/README.md`.
+
 ---
 
 ## Install steps (Linux / WSL)
