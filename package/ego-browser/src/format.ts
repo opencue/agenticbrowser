@@ -830,6 +830,22 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<{ done: boolean, visible?: boolean, reason?: string }>",
     example: "await taskSpaces.bringToFront(task.id)",
   },
+  "taskSpaces.requestUserAction": {
+    signature: "taskSpaces.requestUserAction(nameOrId) => Promise<object>",
+    description:
+      "Immediately before asking the user for a manual browser action, hand off or raise the task space and require confirmation that it is visible.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Task space name, taskId, or numeric id.",
+      },
+    ],
+    returns:
+      'Promise<{ done: true, visible: true, presentation: "hand-off" | "bring-to-front" }>',
+    example: "await taskSpaces.requestUserAction(task.id)",
+  },
   "taskSpaces.takeOver": {
     signature: "taskSpaces.takeOver(nameOrId?) => Promise<void>",
     description:

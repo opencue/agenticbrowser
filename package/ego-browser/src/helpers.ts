@@ -504,6 +504,44 @@ export async function bringToFrontTaskSpace(nameOrId: TaskSpaceNameOrId) {
 }
 
 /**
+ * Present a task space immediately before asking the user for a manual action.
+ * Agent-controlled spaces are handed off; user-owned spaces are raised without
+ * changing ownership. Throws unless the page is confirmed visible so callers
+ * cannot accidentally ask the user to act on a hidden or headless page.
+ * @param {string|number} nameOrId Task space id or name.
+ * @returns {Promise<{done:true,visible:true,presentation:"hand-off"|"bring-to-front"}>}
+ */
+export async function requestUserActionTaskSpace(nameOrId: TaskSpaceNameOrId) {
+  const match = await findTaskSpace(nameOrId);
+  let presentation: "hand-off" | "bring-to-front";
+  let result;
+
+  if (match.ownership === "user") {
+    presentation = "bring-to-front";
+    result = await bringToFrontTaskSpace(nameOrId);
+  } else {
+    presentation = "hand-off";
+    result = await handOffTaskSpace(nameOrId);
+    // Ownership can change between the initial lookup and handoff. Presenting a
+    // user-owned space is safe and does not reclaim automation control.
+    if (result.skipped === "user-owned") {
+      presentation = "bring-to-front";
+      result = await bringToFrontTaskSpace(nameOrId);
+    }
+  }
+
+  if (result?.visible !== true) {
+    const reason =
+      typeof result?.reason === "string" ? result.reason : "not-visible";
+    throw new Error(
+      `requestUserActionTaskSpace: the page is not visible (${reason}); do not ask the user to act until presentation succeeds`,
+    );
+  }
+
+  return { done: true as const, visible: true as const, presentation };
+}
+
+/**
  * Take over a task space, showing the agent overlay to indicate work has resumed.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
  * @returns {Promise<void>}
@@ -1440,6 +1478,7 @@ function createTaskSpacesFacade() {
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
     bringToFront: bringToFrontTaskSpace,
+    requestUserAction: requestUserActionTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
     isHardStopError: isEgoHardStopError,
@@ -1469,13 +1508,15 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.execute(nameOrId, options) when success must be explicitly verified, taskSpaces.run(nameOrId, fn, options) for a basic one-round task, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.bringToFront(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
+    "taskSpaces: task-space facade. Use taskSpaces.execute(nameOrId, options) when success must be explicitly verified, taskSpaces.run(nameOrId, fn, options) for a basic one-round task, taskSpaces.requestUserAction(nameOrId) immediately before asking the user for a manual browser action, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.bringToFront(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
   "taskSpaces.execute":
     'taskSpaces.execute(nameOrId, { goal?, risk, work, verify, retries?, keep?, timeout?, complete? }) => Promise<object>: run work, require verify to return true or { ok: true, ... }, then complete the task space. Automatic retries (max 5) require risk: "read-only"; hard stops are never retried. Returns result, verification, attempts, receipt, and completion.',
   "taskSpaces.useOrCreate":
     "taskSpaces.useOrCreate(nameOrId) => Promise<object>: select or create a task space. A user-controlled space is selected without claiming for passive page.snapshot(), page.screenshot(), and page.debug() verification; mutating commands remain blocked until an explicitly confirmed takeOver().",
   "taskSpaces.bringToFront":
     "taskSpaces.bringToFront(nameOrId) => Promise<object>: raise the task space's browser window/tab for the user without selecting it for automation, claiming it, or changing ownership. Use this instead of useOrCreate when the user controls the space and you only need to bring the window forward.",
+  "taskSpaces.requestUserAction":
+    "taskSpaces.requestUserAction(nameOrId) => Promise<object>: immediately before asking the user for a click, password, captcha, or confirmation, hand off or raise the task space and require visible: true. Throws instead of allowing a request against a hidden or headless page.",
   "taskSpaces.takeOver":
     "taskSpaces.takeOver(nameOrId?) => Promise<void>: after explicit user confirmation, take control back. When nameOrId points at a user-owned space, it claims that space before selecting it and calling the native take-over overlay.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",

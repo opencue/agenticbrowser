@@ -59,6 +59,7 @@ the facades treat user-owned spaces differently:
 | `taskSpaces.complete(…, { keep: true })`  | skipped — resolves `{ done: false, skipped: 'user-owned' }`   |
 | `taskSpaces.complete(…, { keep: false })` | claims it, then closes it                                     |
 | `taskSpaces.bringToFront(nameOrId)`       | raises it without selecting, claiming, or changing ownership  |
+| `taskSpaces.requestUserAction(nameOrId)`  | raises it and requires confirmation that it is visible        |
 | `taskSpaces.takeOver(nameOrId)`           | claims it, selects it, then takes over                        |
 | `taskSpaces.waitForAgentControl`          | waits for it to be handed back without claiming it            |
 
@@ -186,13 +187,20 @@ if (taskSpaces.isHardStopError(error)) throw error;
 Swallowing hard-stop errors in a retry loop makes the agent appear stuck even
 though the user-control boundary is working correctly.
 
-**Handing off**: When the task requires user intervention (e.g. login, captcha,
-manual confirmation), call `await taskSpaces.handOff(nameOrId)` to give control
-to the user, and tell them exactly what to do. Omitting `nameOrId` uses the
-currently selected task space; pass `task.id` across heredoc rounds to avoid
-ambiguity. The handoff selects the space's tab, restores the window if it was
-minimized, and raises it — the user has to find that window on their own desktop,
-and a browser buried behind an editor looks identical to nothing happening.
+**Requesting user action**: When the task requires user intervention (e.g.
+login, captcha, manual confirmation), call
+`await taskSpaces.requestUserAction(nameOrId)` in the same turn, immediately
+before telling the user exactly what to do. Pass `task.id` across heredoc rounds
+to avoid ambiguity. It hands off an agent-controlled space or raises a
+user-owned space without reclaiming it, then requires `visible: true`. It throws
+instead of letting the agent ask the user to act on a hidden or headless page.
+Calling it again is the first response when the user says they cannot see the
+page.
+
+The lower-level `taskSpaces.handOff(nameOrId)` selects the space's tab, restores
+the window if it was minimized, and raises it. Prefer `requestUserAction` for
+manual steps because it also handles already user-owned spaces and enforces the
+visibility check.
 
 **What the user can actually see**: `handOff` and
 `complete(..., { keep: true })` resolve

@@ -9,6 +9,7 @@ import {
   completeTaskSpace,
   executeTaskSpace,
   handOffTaskSpace,
+  requestUserActionTaskSpace,
   newTaskSpace,
   helperContext,
   isEgoHardStopError,
@@ -216,6 +217,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.taskSpaces.execute, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
   assert.equal(typeof context.taskSpaces.bringToFront, "function");
+  assert.equal(typeof context.taskSpaces.requestUserAction, "function");
   assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
@@ -350,6 +352,15 @@ test("help exposes nested taskSpaces.bringToFront guidance", () => {
     context.help(),
     /taskSpaces\.bringToFront\(nameOrId\) =>/,
   );
+});
+
+test("help exposes nested taskSpaces.requestUserAction guidance", () => {
+  const context = helperContext();
+  assert.match(
+    context.help("taskSpaces.requestUserAction"),
+    /require visible: true/,
+  );
+  assert.match(context.help(), /taskSpaces\.requestUserAction\(nameOrId\)/);
 });
 
 test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
@@ -2186,6 +2197,116 @@ test("handOffTaskSpace reports a handoff the user cannot see", async () => {
         visible: false,
         reason: "headless",
       });
+    },
+  );
+});
+
+test("requestUserActionTaskSpace hands off an agent-owned visible space", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return id;
+      },
+      async handOffTaskSpace() {
+        calls.push(["handOffTaskSpace"]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      assert.deepEqual(await requestUserActionTaskSpace("checkout-flow"), {
+        done: true,
+        visible: true,
+        presentation: "hand-off",
+      });
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["handOffTaskSpace"],
+  ]);
+});
+
+test("requestUserActionTaskSpace raises a user-owned space without claiming it", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async presentTaskSpace(id) {
+        calls.push(["presentTaskSpace", id]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      assert.deepEqual(await requestUserActionTaskSpace("checkout-flow"), {
+        done: true,
+        visible: true,
+        presentation: "bring-to-front",
+      });
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["listTaskSpaces"],
+    ["presentTaskSpace", 7],
+  ]);
+});
+
+test("requestUserActionTaskSpace rejects a page that is not visible", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      async handOffTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        requestUserActionTaskSpace("checkout-flow"),
+        /page is not visible \(headless\); do not ask the user to act/,
+      );
     },
   );
 });
