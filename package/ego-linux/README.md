@@ -1,16 +1,61 @@
-# ego-browser, Linux port
+# ego-browser, Linux and Windows port
 
 Upstream ego lite runs on macOS only: the browser ships as a `.dmg`, and the
 `ego-browser` harness talks to it through native bindings the app injects as
 `globalThis.ego`.
 
-This package supplies that object on Linux, backed by a stock Chromium over CDP.
-**The harness itself is unmodified** — every helper, locator, driver and format
-in `package/ego-browser/` is upstream code running as-is.
+This package supplies that object on Linux and on Windows, backed by a stock
+Chromium over CDP. **The harness itself is unmodified** — every helper, locator,
+driver and format in `package/ego-browser/` is upstream code running as-is.
 
-## Install
+Everything either operating system does differently — where state lives, how a
+browser is found, how another process's argv and ancestry are read, how a
+process is stopped, and what Chrome leaves behind guarding a profile — is behind
+[`src/platform.mjs`](src/platform.mjs). The other ~5,800 lines are the same code
+on both. `test/platform-isolation.test.mjs` fails the build if that stops being
+true, because a `/proc` read added elsewhere still passes every test on Linux
+and silently breaks Windows.
 
-Requires Node >= 22 and any Chrome/Chromium/Brave/Edge build on `PATH`.
+## Install on Windows
+
+Download `ego-lite-setup.exe` from the latest CI run and double-click it. There
+is nothing to install first — the Node runtime is inside the installer, and the
+browser it drives is the Edge that Windows already has.
+
+It installs per user into `%LOCALAPPDATA%\Programs\ego-lite`, so there is no
+administrator prompt. It puts `ego-browser` on your `PATH`, adds a Start Menu
+entry with the icon, and registers a normal uninstaller under **Settings → Apps**
+that takes the `PATH` entry back out with it.
+
+> A shell that was already open keeps the old `PATH`. Open a new terminal after
+> installing.
+
+> The installer is **not code-signed**, so SmartScreen shows *"Windows protected
+> your PC — Unknown publisher"* on first run: choose **More info → Run anyway**.
+> Signing it needs a certificate (roughly $200–400/year), which this project does
+> not have.
+
+Building it yourself needs Windows, because the Inno Setup compiler only runs
+there:
+
+```powershell
+cd package\ego-browser; npm ci; npm run build
+cd ..\ego-linux
+node installer\stage.mjs --node <path to node.exe>
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\ego-lite.iss
+```
+
+What the installer *contains* is decided by `installer/stage.mjs` and checked by
+`test/installer.test.mjs`, which runs everywhere — a renamed or moved file still
+compiles into a perfectly valid installer that fails on the user's machine, so
+that check reads `ego-lite.iss` back and verifies every path it points at was
+actually staged.
+
+## Install from a checkout
+
+Requires Node >= 22 and any Chrome/Chromium/Brave/Edge build. Linux resolves it
+from `PATH`; Windows also looks in the standard install locations, so a normal
+Chrome or Edge install needs no configuration.
 
 ```bash
 cd package/ego-browser && CI=true npm ci && npm run build   # build the upstream harness
@@ -28,6 +73,15 @@ Put the CLI on your PATH:
 ln -s "$PWD/bin/ego-browser.mjs" ~/.local/bin/ego-browser
 ```
 
+On Windows the installer above does this for you. From a checkout, a `.cmd`
+shim in a directory already on `PATH` does the same job — a symlink would need
+Developer Mode, and the shebang means nothing there:
+
+```powershell
+$bin = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
+Set-Content "$bin\ego-browser.cmd" "@node `"$PWD\bin\ego-browser.mjs`" %*"
+```
+
 ## Use
 
 Identical to upstream — a heredoc of JS on stdin:
@@ -41,7 +95,7 @@ await taskSpaces.run('research task', async () => {
 JS
 ```
 
-Linux-only commands:
+Commands this port adds (upstream's app has no equivalent):
 
 | Command                               | What it does                                                         |
 | ------------------------------------- | -------------------------------------------------------------------- |
@@ -50,7 +104,7 @@ Linux-only commands:
 | `ego-browser --spaces`                | open the Spaces overview panel                                       |
 | `ego-browser --stop`                  | terminate the backing browser and clear its profile lock             |
 | `ego-browser --import-chrome-profile` | copy your real Chrome profile in, so agent tasks inherit your logins |
-| `ego-browser --install-desktop-entry` | add it to your app launcher, with an icon                            |
+| `ego-browser --install-desktop-entry` | add it to your app launcher (Start Menu on Windows)                  |
 | `ego-browser --headless`              | run the backing browser headless (first launch only)                 |
 
 ### The Spaces panel
@@ -76,18 +130,31 @@ overview and the agent can never disagree about which spaces exist.
 ### App launcher entry
 
 The macOS build installs as an app you click to open. `--install-desktop-entry`
-gives the Linux port the same affordance — an XDG desktop entry plus a scalable
-icon:
+gives this port the same affordance — an XDG desktop entry on Linux, a Start
+Menu shortcut on Windows:
 
 ```bash
 ego-browser --install-desktop-entry
 ```
 
-It writes `~/.local/share/applications/ego-lite-linux.desktop` and
+On Linux it writes `~/.local/share/applications/ego-lite-linux.desktop` and
 `~/.local/share/icons/hicolor/scalable/apps/ego-lite-linux.svg`, then refreshes
-the desktop and icon caches. Launching it runs `--open`, which brings up the
-shared agent browser window. The icon is upstream's mark with a badge, so a
-Linux-port window is never mistaken for an upstream build.
+the desktop and icon caches. On Windows it writes
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\ego lite.lnk` through the
+shell's own COM object, which is the only supported way to produce a valid
+`.lnk` without a native dependency, and points it at `assets/ego-lite.ico`.
+
+Launching either runs `--open`, which brings up the shared agent browser window.
+The icon is upstream's mark with a badge, so a port window is never mistaken for
+an upstream build.
+
+`assets/ego-lite.ico` is committed, and rebuilt from the SVG by
+`node scripts/make-icon.mjs`. It renders through the browser this package
+already requires rather than ImageMagick, rsvg or `sharp` — a system package a
+contributor may not have, or a native dependency in a package that has none —
+and packs the results into a 7-size icon by hand. `test/icon.test.mjs` parses
+the committed file back and checks every entry against the size it declares,
+because nothing on Linux would otherwise notice a broken one.
 
 The entry pins the **absolute path of the node that installed it**, rather than
 relying on a `#!/usr/bin/env node` shebang. A desktop session's PATH is not your
@@ -101,21 +168,33 @@ refusing, for the same reason: an icon has to work, not explain.
 The backing browser is launched once and **persists between invocations** — each
 heredoc is its own short-lived Node process, so the browser, not the process, is
 what has to survive. It uses a dedicated profile under
-`~/.local/share/ego-lite-linux/profile`, which is why `--import-chrome-profile`
-exists: it is the Linux equivalent of ego lite's "migrate your Chrome data"
-onboarding step.
+`~/.local/share/ego-lite-linux/profile` (Linux) or
+`%LOCALAPPDATA%\ego-lite\profile` (Windows), which is why
+`--import-chrome-profile` exists: it is this port's equivalent of ego lite's
+"migrate your Chrome data" onboarding step. It reads your stock browser's
+profile from `~/.config/google-chrome` on Linux and
+`%LOCALAPPDATA%\Google\Chrome\User Data` on Windows, Chromium, Edge and Brave
+included.
+
+The Linux directory keeps its `ego-lite-linux` name on purpose: renaming it
+would strand the profile — and the logins in it — of every existing install.
+Windows has no such history, so it gets `ego-lite`.
 
 Environment overrides: `EGO_LINUX_CHROME` (browser binary),
 `EGO_LINUX_PROFILE` (profile dir), `EGO_LINUX_CDP_URL` (attach to an
 already-running DevTools endpoint instead of launching), `EGO_LINUX_CURSOR=0`
-(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (override the detected agent name).
+(hide the agent cursor), `EGO_LINUX_CURSOR_NAME` (override the detected agent
+name). The `EGO_LINUX_` prefix is historical and applies on both platforms.
+`XDG_DATA_HOME` and `XDG_STATE_HOME` are honoured on Windows too, which is what
+lets a harness — or the test suite — redirect all state with one assignment.
 
 The cursor labels itself with whichever harness is driving — `codex` draws
 "Codex", `claude` draws "Claude", anything unrecognised draws "Agent" rather
-than claiming to be one of them. Detection reads the process ancestry from
-`/proc`, so it needs no cooperation from the harness; `EGO_LINUX_CURSOR_NAME`
-overrides it. Teaching it a new harness is one row in `HARNESS_NAMES`
-(`src/agent-identity.mjs`).
+than claiming to be one of them. Detection reads the process ancestry — from
+`/proc` on Linux, from `Win32_Process` on Windows — so it needs no cooperation
+from the harness; `EGO_LINUX_CURSOR_NAME` overrides it. Teaching it a new
+harness is one row in `HARNESS_NAMES` (`src/agent-identity.mjs`); the `.exe`
+suffix is stripped before the lookup, so one row covers both platforms.
 
 ### The agent's cursor
 
@@ -228,11 +307,57 @@ breaks coordinate-based automation:
 - **The window is launched at 1280x900 with device scale factor 1**, so page
   layout does not depend on the desktop's HiDPI setting.
 
-The launcher also clears Chrome's `SingletonLock` before starting. A browser
-killed without a clean shutdown leaves that lock, and every later launch then
-aborts with "Failed to create a ProcessSingleton". Since `launch()` only runs
-after no DevTools endpoint answered, a lock still held by a live process means
-an unreachable orphan of ours, which is terminated first.
+The launcher also clears Chrome's single-instance guard before starting. A
+browser killed without exiting cleanly leaves it behind, and every later launch
+then aborts with "Failed to create a ProcessSingleton". Since `launch()` only
+runs after no DevTools endpoint answered, a guard still held by a live process
+means an unreachable orphan of ours, which is terminated first.
+
+What that guard *is* differs: POSIX Chrome writes `SingletonLock` as a symlink
+naming its owner's pid, so the owner is readable off the filesystem. Windows
+Chrome uses a named mutex and a message window — nothing on disk names the owner
+— so the port finds it in the process table instead, by the `--class=` marker
+every browser it launches carries. That switch is inert as a window hint on
+Windows and is passed there purely as that marker.
+
+## Windows
+
+Everything above applies on Windows, with these differences:
+
+| Linux                                   | Windows                                                        |
+| --------------------------------------- | -------------------------------------------------------------- |
+| `~/.local/share/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite`                                      |
+| `~/.local/state/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite` (Windows has no data/state split)    |
+| browser found on `PATH`                 | standard install paths first, `where.exe` as a backstop        |
+| `/proc` for argv and ancestry           | `Win32_Process` over PowerShell, ancestry cached per process   |
+| `SIGTERM`                               | `taskkill /T /F` (both leave the crash mark `--stop` clears)   |
+| XDG desktop entry, SVG icon             | Start Menu `.lnk`, `.ico` icon                                 |
+| `--class` sets the window class         | inert as a hint; still the ownership marker                    |
+
+Packaging: `installer/` builds `ego-lite-setup.exe` (Inno Setup, per-user, with
+a bundled Node runtime), and `scripts/make-icon.mjs` builds the `.ico` both the
+installer and the Start Menu shortcut draw — through the browser this package
+already requires, so neither ImageMagick nor a native npm dependency enters the
+tree. See **Install on Windows** above.
+
+**Not yet verified against a real Windows machine.** The Windows branch is
+covered by `test/platform.test.mjs`, which exercises it from Linux by passing
+`createPlatform()` a platform and an environment — that proves the paths,
+command-line parsing and artifact handling are right, and cannot prove the
+behaviour against a real process table or a real browser. The `test-windows` CI
+job on `windows-latest` is what does that, and `build-windows-installer` is what
+proves the installer compiles and is the size it should be. Treat a green run of
+those, not this README, as the evidence.
+
+Two costs are Windows-specific and worth knowing:
+
+- **The process table is a PowerShell call.** Reading another process's argv
+  goes through `Get-CimInstance Win32_Process`, filtered server-side by WQL so
+  only matching rows come back. The reaper does this once per launch. The
+  cursor's harness detection does it once per process and caches the answer,
+  because it is called while the overlay is being built and cannot be async.
+- **Detached children are launched with `windowsHide`.** Without it every
+  heredoc that starts the Spaces daemon flashes a console window on the desktop.
 
 ## Fidelity
 
@@ -247,7 +372,7 @@ remaining differences are structural rather than unfinished native methods.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                      |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                     |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.

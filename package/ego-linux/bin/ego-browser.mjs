@@ -23,6 +23,7 @@ import {
   TASK_SPACE_FILE,
   STATE_DIR,
 } from "../src/paths.mjs";
+import { detachedSpawnOptions } from "../src/platform.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
@@ -102,10 +103,7 @@ async function openPanelWindow(url) {
   spawn(
     status.binary || "google-chrome",
     [`--user-data-dir=${PROFILE_DIR}`, `--app=${url}`],
-    {
-      detached: true,
-      stdio: "ignore",
-    },
+    detachedSpawnOptions(),
   ).unref();
 }
 
@@ -177,10 +175,7 @@ async function runSpacesDaemon() {
     spawn(
       process.execPath,
       [fileURLToPath(import.meta.url), "--spaces-daemon"],
-      {
-        detached: true,
-        stdio: "ignore",
-      },
+      detachedSpawnOptions(),
     ).unref();
   }
   return 0;
@@ -204,10 +199,11 @@ async function openSpaces() {
     return 0;
   }
 
-  spawn(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  spawn(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--spaces-daemon"],
+    detachedSpawnOptions(),
+  ).unref();
 
   let port = null;
   const deadline = Date.now() + 30000;
@@ -324,7 +320,11 @@ async function main() {
   }
   if (argv[0] === "--install-desktop-entry") {
     const { entryPath, iconPath } = await installDesktopEntry();
-    process.stdout.write(`installed ${entryPath}\n         ${iconPath}\n`);
+    process.stdout.write(
+      iconPath
+        ? `installed ${entryPath}\n         ${iconPath}\n`
+        : `installed ${entryPath}\n`,
+    );
     return 0;
   }
   if (argv[0] === "--open") {

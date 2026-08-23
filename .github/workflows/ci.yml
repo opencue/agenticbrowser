@@ -66,6 +66,106 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  # The same package as test-linux, on the other operating system it supports.
+  # Everything platform-specific in it lives behind src/platform.mjs, and
+  # test/platform.test.mjs checks the Windows branch from Linux — but only a
+  # Windows runner proves the branch against a real process table, a real
+  # PowerShell and a real browser.
+  test-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      - name: Build the harness the port runs
+        working-directory: package/ego-browser
+        run: npm ci && npm run build
+      # Ask the port's own resolver, not a hard-coded path: if Chrome moves on
+      # the runner image, this fails here saying which paths were tried instead
+      # of failing deep inside a browser test.
+      - name: Check for a browser
+        working-directory: package/ego-linux
+        run: node -e "import('./src/platform.mjs').then(p => p.resolveBrowserBinary()).then(console.log)"
+      - name: Test the port
+        working-directory: package/ego-linux
+        run: npm test
+
+  # Produce the one file a Windows user has to download.
+  #
+  # Everything the installer contains is decided by installer/stage.mjs and
+  # checked by test/installer.test.mjs, which runs on Linux — this job's own job
+  # is the two things that need Windows: fetching the runtime it bundles, and
+  # running the Inno Setup compiler.
+  build-windows-installer:
+    runs-on: windows-latest
+    needs: test-windows
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      - name: Build the harness the installer ships
+        working-directory: package/ego-browser
+        run: npm ci && npm run build
+
+      # Just node.exe: this package has no dependencies and the harness is one
+      # bundled file, so npm and the standard library folder would be dead
+      # weight in the download.
+      - name: Fetch the Node runtime to bundle
+        shell: pwsh
+        run: |
+          $version = (node --version)
+          $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+          Write-Host "bundling $version from $url"
+          Invoke-WebRequest -Uri $url -OutFile node.zip
+          Expand-Archive node.zip -DestinationPath node-dist
+          Copy-Item "node-dist\node-$version-win-x64\node.exe" node.exe
+          # The bundled runtime has to be able to run, not just exist.
+          .\node.exe --version
+
+      - name: Stage the payload
+        working-directory: package/ego-linux
+        run: node installer/stage.mjs --node ${{ github.workspace }}\node.exe
+
+      - name: Compile the installer
+        working-directory: package/ego-linux
+        shell: pwsh
+        run: |
+          # The runner image ships Inno Setup, but that is an image detail
+          # rather than a guarantee — installing it when absent costs a minute
+          # and turns a future image change from a broken build into a slow one.
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            Write-Host "Inno Setup not on this image; installing"
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "no ISCC.exe at $iscc" }
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          & $iscc /DAppVersion=$version installer\ego-lite.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+
+      # An installer that lost its payload still compiles; a few hundred KB is
+      # what that looks like, so fail here rather than shipping it.
+      - name: Check the installer is not empty
+        shell: pwsh
+        run: |
+          $exe = Get-Item package\ego-linux\installer\dist\ego-lite-setup.exe
+          Write-Host "$($exe.Name): $([math]::Round($exe.Length / 1MB, 1)) MB"
+          if ($exe.Length -lt 15MB) { throw "the installer is too small to contain the Node runtime" }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ego-lite-setup
+          path: package/ego-linux/installer/dist/ego-lite-setup.exe
+          if-no-files-found: error
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: test
