@@ -159,16 +159,18 @@ look round trip per step.
 
 ### 4. Work in a task space
 
-A task space is a named set of tabs with its own cookie jar and an owner, so
-parallel work does not collide and you can take a task over halfway through.
-Each space is genuinely isolated from the others, and still signed in to
-everything you are — see [below](#task-spaces-are-isolated-and-still-signed-in).
+A task space is a named set of tabs with an owner, so parallel work does not
+collide and you can take a task over halfway through. Spaces use the live agent
+profile by default, so cookies, `localStorage`, IndexedDB and service-worker
+state carry everywhere you are signed in — see
+[below](#task-spaces-share-live-login-state).
 
 ```bash
 ego-browser <<'JS'
-const task = await taskSpaces.useOrCreate('research task')
-await page.goto('https://example.com')
-console.log(await page.snapshot())
+await taskSpaces.run('research task', async (task) => {
+  await page.goto('https://example.com')
+  console.log(await page.snapshot())
+})
 JS
 ```
 
@@ -188,10 +190,9 @@ selected one and take no arguments:
 Spaces whose tabs you close by hand are reconciled away on the next call, so the
 state file never accumulates ghosts.
 
-> **Ownership is advisory here.** The native bridge enforces the user-control
-> boundary inside the macOS app. Nothing on Linux can stop an agent from driving
-> a window you have taken over, so `EGO_TASK_SPACE_USER_IN_CONTROL` is never
-> raised.
+> **Ownership is enforced at the bridge.** When you take over a space, Linux
+> blocks the agent's page operations with `EGO_TASK_SPACE_USER_IN_CONTROL` until
+> control is explicitly handed back.
 
 ### 5. Put it on your app launcher
 
@@ -304,42 +305,33 @@ differs is narrow, and structural rather than unfinished:
 | `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses — a passthrough, not a translation. |
 | `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools endpoint's most-recently-used ordering stands in. |
 | `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser`, `animationHighlightMouseToPosition` | no-ops | App-lifecycle and cosmetic; nothing to do on Linux. |
+| `upgradeBrowser` | no-op | App lifecycle; your own Chrome updates itself. |
+| `animationHighlightMouseToPosition`, `setAgentTaskState` | DOM overlay injected into the page | Equivalent, but drawn inside the page instead of above the web view. |
 | `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** `@N` resolves against genuine `backendNodeId`s; roles, names and `loc=` locators are computed here and validated by upstream's own resolver. |
-| the 9 task-space methods | one window, per-space browser contexts seeded from your jar | Isolation and logins both. `listTabs` stays browser-wide — see below. |
+| the 9 task-space methods | tracked tab sets in the live agent profile | Shared live login/storage state, selected-space tab lists, and user-control hard stops. |
 
-### Task spaces are isolated, and still signed in
+### Task spaces share live login state
 
-A native Space is isolated *and* inherits your login state. On stock Chromium
-those two look like they pull apart:
+The default Linux mode puts task-space tabs in the agent profile's default
+browser context. That is the only stock-Chromium path that shares **all** login
+state live: cookies, `localStorage`, IndexedDB, CacheStorage and service-worker
+registrations are the same state the rest of the agent browser uses. A login
+made in one Space is therefore visible in the next one without a copy step.
 
-- `Target.createBrowserContext` → real isolation, but an empty cookie jar
-- sharing the default profile → your real logins, but no isolation
-
-The conclusion does not follow, because **the jar can be filled**. Every space
-gets its own browser context, seeded from your default jar with
-`Storage.getCookies` → `Storage.setCookies` at the browser level. Measured on
-Chrome 148: 2,038 cookies transferred in 105 ms, a page loaded in that context
-genuinely sees them, and nothing leaks back into the default jar. The
-measurements and two reproducible experiments are in
+If you need storage isolation more than live login parity, set
+`EGO_LINUX_TASK_SPACE_STORAGE=isolated`. That opt-in mode creates a separate
+browser context and seeds only cookies from the default jar with
+`Storage.getCookies` → `Storage.setCookies`; it is documented in
 [`docs/isolation-with-inherited-logins.md`](docs/isolation-with-inherited-logins.md).
-
-If the browser refuses a context, the space degrades to plain window-only
-behaviour rather than failing to open. A context is disposed once its space
-loses its last tab.
+It is not the default because it cannot carry non-cookie auth stores live.
 
 What still does not match the native app:
 
-- **A per-space `listTabs`.** The native app lists only the selected Space's
-  tabs; here `listTabs` is browser-wide. `Target.createTarget` accepts no window
-  id, so a tab opened for a space can land in a different window and the mapping
-  drifts. Three heuristics were measured against the upstream e2e suite and each
-  traded one failure for another, so reporting every page tab is what it does.
-- **Spaces get no window of their own.** That was the first design and it was
-  measurably worse: headless Chrome does not render tabs in background windows,
-  so `document.elementFromPoint` returned null for any page in a non-foreground
-  window, which broke hit-testing and tripped the harness's input fallback into
-  re-synthesising drags that had already landed.
+- **Storage isolation.** Default Linux task spaces isolate ownership and tab
+  membership, not browser storage. Use the opt-in isolated mode when storage
+  privacy between spaces is more important than live logins.
+- **Chrome window structure.** Default spaces are tabs in the stock Chromium
+  app; the Spaces overview is a separate app window, not browser chrome.
 
 Full per-method detail lives in
 [`package/ego-linux/README.md`](package/ego-linux/README.md).
@@ -393,8 +385,9 @@ path before committing.
 
 Everything in this section describes **the official macOS application**, not this
 port. Some of it does not hold here: the snapshot is rebuilt from `DOMSnapshot`
-rather than produced by a customised browser kernel, and `listTabs` is
-browser-wide rather than per-Space. It is kept for context.
+rather than produced by a customised browser kernel, and the Linux UI is a stock
+Chromium app/window layer rather than native browser chrome. It is kept for
+context.
 
 Existing tools like browser-use and agent-browser are browser automation
 frameworks: they need a separate browser to drive, logins never carry cleanly,
@@ -442,6 +435,17 @@ For upstream discussion: [Discord](https://discord.gg/5eGZVvHbTq),
 [GitHub Discussions](https://github.com/citrolabs/ego-lite/discussions),
 [X/Twitter](https://x.com/ego_agent). Linux-specific problems belong in
 [this fork's issues](https://github.com/opencue/agenticbrowser/issues).
+
+## Star History
+
+<a href="https://github.com/citrolabs/ego-lite/stargazers">
+<!-- star-history:start -->
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/star-history/star-history-dark.svg">
+  <img alt="Star history" src="assets/star-history/star-history-light.svg">
+</picture>
+<!-- star-history:end -->
+</a>
 
 ## License
 

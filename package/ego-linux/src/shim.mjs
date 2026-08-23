@@ -18,7 +18,22 @@ export async function createEgoShim({ headless = false } = {}) {
   const { wsUrl, port } = await ensureBrowser({ headless });
   const cdp = await connectCdp(wsUrl);
 
-  const taskSpaces = createTaskSpacesApi(cdp);
+  // Agent selection is private to this CDP connection. A person may be working
+  // in any other task-space tab while several agents navigate, click, type and
+  // capture their own pages in the background. Explicit Open / handoff still
+  // raises the requested task through presentSpace().
+  function shouldAutoFocusAgentTab() {
+    return false;
+  }
+
+  // browser.switchTab() uses Target.activateTarget. Acknowledge that as a
+  // logical per-agent selection; real activation is reserved for presentation.
+  cdp.setBackgroundAgentTabs(true);
+
+  const taskSpaces = createTaskSpacesApi(cdp, {
+    shouldAutoFocus: shouldAutoFocusAgentTab,
+  });
+  cdp.setPageControlGuard(() => taskSpaces.pageControlErrorSync());
   // Downloads are armed per browser context, and a space owns one — so the
   // harness's context-less setDownloadBehavior has to be aimed at the space the
   // agent is actually in. See aimDownloadsAtCurrentSpace in transport.mjs.
@@ -26,8 +41,12 @@ export async function createEgoShim({ headless = false } = {}) {
   const tabs = createTabsApi(cdp, {
     port,
     getScope: () => taskSpaces.selectedScope(),
+    shouldAutoFocus: shouldAutoFocusAgentTab,
   });
-  const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
+  const snapshot = createSnapshotApi(cdp, {
+    listTabs: tabs.listTabs,
+    assertAgentControl: taskSpaces.assertAgentControl,
+  });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples
@@ -38,7 +57,8 @@ export async function createEgoShim({ headless = false } = {}) {
     // corner on every scroll.
     if (params.type === "mouseWheel") return;
     if (params.type === "mousePressed") cursor.press(params.x, params.y);
-    else if (params.type === "mouseReleased") cursor.release(params.x, params.y);
+    else if (params.type === "mouseReleased")
+      cursor.release(params.x, params.y);
     else cursor.moveTo(params.x, params.y);
   });
 
@@ -56,6 +76,9 @@ export async function createEgoShim({ headless = false } = {}) {
   });
 
   cdp.watchNavigation(() => {
+    // Shared-profile task spaces start as unfocused blank anchors, which avoids
+    // the "agent opened a blank browser" flash. Navigation and subsequent
+    // observation/input stay bound to the attached background target.
     void taskSpaces.noteContent().catch(() => {});
     // A navigation destroys the overlay with the document it lives in. This is
     // the earliest point the shim hears about one, and arming here is what lets
@@ -110,6 +133,7 @@ export async function createEgoShim({ headless = false } = {}) {
       cursor.hide();
       return result;
     },
+    presentTaskSpace: taskSpaces.presentTaskSpace,
     async takeOverTaskSpace(id) {
       const result = await taskSpaces.takeOverTaskSpace(id);
       cursor.show();
@@ -121,6 +145,7 @@ export async function createEgoShim({ headless = false } = {}) {
     // --- The agent's cursor -------------------------------------------------
     animationHighlightMouseToPosition: (x, y) => cursor.moveTo(x, y),
     setAgentTaskState: (taskState) => cursor.setTaskState(taskState),
+    recordAgentClick: (x, y) => cursor.recordClick(x, y),
 
     // Not upstream surface: a Linux-port extension an agent calls directly to
     // show a human what it is talking about. `ego` is a global in the heredoc,
@@ -131,7 +156,11 @@ export async function createEgoShim({ headless = false } = {}) {
     // --- App-lifecycle: no-ops on Linux -------------------------------------
     async getBrowserVersion() {
       const version = await cdp.call("Browser.getVersion");
-      return { version: version.product, revision: version.revision, linuxPort: true };
+      return {
+        version: version.product,
+        revision: version.revision,
+        linuxPort: true,
+      };
     },
     async upgradeBrowser() {
       // The Linux port has no bundled app to upgrade; the user's Chrome updates

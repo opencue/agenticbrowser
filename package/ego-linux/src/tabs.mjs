@@ -12,7 +12,10 @@
  * also tracks tabs the user switches to by hand.
  */
 
-export function createTabsApi(cdp, { port, getScope }) {
+export function createTabsApi(
+  cdp,
+  { port, getScope, shouldAutoFocus = async () => true },
+) {
   async function mruOrder() {
     if (!port) return null;
     try {
@@ -21,7 +24,9 @@ export function createTabsApi(cdp, { port, getScope }) {
       });
       if (!response.ok) return null;
       const list = await response.json();
-      return list.filter((entry) => entry.type === "page").map((entry) => entry.id);
+      return list
+        .filter((entry) => entry.type === "page")
+        .map((entry) => entry.id);
     } catch {
       return null;
     }
@@ -31,7 +36,8 @@ export function createTabsApi(cdp, { port, getScope }) {
     async listTabs() {
       const { targetInfos = [] } = await cdp.call("Target.getTargets");
       let pages = targetInfos.filter(
-        (target) => target.type === "page" && !target.url.startsWith("devtools://"),
+        (target) =>
+          target.type === "page" && !target.url.startsWith("devtools://"),
       );
 
       // Scoped to the selected space, the way the native app lists only the
@@ -46,8 +52,8 @@ export function createTabsApi(cdp, { port, getScope }) {
       // opened for a space is created in that context, so membership is now a
       // fact rather than an inference.
       //
-      // Spaces without a context — the fallback path, and spaces re-adopted
-      // after a restart — fall back to the tracked target ids, which are exact
+      // Default shared-profile spaces and restart-adopted spaces have no
+      // context, so they fall back to the tracked target ids, which are exact
       // for tabs the shim opened.
       const scope = getScope ? await getScope() : null;
       if (scope) {
@@ -91,18 +97,26 @@ export function createTabsApi(cdp, { port, getScope }) {
       };
     },
 
-    // browserContextId places the tab in a task space's own cookie jar; without
-    // one the tab lands in the default context, which is the pre-context
-    // behaviour and still correct for spaces that have no context.
+    // browserContextId places the tab in an opt-in isolated task space; without
+    // one the tab lands in the default profile, sharing live login/storage state.
     async createTab(url = "about:blank", browserContextId = undefined) {
+      const autoFocus = await shouldAutoFocus();
       const { targetId } = await cdp.call("Target.createTarget", {
         url,
         ...(browserContextId ? { browserContextId } : {}),
+        ...(!autoFocus ? { background: true, focus: false } : {}),
       });
-      if (!targetId) throw new Error("Target.createTarget returned no targetId");
-      // Make it the active tab, matching the native behaviour where a freshly
-      // created tab is the one the agent goes on to act on.
-      await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      if (!targetId)
+        throw new Error("Target.createTarget returned no targetId");
+      // Selection and visibility are separate. The agent must attach to the tab
+      // it just opened even when a person's unrelated tab keeps the foreground.
+      cdp.selectTarget?.(targetId);
+      // Native integrations may still opt into visible activation. The Linux
+      // shim keeps this false during agent work and presents only on Open /
+      // handoff, so background tabs never steal an unrelated user view.
+      if (autoFocus) {
+        await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      }
       return { targetId };
     },
   };

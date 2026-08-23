@@ -18,30 +18,90 @@ import { createSessionResolver } from "./session.mjs";
  */
 
 const SKIP_TAGS = new Set([
-  "script", "style", "noscript", "head", "meta", "link", "title", "template", "br",
+  "script",
+  "style",
+  "noscript",
+  "head",
+  "meta",
+  "link",
+  "title",
+  "template",
+  "br",
 ]);
 
-const ROLE_BY_TAG = new Map(Object.entries({
-  a: "link", button: "button", select: "combobox", textarea: "textbox",
-  h1: "heading", h2: "heading", h3: "heading", h4: "heading", h5: "heading", h6: "heading",
-  img: "img", nav: "navigation", main: "main", header: "banner", footer: "contentinfo",
-  form: "form", ul: "list", ol: "list", li: "listitem", table: "table", tr: "row",
-  td: "cell", th: "columnheader", dialog: "dialog", option: "option", summary: "button",
-  details: "group", label: "label", fieldset: "group", legend: "legend", article: "article",
-  section: "region", aside: "complementary", iframe: "iframe", video: "video", audio: "audio",
-}));
+const ROLE_BY_TAG = new Map(
+  Object.entries({
+    a: "link",
+    button: "button",
+    select: "combobox",
+    textarea: "textbox",
+    h1: "heading",
+    h2: "heading",
+    h3: "heading",
+    h4: "heading",
+    h5: "heading",
+    h6: "heading",
+    img: "img",
+    nav: "navigation",
+    main: "main",
+    header: "banner",
+    footer: "contentinfo",
+    form: "form",
+    ul: "list",
+    ol: "list",
+    li: "listitem",
+    table: "table",
+    tr: "row",
+    td: "cell",
+    th: "columnheader",
+    dialog: "dialog",
+    option: "option",
+    summary: "button",
+    details: "group",
+    label: "label",
+    fieldset: "group",
+    legend: "legend",
+    article: "article",
+    section: "region",
+    aside: "complementary",
+    iframe: "iframe",
+    video: "video",
+    audio: "audio",
+  }),
+);
 
-const INPUT_TYPE_ROLE = new Map(Object.entries({
-  button: "button", submit: "button", reset: "button", image: "button",
-  checkbox: "checkbox", radio: "radio", range: "slider", file: "file-input",
-  hidden: "hidden",
-}));
+const INPUT_TYPE_ROLE = new Map(
+  Object.entries({
+    button: "button",
+    submit: "button",
+    reset: "button",
+    image: "button",
+    checkbox: "checkbox",
+    radio: "radio",
+    range: "slider",
+    file: "file-input",
+    hidden: "hidden",
+  }),
+);
 
 /** Roles worth handing the agent a ref for. */
 const INTERACTIVE_ROLES = new Set([
-  "link", "button", "textbox", "checkbox", "radio", "combobox", "option", "slider",
-  "tab", "menuitem", "menuitemcheckbox", "menuitemradio", "switch", "searchbox",
-  "file-input", "spinbutton",
+  "link",
+  "button",
+  "textbox",
+  "checkbox",
+  "radio",
+  "combobox",
+  "option",
+  "slider",
+  "tab",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "switch",
+  "searchbox",
+  "file-input",
+  "spinbutton",
 ]);
 
 /**
@@ -51,22 +111,53 @@ const INTERACTIVE_ROLES = new Set([
  * that name as final would stop the walk before any child ever gets a ref.
  */
 const NAME_FROM_CONTENT = new Set([
-  "button", "link", "heading", "option", "tab", "menuitem", "menuitemcheckbox",
-  "menuitemradio", "label", "legend", "switch",
+  "button",
+  "link",
+  "heading",
+  "option",
+  "tab",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "label",
+  "legend",
+  "switch",
 ]);
 
 /** Roles that carry structure worth printing even without a ref. */
 const STRUCTURAL_ROLES = new Set([
-  "heading", "list", "listitem", "table", "row", "cell", "columnheader", "navigation",
-  "main", "banner", "contentinfo", "form", "dialog", "article", "region", "complementary",
-  "img", "label", "legend", "group", "iframe", "video", "audio",
+  "heading",
+  "list",
+  "listitem",
+  "table",
+  "row",
+  "cell",
+  "columnheader",
+  "navigation",
+  "main",
+  "banner",
+  "contentinfo",
+  "form",
+  "dialog",
+  "article",
+  "region",
+  "complementary",
+  "img",
+  "label",
+  "legend",
+  "group",
+  "iframe",
+  "video",
+  "audio",
 ]);
 
 const MAX_NAME = 120;
 const MAX_TEXT = 200;
 
 function squash(value, limit = MAX_TEXT) {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim();
+  const text = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
@@ -92,7 +183,8 @@ function cssEscapeIdent(value) {
 function decodeDocument(document, strings) {
   const nodes = document.nodes;
   const count = nodes.nodeName?.length || 0;
-  const str = (index) => (index === undefined || index < 0 ? "" : strings[index] || "");
+  const str = (index) =>
+    index === undefined || index < 0 ? "" : strings[index] || "";
 
   const contentDocumentIndex = rareMap(nodes.contentDocumentIndex);
   const clickable = rareBooleanSet(nodes.isClickable);
@@ -162,8 +254,12 @@ function roleOf(node) {
     if (type === "number") return "spinbutton";
     return "textbox";
   }
-  if (node.tag === "a") return node.attributes.href !== undefined ? "link" : "generic";
-  if (node.attributes.contenteditable === "" || node.attributes.contenteditable === "true") {
+  if (node.tag === "a")
+    return node.attributes.href !== undefined ? "link" : "generic";
+  if (
+    node.attributes.contenteditable === "" ||
+    node.attributes.contenteditable === "true"
+  ) {
     return "textbox";
   }
   return ROLE_BY_TAG.get(node.tag) || "generic";
@@ -200,10 +296,17 @@ function accessibleName(doc, node, role) {
     if (labels.length) return squash(labels.join(" "), MAX_NAME);
   }
   if (node.tag === "img") return squash(attrs.alt || "", MAX_NAME);
-  if (node.tag === "input" || node.tag === "textarea" || node.tag === "select") {
+  if (
+    node.tag === "input" ||
+    node.tag === "textarea" ||
+    node.tag === "select"
+  ) {
     if (attrs.id) {
       for (const candidate of doc.nodes) {
-        if (candidate.tag === "label" && candidate.attributes.for === attrs.id) {
+        if (
+          candidate.tag === "label" &&
+          candidate.attributes.for === attrs.id
+        ) {
           return subtreeText(doc, candidate.index);
         }
       }
@@ -216,9 +319,13 @@ function accessibleName(doc, node, role) {
       if (ancestor.tag === "label") return subtreeText(doc, ancestor.index);
       parent = ancestor.parent;
     }
-    return squash(attrs.placeholder || attrs.title || attrs.name || "", MAX_NAME);
+    return squash(
+      attrs.placeholder || attrs.title || attrs.name || "",
+      MAX_NAME,
+    );
   }
-  if (role === "iframe") return squash(attrs.title || attrs.name || "", MAX_NAME);
+  if (role === "iframe")
+    return squash(attrs.title || attrs.name || "", MAX_NAME);
   if (NAME_FROM_CONTENT.has(role)) return subtreeText(doc, node.index);
   // Containers are named only by an explicit label, never by their contents.
   return squash(attrs.title || "", MAX_NAME);
@@ -228,11 +335,13 @@ function accessibleName(doc, node, role) {
 function stableLocator(node, role, name) {
   const attrs = node.attributes;
   if (attrs["data-testid"]) return `testid:${attrs["data-testid"]}`;
-  if (attrs.id && /^[A-Za-z][\w-]*$/.test(attrs.id)) return `css:#${cssEscapeIdent(attrs.id)}`;
+  if (attrs.id && /^[A-Za-z][\w-]*$/.test(attrs.id))
+    return `css:#${cssEscapeIdent(attrs.id)}`;
   if (role === "link" && attrs.href) return `href:${attrs.href}`;
   if (attrs.placeholder) return `placeholder:${attrs.placeholder}`;
   if (attrs["data-test"]) return `css:[data-test="${attrs["data-test"]}"]`;
-  if (name && INTERACTIVE_ROLES.has(role)) return `role:${role}[name='${name.replace(/'/g, "\\'")}']`;
+  if (name && INTERACTIVE_ROLES.has(role))
+    return `role:${role}[name='${name.replace(/'/g, "\\'")}']`;
   if (attrs.name) return `css:${node.tag}[name="${attrs.name}"]`;
   return null;
 }
@@ -294,7 +403,15 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
         seenDocs.add(node.contentDocumentIndex);
         const name = accessibleName(doc, node, role);
         emit(indent, `iframe${name ? ` "${name}"` : ""} [url=${childDoc.url}]`);
-        renderDocument(childDoc, documents, options, out, refs, indent + 1, seenDocs);
+        renderDocument(
+          childDoc,
+          documents,
+          options,
+          out,
+          refs,
+          indent + 1,
+          seenDocs,
+        );
         return;
       }
     }
@@ -305,8 +422,7 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
       node.attributes.onclick !== undefined ||
       node.attributes.tabindex !== undefined;
 
-    const shouldEmit =
-      inScope && (interactive || STRUCTURAL_ROLES.has(role));
+    const shouldEmit = inScope && (interactive || STRUCTURAL_ROLES.has(role));
     const addressable = interactive && node.backendNodeId !== undefined;
 
     // Being addressable is a different question from being on screen. An
@@ -335,9 +451,14 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
         const locator = stableLocator(node, role, name);
         if (locator) marks.push(`loc=${locator}`);
       }
-      if (role === "link" && node.attributes.href) marks.push(`url=${node.attributes.href}`);
+      if (role === "link" && node.attributes.href)
+        marks.push(`url=${node.attributes.href}`);
       if (includeActionMarks && interactive) {
-        marks.push(role === "textbox" || role === "searchbox" ? "action=type" : "action=click");
+        marks.push(
+          role === "textbox" || role === "searchbox"
+            ? "action=type"
+            : "action=click",
+        );
       }
       if (node.inputValue) marks.push(`value=${squash(node.inputValue, 40)}`);
       if (node.inputChecked) marks.push("checked");
@@ -351,7 +472,11 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
       // A name-from-content node has already printed its whole subtree as its
       // name; recursing would repeat it. Containers must never take this path —
       // their children are where the refs live.
-      if (name && NAME_FROM_CONTENT.has(role) && subtreeText(doc, index) === name) {
+      if (
+        name &&
+        NAME_FROM_CONTENT.has(role) &&
+        subtreeText(doc, index) === name
+      ) {
         return;
       }
     }
@@ -363,7 +488,7 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
   walk(0, depth);
 }
 
-export function createSnapshotApi(cdp, { listTabs }) {
+export function createSnapshotApi(cdp, { listTabs, assertAgentControl } = {}) {
   // Snapshot whatever page the harness is actually driving: observation and
   // action drifting apart reads as an empty snapshot. See session.mjs.
   const sessionForActiveTab = createSessionResolver(cdp, {
@@ -373,6 +498,7 @@ export function createSnapshotApi(cdp, { listTabs }) {
 
   return {
     async snapshot(options = {}) {
+      await assertAgentControl?.();
       const sessionId = await sessionForActiveTab();
       const scope = options.scope ?? "full_page";
 
@@ -392,7 +518,11 @@ export function createSnapshotApi(cdp, { listTabs }) {
 
       const captured = await cdp.call(
         "DOMSnapshot.captureSnapshot",
-        { computedStyles: [], includeDOMRects: false, includePaintOrder: false },
+        {
+          computedStyles: [],
+          includeDOMRects: false,
+          includePaintOrder: false,
+        },
         sessionId,
       );
 

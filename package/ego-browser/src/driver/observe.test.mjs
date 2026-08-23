@@ -112,6 +112,26 @@ test("screenshot creates a missing parent directory", async () => {
   }
 });
 
+test("screenshot gives captureScreenshot a larger CDP response deadline", async () => {
+  const requests = [];
+  const restore = setOverrides({
+    async send(request) {
+      requests.push(request);
+      return { result: { data: Buffer.from("png").toString("base64") } };
+    },
+    async writeFile() {},
+  });
+  try {
+    await screenshot({ path: "/tmp/ego-browser-timeout-shot.png", raw: true });
+  } finally {
+    restore();
+  }
+
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, "Page.captureScreenshot");
+  assert.equal(requests[0].timeout_ms, 60_000);
+});
+
 test("drainEvents resolves to the current event array", async () => {
   assert.ok(Array.isArray(await drainEvents()));
 });

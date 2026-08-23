@@ -49,6 +49,8 @@ function matchCountKind(message: string): "transient" | "permanent" {
   return n > 1 ? "permanent" : "transient";
 }
 
+const MAX_LOCATOR_DIAGNOSTIC_CANDIDATES = 5;
+
 function selectorResolutionError(selector, result) {
   const message = exceptionText(result);
   if (/\bmatched \d+ elements\b/.test(message)) {
@@ -249,21 +251,11 @@ function resolveFrameSession(frameId, sessionId, iframeSessions) {
 
 async function resolveLocatorCenter(cdp, sessionId, locator) {
   if (locator.kind === "role") {
-    const backendNodeId =
-      locator.nth === undefined
-        ? await findUniqueBackendNodeIdByRoleName(
-            cdp,
-            sessionId,
-            locator.role,
-            locator.name,
-          )
-        : await findBackendNodeIdByRoleName(
-            cdp,
-            sessionId,
-            locator.role,
-            locator.name,
-            locator.nth,
-          );
+    const backendNodeId = await resolveLocatorBackendNodeId(
+      cdp,
+      sessionId,
+      locator,
+    );
     const result = await send(
       cdp,
       "DOM.getBoxModel",
@@ -290,7 +282,7 @@ async function resolveLocatorCenter(cdp, sessionId, locator) {
   }
   const value = result.result?.value;
   if (value?.error) {
-    throw new ElementResolutionError(value.error, matchCountKind(value.error));
+    throw await locatorResolutionError(cdp, sessionId, locator, value.error);
   }
   if (typeof value?.x !== "number" || typeof value?.y !== "number") {
     throw new ElementResolutionError(
@@ -303,21 +295,11 @@ async function resolveLocatorCenter(cdp, sessionId, locator) {
 
 async function resolveLocatorObjectId(cdp, sessionId, locator) {
   if (locator.kind === "role") {
-    const backendNodeId =
-      locator.nth === undefined
-        ? await findUniqueBackendNodeIdByRoleName(
-            cdp,
-            sessionId,
-            locator.role,
-            locator.name,
-          )
-        : await findBackendNodeIdByRoleName(
-            cdp,
-            sessionId,
-            locator.role,
-            locator.name,
-            locator.nth,
-          );
+    const backendNodeId = await resolveLocatorBackendNodeId(
+      cdp,
+      sessionId,
+      locator,
+    );
     const result = await send(
       cdp,
       "DOM.resolveNode",
@@ -335,21 +317,27 @@ async function resolveLocatorObjectId(cdp, sessionId, locator) {
   }
   const count = await locatorCount(cdp, sessionId, locator);
   if (count === 0) {
-    throw new ElementResolutionError(
+    throw await locatorResolutionError(
+      cdp,
+      sessionId,
+      locator,
       `Locator ${locator.raw} matched 0 elements`,
-      "transient",
     );
   }
   if (typeof locator.nth === "number" && count <= locator.nth) {
-    throw new ElementResolutionError(
+    throw await locatorResolutionError(
+      cdp,
+      sessionId,
+      locator,
       `Locator ${locator.raw} matched 0 elements`,
-      "transient",
     );
   }
   if (locator.nth === undefined && count > 1) {
-    throw new ElementResolutionError(
+    throw await locatorResolutionError(
+      cdp,
+      sessionId,
+      locator,
       `Locator ${locator.raw} matched ${count} elements`,
-      "permanent",
     );
   }
   const result = await send(
@@ -373,6 +361,36 @@ async function resolveLocatorObjectId(cdp, sessionId, locator) {
   return { objectId, sessionId };
 }
 
+async function resolveLocatorBackendNodeId(cdp, sessionId, locator) {
+  try {
+    return locator.nth === undefined
+      ? await findUniqueBackendNodeIdByRoleName(
+          cdp,
+          sessionId,
+          locator.role,
+          locator.name,
+        )
+      : await findBackendNodeIdByRoleName(
+          cdp,
+          sessionId,
+          locator.role,
+          locator.name,
+          locator.nth,
+        );
+  } catch (error) {
+    if (error instanceof ElementResolutionError) {
+      throw await locatorResolutionError(
+        cdp,
+        sessionId,
+        locator,
+        error.message,
+        error.kind,
+      );
+    }
+    throw error;
+  }
+}
+
 async function locatorCount(cdp, sessionId, locator) {
   const result = await send(
     cdp,
@@ -391,6 +409,75 @@ async function locatorCount(cdp, sessionId, locator) {
     );
   }
   return Number(result.result?.value || 0);
+}
+
+async function locatorResolutionError(
+  cdp,
+  sessionId,
+  locator,
+  message: string,
+  kind: "transient" | "permanent" = matchCountKind(message),
+) {
+  return new ElementResolutionError(
+    await locatorDiagnosticMessage(cdp, sessionId, locator, message),
+    kind,
+  );
+}
+
+async function locatorDiagnosticMessage(cdp, sessionId, locator, message) {
+  const candidates = await locatorDiagnosticCandidates(cdp, sessionId, locator);
+  if (!candidates.length) {
+    return message;
+  }
+  return [
+    message,
+    "Locator diagnostics:",
+    ...candidates.map(formatLocatorDiagnosticCandidate),
+  ].join("\n");
+}
+
+async function locatorDiagnosticCandidates(cdp, sessionId, locator) {
+  try {
+    const result = await send(
+      cdp,
+      "Runtime.evaluate",
+      {
+        expression: buildLocatorDiagnosticsJs(locator),
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    if (result.exceptionDetails) {
+      return [];
+    }
+    const value = result.result?.value;
+    return Array.isArray(value)
+      ? value.slice(0, MAX_LOCATOR_DIAGNOSTIC_CANDIDATES)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function formatLocatorDiagnosticCandidate(candidate, index) {
+  const summary = truncateLocatorDiagnosticText(
+    String(candidate?.summary || "candidate"),
+    160,
+  );
+  const locators = Array.isArray(candidate?.locators)
+    ? candidate.locators
+        .filter((value) => typeof value === "string" && value)
+        .slice(0, 3)
+    : [];
+  const suffix = locators.length
+    ? `; try ${locators.map((value) => `\`${value}\``).join(" or ")}`
+    : "";
+  return `  ${index + 1}. ${summary}${suffix}`;
+}
+
+function truncateLocatorDiagnosticText(value: string, maxChars: number) {
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}…`;
 }
 
 async function findBackendNodeIdByRoleName(
@@ -592,6 +679,190 @@ function buildLocatorCenterJs(locator) {
             const rect = el.getBoundingClientRect();
             return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
         })()`;
+}
+
+function buildLocatorElementsJs(locator) {
+  if (locator.kind === "query") {
+    return queryAllExpression(locator.selector);
+  }
+  if (locator.kind === "css") {
+    return queryAllExpression(`loc=css:${locator.selector}`);
+  }
+  if (locator.kind === "xpath") {
+    return `(() => {
+      const snapshot = document.evaluate(${JSON.stringify(locator.xpath)}, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      const elements = [];
+      for (let i = 0; i < snapshot.snapshotLength; i += 1) elements.push(snapshot.snapshotItem(i));
+      return elements;
+    })()`;
+  }
+  if (locator.kind === "role") {
+    return queryAllExpression(`loc=${locator.raw}`);
+  }
+  if (
+    locator.kind === "text" ||
+    locator.kind === "label" ||
+    locator.kind === "placeholder" ||
+    locator.kind === "alt" ||
+    locator.kind === "title" ||
+    locator.kind === "testid"
+  ) {
+    return buildLocatorAllJs(locator);
+  }
+  return hrefElementsJs(locator.href);
+}
+
+function buildLocatorDiagnosticsJs(locator) {
+  const matchedElements = buildLocatorElementsJs(locator);
+  return `(() => {
+    const __egoLocatorDiagnostics = ${JSON.stringify(locator.raw)};
+    void __egoLocatorDiagnostics;
+    const max = ${MAX_LOCATOR_DIAGNOSTIC_CANDIDATES};
+    const normalize = (value) => String(value || '').replace(/\\s+/g, ' ').trim();
+    const truncate = (value, maxLength = 80) => {
+      const text = normalize(value);
+      return text.length <= maxLength ? text : text.slice(0, maxLength - 1) + '…';
+    };
+    const escapeCss = (value) => {
+      if (globalThis.CSS?.escape) return CSS.escape(String(value));
+      return String(value).replace(/[^a-zA-Z0-9_-]/g, '\\\\$&');
+    };
+    const attrSelector = (name, value) => '[' + name + '=' + JSON.stringify(String(value)) + ']';
+    const cssFor = (el) => {
+      const tag = el.tagName.toLowerCase();
+      if (el.id) return '#' + escapeCss(el.id);
+      const testId = el.getAttribute('data-testid');
+      if (testId) return attrSelector('data-testid', testId);
+      const name = el.getAttribute('name');
+      if (name) return tag + attrSelector('name', name);
+      const classes = Array.from(el.classList || [])
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(escapeCss);
+      return classes.length ? tag + '.' + classes.join('.') : tag;
+    };
+    const explicitOrImplicitRole = (el) => {
+      const explicitRole = (el.getAttribute('role') || '').split(/\\s+/).filter(Boolean)[0];
+      if (explicitRole) return explicitRole;
+      const tag = el.tagName.toLowerCase();
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      if (tag === 'button') return 'button';
+      if (tag === 'a' && el.hasAttribute('href')) return 'link';
+      if (tag === 'textarea') return 'textbox';
+      if (tag === 'select') return 'combobox';
+      if (tag === 'img' && el.hasAttribute('alt')) return 'img';
+      if (/^h[1-6]$/.test(tag)) return 'heading';
+      if (tag === 'input') {
+        if (type === 'button' || type === 'submit' || type === 'reset') return 'button';
+        if (type === 'checkbox') return 'checkbox';
+        if (type === 'radio') return 'radio';
+        if (type === 'range') return 'slider';
+        return 'textbox';
+      }
+      return '';
+    };
+    const labelledByName = (el) => normalize(
+      (el.getAttribute('aria-labelledby') || '')
+        .split(/\\s+/)
+        .filter(Boolean)
+        .map((id) => document.getElementById(id)?.textContent || '')
+        .join(' '),
+    );
+    const labelText = (el) => {
+      if (!('labels' in el) || !el.labels || !el.labels.length) return '';
+      return normalize(Array.from(el.labels).map((label) => label.textContent || '').join(' '));
+    };
+    const buttonValue = (el) => {
+      if (!(el instanceof HTMLInputElement)) return '';
+      const type = (el.getAttribute('type') || '').toLowerCase();
+      return type === 'button' || type === 'submit' || type === 'reset'
+        ? normalize(el.value || el.getAttribute('value') || '')
+        : '';
+    };
+    const accessibleName = (el) =>
+      labelledByName(el) ||
+      normalize(el.getAttribute('aria-label')) ||
+      labelText(el) ||
+      normalize(el.getAttribute('alt')) ||
+      buttonValue(el) ||
+      truncate(el.innerText || el.textContent);
+    const visibleText = (el) => {
+      if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+        return buttonValue(el) || normalize(el.getAttribute('placeholder'));
+      }
+      return truncate(el.innerText || el.textContent);
+    };
+    const isVisible = (el) => {
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return rect.width > 0 &&
+        rect.height > 0 &&
+        style.visibility !== 'hidden' &&
+        style.display !== 'none';
+    };
+    const pushUnique = (items, value) => {
+      if (value && !items.includes(value)) items.push(value);
+    };
+    const candidateFor = (el) => {
+      const tag = el.tagName.toLowerCase();
+      const role = explicitOrImplicitRole(el);
+      const name = accessibleName(el);
+      const text = visibleText(el);
+      const testId = el.getAttribute('data-testid');
+      const placeholder = el.getAttribute('placeholder');
+      const locators = [];
+      if (role) {
+        pushUnique(
+          locators,
+          name
+            ? 'loc=role:' + role + '[name=' + JSON.stringify(truncate(name)) + ']'
+            : 'loc=role:' + role,
+        );
+      }
+      pushUnique(locators, 'loc=css:' + cssFor(el));
+      if (testId) pushUnique(locators, 'loc=testid:exact:' + JSON.stringify(testId));
+      if (placeholder) pushUnique(locators, 'loc=placeholder:exact:' + JSON.stringify(placeholder));
+      if (el instanceof HTMLAnchorElement && el.href) {
+        try {
+          const url = new URL(el.href, location.href);
+          pushUnique(locators, 'loc=href:' + (url.pathname + url.search + url.hash || url.href));
+        } catch {
+          pushUnique(locators, 'loc=href:' + el.getAttribute('href'));
+        }
+      }
+      const labels = labelText(el);
+      if (labels) pushUnique(locators, 'loc=label:' + JSON.stringify(truncate(labels)));
+      if (text && !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement)) {
+        pushUnique(locators, 'loc=text:exact:' + JSON.stringify(truncate(text)));
+      }
+      const summaryParts = [tag];
+      if (role) summaryParts.push('role=' + role);
+      if (name) summaryParts.push('name=' + JSON.stringify(truncate(name)));
+      if (text && text !== name) summaryParts.push('text=' + JSON.stringify(truncate(text)));
+      if (el.id) summaryParts.push('id=' + JSON.stringify(el.id));
+      if (testId) summaryParts.push('testid=' + JSON.stringify(testId));
+      return {
+        summary: summaryParts.join(' '),
+        locators,
+      };
+    };
+    const matched = (() => {
+      try {
+        return Array.from(${matchedElements}).filter(Boolean);
+      } catch {
+        return [];
+      }
+    })();
+    const visibleMatched = matched.filter(isVisible);
+    const primary = visibleMatched.length ? visibleMatched : matched;
+    if (primary.length) {
+      return primary.slice(0, max).map(candidateFor);
+    }
+    const fallback = Array.from(document.querySelectorAll(
+      'button, a[href], input, textarea, select, img[alt], h1, h2, h3, h4, h5, h6, [role], [aria-label], [data-testid], [title]',
+    )).filter(isVisible);
+    return fallback.slice(0, max).map(candidateFor);
+  })()`;
 }
 
 function hrefElementsJs(href) {

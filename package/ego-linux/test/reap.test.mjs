@@ -24,7 +24,9 @@ const spawned = [];
 
 /** Spawn a stand-in carrying `args`, and wait until /proc has its cmdline. */
 async function standIn(...args) {
-  const child = spawn(process.execPath, [STANDIN, ...args], { stdio: "ignore" });
+  const child = spawn(process.execPath, [STANDIN, ...args], {
+    stdio: "ignore",
+  });
   spawned.push(child);
   await new Promise((resolve, reject) => {
     child.once("spawn", resolve);
@@ -52,9 +54,12 @@ before(async () => {
 
 after(async () => {
   for (const child of spawned) child.kill("SIGKILL");
-  await rm(SANDBOX, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(
-    () => {},
-  );
+  await rm(SANDBOX, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 300,
+  }).catch(() => {});
 });
 
 describe("reapOrphanedBrowsers", () => {
@@ -73,7 +78,10 @@ describe("reapOrphanedBrowsers", () => {
     // and still unsignalled is a real failure and asserts on the spot, so this
     // can never turn a broken reaper green.
     for (let attempt = 0; ; attempt += 1) {
-      const orphan = await standIn("--class=ego-lite-linux", `--user-data-dir=${gone}`);
+      const orphan = await standIn(
+        "--class=ego-lite-linux",
+        `--user-data-dir=${gone}`,
+      );
 
       const reaped = await reapOrphanedBrowsers();
       await settle();
@@ -89,7 +97,10 @@ describe("reapOrphanedBrowsers", () => {
   it("leaves a browser whose profile directory still exists", async () => {
     const live = join(SANDBOX, "live-profile");
     await mkdir(live, { recursive: true });
-    const browser = await standIn("--class=ego-lite-linux", `--user-data-dir=${live}`);
+    const browser = await standIn(
+      "--class=ego-lite-linux",
+      `--user-data-dir=${live}`,
+    );
 
     const reaped = await reapOrphanedBrowsers();
     await settle();

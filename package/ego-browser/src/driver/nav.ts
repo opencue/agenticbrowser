@@ -196,6 +196,11 @@ export async function newTab(url = "about:blank") {
   if (!result.targetId) {
     throw new Error("newTab returned no targetId");
   }
+  // Native implementations may keep the new tab visually backgrounded. Make
+  // it the agent's preferred CDP target explicitly instead of relying on OS/UI
+  // activation to decide where the next wait, input or screenshot is sent.
+  invalidateSession();
+  setPreferredTarget(result.targetId);
   return result.targetId;
 }
 

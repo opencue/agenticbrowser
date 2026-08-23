@@ -346,7 +346,20 @@ async function act(path, method, body) {
   if (busy) return;
   busy = true;
   try {
-    await api(path, { method, body: body ? JSON.stringify(body) : undefined });
+    const result = await api(path, { method, body: body ? JSON.stringify(body) : undefined });
+    if (result?.visible === false) {
+      if (result.reason === "headless") {
+        note.textContent =
+          "handed off, but the browser is headless; unset EGO_LINUX_HEADLESS and run ego-browser --open";
+      } else if (result.reason === "no-live-tab") {
+        note.textContent = "handed off, but this space has no live tab left";
+      } else {
+        note.textContent =
+          "handed off, but the browser window could not be raised; open the ego lite window manually";
+      }
+    } else {
+      note.textContent = "";
+    }
     await refresh();
   } catch (error) {
     note.textContent = "action failed: " + error.message;
@@ -425,7 +438,7 @@ async function refresh() {
     }
 
     note.textContent = spaces.length
-      ? "Each space gets its own cookie jar, seeded from your logins when it is created."
+      ? "Spaces share the live agent profile by default, so logins and site storage carry between them."
       : "";
   } catch (error) {
     note.textContent = "cannot reach the browser: " + error.message;

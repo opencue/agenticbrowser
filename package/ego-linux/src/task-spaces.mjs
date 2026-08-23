@@ -7,30 +7,28 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 /**
  * Task spaces, emulated as tracked sets of tabs.
  *
- * The app's Space is isolated *and* inherits your login state. On stock Chromium
- * those two properties look like they pull apart:
+ * The native app's Space inherits the user's live login state, including the
+ * origin storage sites use instead of cookies. Stock Chromium only gives us that
+ * by using the profile's default browser context, so this port treats a Space as
+ * an owned, tracked tab set in the shared agent profile. That makes cookies,
+ * localStorage, IndexedDB and service-worker state live across Spaces.
  *
- *   Target.createBrowserContext -> real isolation, but a blank cookie jar
- *   sharing the default profile -> your real logins, but no isolation
+ * If you need stronger storage isolation more than live login parity, set
+ * EGO_LINUX_TASK_SPACE_STORAGE=isolated. That revives the older context-backed
+ * mode: a space owns a browser context seeded with a point-in-time cookie copy
+ * from the default jar, while non-cookie storage stays isolated.
  *
- * They don't: the empty jar can be filled. A space owns a browser context seeded
- * from the default jar at creation, so it gets both — see createSeededContext
- * below and docs/isolation-with-inherited-logins.md. The seed is a point-in-time
- * copy, not live shared state, and a space that fails to get a context falls
- * back to the shared default jar.
- *
- * Spaces deliberately do NOT get their own browser window. That was the first
- * design, and it was measurably worse: a headless Chrome does not render tabs in
- * background windows, so `document.elementFromPoint` returned null for pages
- * living in a non-foreground window. That broke hit-testing, which in turn made
- * the harness's input-fallback path re-synthesise drags that had already landed
- * (see driver/pointer.ts finishDragProbe) — every canvas case in the upstream
- * e2e suite failed or double-counted strokes. One window, tracked tab sets.
+ * Membership comes from tracked target ids by default, and from browserContextId
+ * first for opt-in isolated or restart-adopted context-backed spaces.
  *
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
 const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+const USER_CONTROL_ERROR = "The task is under user control";
+const USER_CONTROL_CODE = "EGO_TASK_SPACE_USER_IN_CONTROL";
+const ISOLATED_STORAGE_RE =
+  /^(1|true|yes|on|isolated|context|browser-context|cookie-copy)$/i;
 
 /**
  * How many idle-closed spaces to remember.
@@ -40,7 +38,10 @@ const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
  */
 const REMEMBERED_CLOSURES = 20;
 
-export function createTaskSpacesApi(cdp) {
+export function createTaskSpacesApi(
+  cdp,
+  { shouldAutoFocus = async () => true } = {},
+) {
   /**
    * Which space *this process* is working in.
    *
@@ -59,6 +60,44 @@ export function createTaskSpacesApi(cdp) {
    * process acts on.
    */
   let pinnedSpaceId = null;
+
+  function useIsolatedStorage() {
+    return ISOLATED_STORAGE_RE.test(
+      String(process.env.EGO_LINUX_TASK_SPACE_STORAGE || ""),
+    );
+  }
+
+  function userControlResult() {
+    return { error: USER_CONTROL_ERROR, error_code: USER_CONTROL_CODE };
+  }
+
+  function userControlException() {
+    return Object.assign(new Error(USER_CONTROL_ERROR), {
+      error_code: USER_CONTROL_CODE,
+    });
+  }
+
+  function isUserControlled(space) {
+    return (
+      space?.ownership === "user" || space?.ownership === "agentDelegatedToUser"
+    );
+  }
+
+  function isPanelProcess() {
+    return process.env.EGO_LINUX_PANEL === "1";
+  }
+
+  function spaceForEffectiveSelection(state) {
+    const wanted = effectiveSelectedId(state);
+    return state.spaces?.find((candidate) => candidate.id === wanted) ?? null;
+  }
+
+  function pageControlErrorForState(state) {
+    if (isPanelProcess()) return null;
+    return isUserControlled(spaceForEffectiveSelection(state))
+      ? userControlResult()
+      : null;
+  }
 
   /** The pinned space if it still exists, else whatever the file last recorded. */
   function effectiveSelectedId(state) {
@@ -83,6 +122,27 @@ export function createTaskSpacesApi(cdp) {
   async function writeState(state) {
     await mkdir(STATE_DIR, { recursive: true });
     await writeFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
+  }
+
+  function pageControlErrorSync() {
+    try {
+      const parsed = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
+      return pageControlErrorForState({
+        ...EMPTY,
+        ...parsed,
+        spaces: parsed.spaces ?? [],
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  async function pageControlError() {
+    return pageControlErrorForState(await readState());
+  }
+
+  async function assertAgentControl() {
+    if (await pageControlError()) throw userControlException();
   }
 
   async function livePageTargets() {
@@ -113,7 +173,9 @@ export function createTaskSpacesApi(cdp) {
   function readoptRestoredPages(state, live) {
     if (state.spaces.length === 0) return false;
     if (
-      state.spaces.some((space) => (space.targetIds || []).some((id) => live.has(id)))
+      state.spaces.some((space) =>
+        (space.targetIds || []).some((id) => live.has(id)),
+      )
     ) {
       return false;
     }
@@ -161,8 +223,11 @@ export function createTaskSpacesApi(cdp) {
       if (space.id === effectiveSelectedId(state)) return false;
       // Ever held a real page => not abandoned, only between pages.
       if (space.lastContentAt) return false;
-      if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS) return false;
-      const tabs = (space.targetIds || []).map((id) => live.get(id)).filter(Boolean);
+      if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS)
+        return false;
+      const tabs = (space.targetIds || [])
+        .map((id) => live.get(id))
+        .filter(Boolean);
       if (tabs.length === 0) return false;
       return tabs.every((target) => target.url === "about:blank");
     });
@@ -196,9 +261,8 @@ export function createTaskSpacesApi(cdp) {
    * Coming back to one starts by listing them — useOrCreate(id) resolves the id
    * against the list before it selects — so sweeping on the read path reaped the
    * very space the returning agent had just named, one call before the touch
-   * that would have spared it. The symptom is a `task space not found: 172` for
-   * a space that was alive until it was asked for, and a session quiet for
-   * longer than the gap between two user turns is the ordinary case, not an
+   * a space that was alive until it was asked for, and a session that goes quiet
+   * for longer than the window between two user turns is the normal case, not an
    * abandoned one. A poll of the Spaces panel had the same effect, so an open
    * overview quietly shortened every space's life.
    *
@@ -212,7 +276,9 @@ export function createTaskSpacesApi(cdp) {
    */
   const IDLE_MINUTES = Number(process.env.EGO_LINUX_SPACE_IDLE_MIN ?? 30);
   const IDLE_AFTER_MS =
-    Number.isFinite(IDLE_MINUTES) && IDLE_MINUTES > 0 ? IDLE_MINUTES * 60000 : 0;
+    Number.isFinite(IDLE_MINUTES) && IDLE_MINUTES > 0
+      ? IDLE_MINUTES * 60000
+      : 0;
 
   async function pruneIdle(state) {
     if (!IDLE_AFTER_MS) return false;
@@ -306,12 +372,14 @@ export function createTaskSpacesApi(cdp) {
     if (readoptRestoredPages(state, live)) changed = true;
     if (await pruneAbandoned(state, live)) changed = true;
 
-    const surviving = state.spaces.filter((space) => space.targetIds.length > 0);
+    const surviving = state.spaces.filter(
+      (space) => space.targetIds.length > 0,
+    );
     if (surviving.length !== state.spaces.length) {
       // Losing its last tab is how a space ends when the user closes tabs by
-      // hand, so its context has to go the same way closeTaskSpace disposes
-      // one. Dropping the record alone would strand a live context holding a
-      // full copy of the seeded cookie jar until the browser restarts.
+      // hand, so an opt-in isolated context has to go the same way
+      // closeTaskSpace disposes one. Dropping the record alone would strand a
+      // live context holding a full cookie copy until the browser restarts.
       for (const space of state.spaces) {
         if (space.targetIds.length === 0 && space.browserContextId) {
           await disposeContext(space.browserContextId);
@@ -336,6 +404,10 @@ export function createTaskSpacesApi(cdp) {
         .map((id) => live.get(id)?.title || "")
         .filter(Boolean),
     };
+  }
+
+  function isBlankUrl(url) {
+    return !url || url === "about:blank";
   }
 
   /**
@@ -363,12 +435,19 @@ export function createTaskSpacesApi(cdp) {
     return space;
   }
 
-  /** Bring the space's own tab to the front, so the agent lands back on it. */
+  /** Select the space for this agent connection and optionally foreground it. */
   async function focusSpace(space) {
     const live = await livePageTargets();
-    const targetId = space.targetIds.find((id) => live.has(id));
-    if (targetId) {
-      await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    const target = space.targetIds.map((id) => live.get(id)).find(Boolean);
+    if (!target) return;
+    cdp.selectTarget?.(target.targetId);
+    if (!space.lastContentAt && isBlankUrl(target.url)) {
+      return;
+    }
+    if (await shouldAutoFocus(target.targetId)) {
+      await cdp
+        .call("Target.activateTarget", { targetId: target.targetId })
+        .catch(() => {});
     }
   }
 
@@ -404,19 +483,24 @@ export function createTaskSpacesApi(cdp) {
    * desktop, and a minimized window behind an IDE looks exactly like nothing
    * happened.
    *
-   * Resolves to whether there is a window on screen at all, so the caller can
-   * say so instead of asking the user to click something that does not exist.
+   * Resolves to whether the page was actually raised, with a reason when it was
+   * not, so the caller can say the right thing instead of treating every failure
+   * as "headless".
    */
   async function presentSpace(space) {
     const live = await livePageTargets().catch(() => new Map());
     const targetId = (space.targetIds || []).find((id) => live.has(id));
-    if (!targetId) return false;
+    if (!targetId) return { visible: false, reason: "no-live-tab" };
     await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
-    if (!(await hasWindow())) return false;
+    if (!(await hasWindow())) return { visible: false, reason: "headless" };
 
     try {
-      const { windowId } = await cdp.call("Browser.getWindowForTarget", { targetId });
-      const { bounds } = await cdp.call("Browser.getWindowBounds", { windowId });
+      const { windowId } = await cdp.call("Browser.getWindowForTarget", {
+        targetId,
+      });
+      const { bounds } = await cdp.call("Browser.getWindowBounds", {
+        windowId,
+      });
       // Only a minimized window is restored. Sending "normal" unconditionally
       // would un-maximize a window the user maximized themselves — taking the
       // browser away from them on the call that hands it to them.
@@ -430,34 +514,50 @@ export function createTaskSpacesApi(cdp) {
       // No window manager, or a compositor that refuses the bounds change.
     }
 
+    let sessionId;
     try {
-      const { sessionId } = await cdp.call("Target.attachToTarget", {
+      ({ sessionId } = await cdp.call("Target.attachToTarget", {
         targetId,
         flatten: true,
-      });
+      }));
+      cdp.claimSession?.(sessionId);
       await cdp.call("Page.bringToFront", {}, sessionId);
-      await cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      return { visible: true };
     } catch {
-      // Raising is best-effort — activateTarget above already selected the tab.
+      return { visible: false, reason: "raise-failed" };
+    } finally {
+      if (sessionId) {
+        await cdp
+          .call("Target.detachFromTarget", { sessionId })
+          .catch(() => {});
+        cdp.releaseSession?.(sessionId);
+      }
     }
-    return true;
   }
 
-  /**
-   * Give a space its own cookie jar, pre-filled with the user's.
-   *
-   * Target.createBrowserContext isolates for real, but starts empty — which on
-   * its own would log the agent out of everything, so this port used to take a
-   * bare window instead and accept a shared jar. Seeding the new context from
-   * the default jar gets both properties at once: measurements and the two
-   * reproducible experiments are in docs/isolation-with-inherited-logins.md.
-   *
-   * These calls carry no sessionId, so the transport sends them at the browser
-   * level, which is where browserContextId is accepted.
-   *
-   * Returns null if the browser refuses a context, so a space degrades to the
-   * previous window-only behaviour rather than failing to open at all.
-   */
+  function handoffWarning(space, reason) {
+    if (reason === "headless") {
+      return (
+        `ego-browser: handed off task space ${space.id}, but this browser has no window ` +
+        `on screen — the user cannot see the page or act on it. Do not ask them to click, ` +
+        `log in, or solve a captcha here. Get a visible browser first: unset ` +
+        `EGO_LINUX_HEADLESS, then run \`ego-browser --open\`.\n`
+      );
+    }
+    if (reason === "no-live-tab") {
+      return (
+        `ego-browser: handed off task space ${space.id}, but it has no live tab left — ` +
+        `there is no page for the user to see or act on. Reopen the page or start a ` +
+        `fresh task space before asking the user to click, log in, or solve a captcha.\n`
+      );
+    }
+    return (
+      `ego-browser: handed off task space ${space.id}, but the browser window could not ` +
+      `be raised. The user may need to open the ego lite browser window manually before ` +
+      `acting on the page.\n`
+    );
+  }
+
   /**
    * The selected space's context id, read synchronously.
    *
@@ -469,7 +569,10 @@ export function createTaskSpacesApi(cdp) {
   function selectedContextId() {
     try {
       const state = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
-      const wanted = effectiveSelectedId({ ...state, spaces: state.spaces ?? [] });
+      const wanted = effectiveSelectedId({
+        ...state,
+        spaces: state.spaces ?? [],
+      });
       const space = state.spaces?.find((candidate) => candidate.id === wanted);
       return space?.browserContextId ?? null;
     } catch {
@@ -483,7 +586,81 @@ export function createTaskSpacesApi(cdp) {
     if (ids.length !== 1) return null;
     const live = await livePageTargets().catch(() => new Map());
     const target = live.get(ids[0]);
-    return target && target.url === "about:blank" ? target.targetId : null;
+    return target && isBlankUrl(target.url) ? target.targetId : null;
+  }
+
+  async function createBlankAnchor(browserContextId) {
+    const params = {
+      url: "about:blank",
+      ...(browserContextId ? { browserContextId } : {}),
+    };
+    try {
+      return await cdp.call("Target.createTarget", {
+        ...params,
+        background: true,
+        focus: false,
+      });
+    } catch (error) {
+      try {
+        return await cdp.call("Target.createTarget", params);
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  async function paintBlankAnchor(targetId) {
+    let sessionId;
+    try {
+      ({ sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      }));
+      await cdp.call(
+        "Runtime.evaluate",
+        {
+          expression: String.raw`(() => {
+            document.title = "Ego Lite agent space";
+            document.body.innerHTML = "";
+            document.body.style.cssText = [
+              "margin:0",
+              "font:15px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
+              "background:#0f172a",
+              "color:#e5e7eb",
+              "display:grid",
+              "place-items:center",
+              "min-height:100vh"
+            ].join(";");
+            const card = document.createElement("main");
+            card.style.cssText = [
+              "max-width:560px",
+              "padding:28px 32px",
+              "border:1px solid rgba(148,163,184,.35)",
+              "border-radius:18px",
+              "background:rgba(15,23,42,.84)",
+              "box-shadow:0 24px 80px rgba(0,0,0,.35)"
+            ].join(";");
+            card.innerHTML = [
+              "<h1 style='margin:0 0 10px;font-size:22px'>Ego Lite agent space is ready</h1>",
+              "<p style='margin:0;color:#cbd5e1;line-height:1.55'>The agent has created a browser task space and should navigate this tab shortly.</p>",
+              "<p style='margin:14px 0 0;color:#94a3b8;line-height:1.55'>If this page stays here, the agent stopped before opening the requested site. It is safe to close this task space.</p>"
+            ].join("");
+            document.body.append(card);
+          })()`,
+          awaitPromise: false,
+          returnByValue: false,
+        },
+        sessionId,
+      );
+    } catch {
+      // Cosmetic only. A plain about:blank anchor is still functional.
+    } finally {
+      if (sessionId) {
+        await cdp
+          .call("Target.detachFromTarget", { sessionId })
+          .catch(() => {});
+      }
+    }
   }
 
   async function disposeContext(browserContextId) {
@@ -492,10 +669,25 @@ export function createTaskSpacesApi(cdp) {
       .catch(() => {});
   }
 
+  /**
+   * Give an opt-in isolated space its own cookie jar, pre-filled with the user's.
+   *
+   * Target.createBrowserContext isolates storage for real, but starts empty.
+   * Seeding the new context from the default jar recovers cookie-backed logins
+   * while deliberately keeping non-cookie storage private. These calls carry no
+   * sessionId, so the transport sends them at the browser level, where
+   * browserContextId is accepted.
+   *
+   * Returns null if the browser refuses a context, so a space degrades to the
+   * shared-profile default rather than failing to open at all.
+   */
   async function createSeededContext() {
     let browserContextId;
     try {
-      ({ browserContextId } = await cdp.call("Target.createBrowserContext", {}));
+      ({ browserContextId } = await cdp.call(
+        "Target.createBrowserContext",
+        {},
+      ));
     } catch {
       return null;
     }
@@ -538,19 +730,18 @@ export function createTaskSpacesApi(cdp) {
 
     async createTaskSpace(name) {
       const state = await readState();
-      const browserContextId = await createSeededContext();
+      const browserContextId = useIsolatedStorage()
+        ? await createSeededContext()
+        : null;
       let targetId;
       try {
-        ({ targetId } = await cdp.call("Target.createTarget", {
-          url: "about:blank",
-          ...(browserContextId ? { browserContextId } : {}),
-        }));
+        ({ targetId } = await createBlankAnchor(browserContextId));
       } catch (err) {
         // Nothing will ever reference this context if the space fails to open.
         if (browserContextId) await disposeContext(browserContextId);
         throw err;
       }
-      await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      await paintBlankAnchor(targetId);
 
       const space = {
         id: state.nextId,
@@ -600,6 +791,9 @@ export function createTaskSpacesApi(cdp) {
     async useTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "useTaskSpace");
+      if (!isPanelProcess() && space.ownership === "user") {
+        return userControlResult();
+      }
       state.selectedId = space.id;
       pinnedSpaceId = space.id;
       // Selected first, so the space this session came back for is the one the
@@ -627,22 +821,25 @@ export function createTaskSpacesApi(cdp) {
       // Raised before ownership moves: past this line the agent stops driving,
       // so it is the last moment anything can put the page in front of the
       // person who is about to be asked to act on it.
-      const visible = await presentSpace(space);
+      const presentation = await presentSpace(space);
       space.ownership = "agentDelegatedToUser";
       await writeState(state);
-      if (!visible) {
+      if (!presentation.visible) {
         // Not an error. Headless is a supported way to run and CI hands off
         // with nobody watching; the handoff itself is still valid. It only
         // becomes a lie when the agent goes on to say "click the button in the
         // browser", so this says otherwise on the channel the agent reads.
-        process.stderr.write(
-          `ego-browser: handed off task space ${space.id}, but this browser has no window ` +
-            `on screen — the user cannot see the page or act on it. Do not ask them to click, ` +
-            `log in, or solve a captcha here. Get a visible browser first: unset ` +
-            `EGO_LINUX_HEADLESS, then run \`ego-browser --open\`.\n`,
-        );
+        process.stderr.write(handoffWarning(space, presentation.reason));
       }
-      return { done: true, visible };
+      return { done: true, ...presentation };
+    },
+
+    async presentTaskSpace(id) {
+      const state = await readState();
+      const space = await requireSpace(state, id, "presentTaskSpace");
+      const presentation = await presentSpace(space);
+      await writeState(state);
+      return { done: true, ...presentation };
     },
 
     async takeOverTaskSpace(id) {
@@ -664,10 +861,10 @@ export function createTaskSpacesApi(cdp) {
       // `keep: true` exists to leave a page for the user to look at, so the same
       // rule as handoff applies: raise it, and report whether there was
       // anything to raise.
-      const visible = await presentSpace(space);
+      const presentation = await presentSpace(space);
       space.ownership = "user";
       await writeState(state);
-      return { done: true, visible };
+      return { done: true, ...presentation };
     },
 
     async closeTaskSpace(id) {
@@ -677,10 +874,12 @@ export function createTaskSpacesApi(cdp) {
         await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
       }
       if (space.browserContextId) {
-        // Also drops the space's cookie jar, which is the point of having one.
+        // Also drops an opt-in isolated space's private cookie/storage jar.
         await disposeContext(space.browserContextId);
       }
-      state.spaces = state.spaces.filter((candidate) => candidate.id !== space.id);
+      state.spaces = state.spaces.filter(
+        (candidate) => candidate.id !== space.id,
+      );
       if (state.selectedId === space.id) state.selectedId = null;
       if (pinnedSpaceId === space.id) pinnedSpaceId = null;
       await writeState(state);
@@ -721,6 +920,9 @@ export function createTaskSpacesApi(cdp) {
       const space = state.spaces.find(
         (candidate) => candidate.id === effectiveSelectedId(state),
       );
+      if (!isPanelProcess() && isUserControlled(space)) {
+        return userControlResult();
+      }
       // A space is anchored by a tab — one with none is reaped as soon as it is
       // reconciled — so it opens on about:blank before it has anywhere to go.
       // Creating a second tab for the first navigation strands that anchor, and
@@ -731,19 +933,25 @@ export function createTaskSpacesApi(cdp) {
       // about:blank for a moment during every navigation, so matching on the url
       // alone would hijack a tab that is already carrying work. "Never held a
       // page" is only true of a space that has not started yet.
-      const anchor = space && !space.lastContentAt ? await blankAnchor(space) : null;
+      const anchor =
+        space && !space.lastContentAt ? await blankAnchor(space) : null;
       if (anchor && url && url !== "about:blank") {
         const { sessionId } = await cdp.call("Target.attachToTarget", {
           targetId: anchor,
           flatten: true,
         });
         await cdp.call("Page.navigate", { url }, sessionId);
-        await cdp.call("Target.activateTarget", { targetId: anchor }).catch(() => {});
+        if (await shouldAutoFocus(anchor)) {
+          await cdp
+            .call("Target.activateTarget", { targetId: anchor })
+            .catch(() => {});
+        }
         return { targetId: anchor };
       }
 
-      // Open it inside the space's context, so every tab of a space shares that
-      // space's jar rather than the first tab being isolated and the rest not.
+      // Open it inside the space's context when opt-in isolated storage is
+      // enabled; otherwise omit browserContextId so the tab shares the live
+      // agent profile and its non-cookie storage.
       let result;
       try {
         result = await tabs.createTab(url, space?.browserContextId);
@@ -752,9 +960,12 @@ export function createTaskSpacesApi(cdp) {
         // outlives it in the state file. Chrome then rejects the create with
         // "Failed to find browser context", which used to leave the port unable
         // to open any tab at all after a restart. Fall back to the default jar
-        // and forget the dead id — the space stops being isolated, which is
-        // already true, rather than stopping working.
-        if (!space?.browserContextId || !/browser context/i.test(String(error?.message))) {
+        // and forget the dead id — the space falls back to the shared live
+        // profile rather than stopping working.
+        if (
+          !space?.browserContextId ||
+          !/browser context/i.test(String(error?.message))
+        ) {
           throw error;
         }
         space.browserContextId = null;
@@ -767,5 +978,8 @@ export function createTaskSpacesApi(cdp) {
       }
       return result;
     },
+
+    pageControlErrorSync,
+    assertAgentControl,
   };
 }

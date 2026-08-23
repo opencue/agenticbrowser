@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { agentIdentity } from "../src/agent-identity.mjs";
+import { agentIdentity, agentName } from "../src/agent-identity.mjs";
 
 const MARKER = "/.config/cue/runtime/";
 
@@ -19,10 +19,12 @@ const MARKER = "/.config/cue/runtime/";
 function withEnv(overrides, run) {
   const saved = { ...process.env };
   for (const [key, value] of Object.entries(process.env)) {
-    if (typeof value === "string" && value.includes(MARKER)) delete process.env[key];
+    if (typeof value === "string" && value.includes(MARKER))
+      delete process.env[key];
   }
   delete process.env.CLAUDE_CODE_SESSION_ID;
   delete process.env.EGO_LINUX_PANEL;
+  delete process.env.EGO_LINUX_CURSOR_NAME;
   Object.assign(process.env, overrides);
   try {
     return run();
@@ -61,7 +63,11 @@ describe("agent identity", () => {
       { CLAUDE_CONFIG_DIR: "/home/someone/.config/cue/runtime/coolify/claude" },
       () => agentIdentity(root),
     );
-    assert.equal(identity.profile, "coolify", "the live session wins over a directory default");
+    assert.equal(
+      identity.profile,
+      "coolify",
+      "the live session wins over a directory default",
+    );
 
     await rm(root, { recursive: true, force: true });
   });
@@ -93,5 +99,72 @@ describe("agent identity", () => {
     const identity = withEnv({}, () => agentIdentity(root));
     assert.deepEqual(identity, { profile: null, session: null });
     await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("agent name", () => {
+  const ancestry =
+    (...names) =>
+    () =>
+      names;
+
+  it("names codex when codex ran the heredoc", () => {
+    const name = withEnv({}, () =>
+      agentName({ ancestry: ancestry("node", "bash", "codex") }),
+    );
+    assert.equal(name, "Codex");
+  });
+
+  it("names claude when claude ran the heredoc", () => {
+    const name = withEnv({}, () =>
+      agentName({ ancestry: ancestry("node", "bash", "claude") }),
+    );
+    assert.equal(name, "Claude");
+  });
+
+  it("credits the nearest harness, not the one that spawned it", () => {
+    // One agent delegating to another (acpx, a codex subagent) leaves both in
+    // the ancestry. The one actually driving the browser is the closer one.
+    const name = withEnv({}, () =>
+      agentName({
+        ancestry: ancestry("node", "bash", "codex", "bash", "claude"),
+      }),
+    );
+    assert.equal(name, "Codex");
+  });
+
+  it("lets the environment override the detected name", () => {
+    const name = withEnv({ EGO_LINUX_CURSOR_NAME: "Reviewer" }, () =>
+      agentName({ ancestry: ancestry("node", "bash", "claude") }),
+    );
+    assert.equal(name, "Reviewer");
+  });
+
+  it("says Agent rather than naming the wrong one", () => {
+    // The old default was "Claude", so every harness drew a Claude badge. An
+    // unrecognised one is anonymous, not misattributed.
+    const name = withEnv({}, () =>
+      agentName({ ancestry: ancestry("node", "bash", "fish") }),
+    );
+    assert.equal(name, "Agent");
+  });
+
+  it("survives a machine with no readable process ancestry", () => {
+    const name = withEnv({}, () =>
+      agentName({
+        ancestry: () => {
+          throw new Error("no /proc here");
+        },
+      }),
+    );
+    assert.equal(name, "Agent");
+  });
+
+  it("reads the real ancestry when nothing is injected", () => {
+    // The suite itself runs under a harness, so the value depends on who ran
+    // it — but it must be a name, and reading /proc must not throw.
+    const name = withEnv({}, () => agentName());
+    assert.equal(typeof name, "string");
+    assert.ok(name.length > 0);
   });
 });

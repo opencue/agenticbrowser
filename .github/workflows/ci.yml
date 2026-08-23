@@ -26,6 +26,46 @@ jobs:
       - run: npm test
       - run: npm run validate:site-skills
 
+  test-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      # The port has no dependencies of its own, but its CLI runs the harness's
+      # build output — so the harness has to be built before the port can be
+      # tested. CI=true is already set by Actions, which is what lets `npm ci`
+      # skip the lefthook install in the prepare script.
+      - name: Build the harness the port runs
+        working-directory: package/ego-browser
+        run: npm ci && npm run build
+      # The suite drives a real headless Chromium. The runner image ships one;
+      # failing here rather than inside a test says so plainly.
+      - name: Check for a browser
+        run: google-chrome --version
+      - name: Test the port
+        working-directory: package/ego-linux
+        run: npm test
+
+  test-linux-host:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: package/ego-linux-host
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-linux-host/package-lock.json
+      - run: npm ci
+      - run: npm test
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: test

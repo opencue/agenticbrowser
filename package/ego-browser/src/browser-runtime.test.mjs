@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   browserCdp,
   drainBrowserEvents,
+  drainBrowserTrace,
   invalidateSession,
   isBrowserRuntime,
   pendingDialog,
@@ -80,6 +81,7 @@ function cleanup() {
   invalidateSession();
   clearPreferredTarget();
   drainBrowserEvents();
+  drainBrowserTrace();
   state.cdpOverride = null;
   state.sessionInflight = null;
 }
@@ -108,6 +110,28 @@ test("isBrowserRuntime returns false when ego lacks sendCDPMessage", () => {
     assert.equal(isBrowserRuntime(), false);
   } finally {
     delete globalThis.ego;
+  }
+});
+
+test("browserCdp forwards explicit timeout to cdpOverride", async () => {
+  const calls = [];
+  state.cdpOverride = async (method, params, sessionId, timeoutMs) => {
+    calls.push([method, params, sessionId, timeoutMs]);
+    return { result: { ok: true } };
+  };
+  try {
+    const result = await browserCdp(
+      "Runtime.evaluate",
+      { expression: "1" },
+      "session-1",
+      4321,
+    );
+    assert.deepEqual(result, { result: { ok: true } });
+    assert.deepEqual(calls, [
+      ["Runtime.evaluate", { expression: "1" }, "session-1", 4321],
+    ]);
+  } finally {
+    cleanup();
   }
 });
 
@@ -236,6 +260,64 @@ test("drainBrowserEvents collects CDP events and clears the buffer", async () =>
     const second = drainBrowserEvents();
     assert.equal(second.length, 0, "second drain returns empty");
   } finally {
+    cleanup();
+  }
+});
+
+test("drainBrowserTrace records safe CDP requests, responses, and events", async () => {
+  const calls = installManualEgo();
+  const previousNow = state.now;
+  let now = Date.parse("2026-08-13T00:00:00.000Z");
+  state.now = () => now;
+  try {
+    const promise = browserCdp(
+      "Page.navigate",
+      { url: "https://example.com/path?token=secret" },
+      "sess-1",
+      5000,
+    );
+    now += 7;
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({
+        id: calls[0].id,
+        result: { frameId: "frame-1", loaderId: "loader-1" },
+      }),
+    );
+    await promise;
+
+    now += 3;
+    fireEvent(
+      "Network.responseReceived",
+      {
+        requestId: "req-1",
+        type: "XHR",
+        response: {
+          status: 200,
+          url: "https://example.com/api?token=secret",
+        },
+      },
+      "sess-1",
+    );
+
+    const trace = drainBrowserTrace();
+    assert.equal(trace.length, 3);
+    assert.equal(trace[0].kind, "cdp.request");
+    assert.equal(trace[0].method, "Page.navigate");
+    assert.deepEqual(trace[0].params, {
+      url: "https://example.com/path?token=secret",
+    });
+    assert.equal(trace[1].kind, "cdp.response");
+    assert.equal(trace[1].durationMs, 7);
+    assert.deepEqual(trace[1].result, {
+      frameId: "frame-1",
+      loaderId: "loader-1",
+    });
+    assert.equal(trace[2].kind, "cdp.event");
+    assert.equal(trace[2].method, "Network.responseReceived");
+    assert.equal(trace[2].params.status, 200);
+    assert.equal(trace[2].params.url, "https://example.com/api?token=secret");
+  } finally {
+    state.now = previousNow;
     cleanup();
   }
 });

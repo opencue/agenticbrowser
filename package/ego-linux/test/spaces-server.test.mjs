@@ -37,7 +37,9 @@ async function api(path, options) {
 function runScript(source, { timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN], {
-      env: { ...process.env, FIXTURE_URL },
+      // Pinned so the activity assertions read the same under every harness —
+      // the badge otherwise names whichever agent ran the suite.
+      env: { ...process.env, FIXTURE_URL, EGO_LINUX_CURSOR_NAME: "Testbot" },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -62,6 +64,41 @@ function runScript(source, { timeout = 120000 } = {}) {
   });
 }
 
+async function visibilityState(targetId) {
+  const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
+    targetId,
+    flatten: true,
+  });
+  shim.cdp.claimSession(sessionId);
+  try {
+    const result = await shim.cdp.call(
+      "Runtime.evaluate",
+      {
+        expression: "document.visibilityState",
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    return result.result?.value;
+  } finally {
+    await shim.cdp
+      .call("Target.detachFromTarget", { sessionId })
+      .catch(() => {});
+    shim.cdp.releaseSession(sessionId);
+  }
+}
+
+async function waitForSpace(name, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { taskSpaces = [] } = await shim.ego.listTaskSpaces();
+    const space = taskSpaces.find((candidate) => candidate.name === name);
+    if (space?.targetIds?.length) return space;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for space ${name}`);
+}
+
 /**
  * Width and height from a JPEG's start-of-frame marker. Enough to tell an
  * active space's crop from a whole-page thumbnail without a decoder.
@@ -75,9 +112,16 @@ function jpegSize(dataUri) {
     }
     const marker = buffer[i + 1];
     const isStartOfFrame =
-      marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+      marker >= 0xc0 &&
+      marker <= 0xcf &&
+      marker !== 0xc4 &&
+      marker !== 0xc8 &&
+      marker !== 0xcc;
     if (isStartOfFrame) {
-      return { width: buffer.readUInt16BE(i + 7), height: buffer.readUInt16BE(i + 5) };
+      return {
+        width: buffer.readUInt16BE(i + 7),
+        height: buffer.readUInt16BE(i + 5),
+      };
     }
     i += 2 + buffer.readUInt16BE(i + 2);
   }
@@ -89,7 +133,10 @@ after(async () => {
   shim.close();
   try {
     const state = JSON.parse(
-      await readFile(join(SANDBOX, "state", "ego-lite-linux", "browser.json"), "utf8"),
+      await readFile(
+        join(SANDBOX, "state", "ego-lite-linux", "browser.json"),
+        "utf8",
+      ),
     );
     if (state.pid) process.kill(state.pid, "SIGTERM");
   } catch {
@@ -98,9 +145,12 @@ after(async () => {
   // Chrome keeps writing to its profile while shutting down, so a removal racing
   // that hits ENOTEMPTY. A leftover temp dir is not a test failure.
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  await rm(SANDBOX, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }).catch(
-    () => {},
-  );
+  await rm(SANDBOX, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 300,
+  }).catch(() => {});
 });
 
 describe("Spaces overview server", () => {
@@ -120,11 +170,17 @@ describe("Spaces overview server", () => {
     assert.equal(created.body.space.name, "idle space");
 
     const { body } = await api("/api/spaces");
-    const space = body.spaces.find((candidate) => candidate.name === "idle space");
+    const space = body.spaces.find(
+      (candidate) => candidate.name === "idle space",
+    );
     assert.ok(space, "the new space is listed");
     assert.equal(space.ownership, "agent");
     assert.equal(space.tabCount, 1);
-    assert.match(space.thumbnail, /^data:image\/jpeg;base64,/, "a card gets a picture");
+    assert.match(
+      space.thumbnail,
+      /^data:image\/jpeg;base64,/,
+      "a card gets a picture",
+    );
 
     // Nothing has acted in it, so there is nothing to report and no reason to zoom.
     assert.equal(space.activity, null);
@@ -144,13 +200,15 @@ describe("Spaces overview server", () => {
     `);
 
     const { body } = await api("/api/spaces");
-    const space = body.spaces.find((candidate) => candidate.name === "busy space");
+    const space = body.spaces.find(
+      (candidate) => candidate.name === "busy space",
+    );
     assert.ok(space, "the space the agent worked in is listed");
 
     // The panel and the agent are separate processes with separate CDP
     // connections; this only works because the overlay leaves its state in the
     // page, where the server reads it back.
-    assert.equal(space.activity?.name, "Claude");
+    assert.equal(space.activity?.name, "Testbot");
     assert.equal(space.activity?.label, "counting clicks");
     assert.ok(space.activity.ageMs >= 0 && space.activity.ageMs < 30000);
 
@@ -183,10 +241,109 @@ describe("Spaces overview server", () => {
     // reach this server, and it can create and close spaces.
     const { status } = await api("/api/spaces", {
       method: "POST",
-      headers: { "content-type": "application/json", origin: "https://evil.example" },
+      headers: {
+        "content-type": "application/json",
+        origin: "https://evil.example",
+      },
       body: JSON.stringify({ name: "not yours" }),
     });
     assert.equal(status, 403);
+  });
+
+  it("passes handoff visibility through to the panel", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "handoff visibility space" }),
+    });
+    const target = created.space;
+
+    const stopped = await api(`/api/spaces/${target.id}/stop`, {
+      method: "POST",
+    });
+    assert.equal(stopped.status, 200);
+    assert.deepEqual(stopped.body, {
+      done: true,
+      visible: false,
+      reason: "headless",
+    });
+
+    await api(`/api/spaces/${target.id}/close`, { method: "POST" });
+  });
+
+  it("keeps an unrelated user view visible during background input and screenshots until Open", async () => {
+    const name = "background foreground e2e";
+    const { targetId: userViewId } = await shim.cdp.call(
+      "Target.createTarget",
+      {
+        url: "data:text/html,<title>User%20view</title><h1>Do%20not%20steal%20this%20view</h1>",
+      },
+    );
+    await shim.cdp.call("Target.activateTarget", { targetId: userViewId });
+
+    let space;
+    try {
+      const running = runScript(`
+        const task = await taskSpaces.useOrCreate(${JSON.stringify(name)});
+        await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
+        await page.locator("#name-input").fill("background-ok");
+        await page.locator("#click-button").click();
+        await browser.switchTab((await browser.currentTab()).targetId);
+        const shot = await page.screenshot();
+        console.log(JSON.stringify({
+          id: task.id,
+          name: await page.locator("#name-input").inputValue(),
+          count: await page.locator("#count").textContent(),
+          shot,
+        }));
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      `);
+
+      space = await waitForSpace(name);
+      const taskId = space.id;
+      const { taskSpaces } = await shim.ego.listTaskSpaces();
+      const target = taskSpaces.find((candidate) => candidate.id === taskId);
+      const agentId = target?.targetIds?.[0];
+      assert.ok(agentId, "the agent task owns a live tab");
+      assert.equal(await visibilityState(userViewId), "visible");
+      assert.equal(await visibilityState(agentId), "hidden");
+
+      const output = await running;
+      assert.match(output, /"name":"background-ok"/);
+      assert.match(output, /"count":"clicked"/);
+      const screenshotPath = output.match(/"shot":"([^"]+)"/)?.[1];
+      assert.ok(
+        screenshotPath,
+        "the background page returned a screenshot path",
+      );
+      const screenshot = await readFile(screenshotPath);
+      assert.deepEqual(
+        [...screenshot.subarray(0, 8)],
+        [137, 80, 78, 71, 13, 10, 26, 10],
+        "the hidden agent page produced a PNG",
+      );
+      assert.equal(
+        await visibilityState(userViewId),
+        "visible",
+        "typing, clicking and screenshot capture did not steal the user view",
+      );
+
+      const opened = await api(`/api/spaces/${taskId}/use`, {
+        method: "POST",
+      });
+      assert.equal(opened.status, 200);
+      assert.equal(await visibilityState(agentId), "visible");
+      assert.equal(await visibilityState(userViewId), "hidden");
+    } finally {
+      if (space?.id) {
+        await api(`/api/spaces/${space.id}/close`, { method: "POST" }).catch(
+          () => {},
+        );
+      }
+      await shim.cdp
+        .call("Target.closeTarget", { targetId: userViewId })
+        .catch(() => {});
+    }
   });
 
   it("closes a space and forgets it", async () => {
@@ -199,7 +356,9 @@ describe("Spaces overview server", () => {
     });
     const target = created.space;
 
-    const closed = await api(`/api/spaces/${target.id}/close`, { method: "POST" });
+    const closed = await api(`/api/spaces/${target.id}/close`, {
+      method: "POST",
+    });
     assert.equal(closed.status, 200);
 
     const { body: after } = await api("/api/spaces");

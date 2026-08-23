@@ -17,7 +17,10 @@ function fakeCdp() {
       return {};
     },
     bounds() {
-      return calls.find((c) => c.method === "Browser.setWindowBounds")?.params.bounds ?? null;
+      return (
+        calls.find((c) => c.method === "Browser.setWindowBounds")?.params
+          .bounds ?? null
+      );
     },
   };
 }
@@ -25,11 +28,18 @@ function fakeCdp() {
 describe("createWindowFit", () => {
   it("shrinks the window to a phone viewport", async () => {
     const cdp = fakeCdp();
-    await createWindowFit(cdp).follow({ width: 390, height: 844, mobile: true }, "T1");
+    await createWindowFit(cdp).follow(
+      { width: 390, height: 844, mobile: true },
+      "T1",
+    );
 
     const bounds = cdp.bounds();
     assert.ok(bounds, "the window is resized");
-    assert.equal(bounds.width, 390, "as wide as the viewport the agent emulates");
+    assert.equal(
+      bounds.width,
+      390,
+      "as wide as the viewport the agent emulates",
+    );
     assert.ok(
       bounds.height > 844,
       "taller than the viewport, because the window also has to hold Chrome's own chrome",
@@ -55,9 +65,15 @@ describe("createWindowFit", () => {
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 0, height: 0 }, "T1");
 
-    const resizes = cdp.calls.filter((c) => c.method === "Browser.setWindowBounds");
+    const resizes = cdp.calls.filter(
+      (c) => c.method === "Browser.setWindowBounds",
+    );
     assert.equal(resizes.length, 2, "shrunk, then restored");
-    assert.equal(resizes[1].params.bounds.width, 1280, "back to the size it had before");
+    assert.equal(
+      resizes[1].params.bounds.width,
+      1280,
+      "back to the size it had before",
+    );
     assert.equal(resizes[1].params.bounds.height, 900);
   });
 
@@ -67,8 +83,14 @@ describe("createWindowFit", () => {
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 1280, height: 800 }, "T1");
 
-    const resizes = cdp.calls.filter((c) => c.method === "Browser.setWindowBounds");
-    assert.equal(resizes[1].params.bounds.width, 1280, "a phone window does not outlive the phone viewport");
+    const resizes = cdp.calls.filter(
+      (c) => c.method === "Browser.setWindowBounds",
+    );
+    assert.equal(
+      resizes[1].params.bounds.width,
+      1280,
+      "a phone window does not outlive the phone viewport",
+    );
   });
 
   it("retries a resize that failed", async () => {
@@ -93,7 +115,11 @@ describe("createWindowFit", () => {
     await fit.follow({ width: 390, height: 844 }, "T1");
 
     const resizes = calls.filter((c) => c.method === "Browser.setWindowBounds");
-    assert.equal(resizes.length, 1, "the second attempt is not skipped as a duplicate");
+    assert.equal(
+      resizes.length,
+      1,
+      "the second attempt is not skipped as a duplicate",
+    );
   });
 
   it("refuses a sliver Chrome would clamp anyway", async () => {
@@ -114,7 +140,9 @@ describe("createWindowFit", () => {
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 390, height: 844 }, "T1");
 
-    const resizes = cdp.calls.filter((c) => c.method === "Browser.setWindowBounds");
+    const resizes = cdp.calls.filter(
+      (c) => c.method === "Browser.setWindowBounds",
+    );
     assert.equal(resizes.length, 1, "an unchanged viewport is not re-applied");
   });
 

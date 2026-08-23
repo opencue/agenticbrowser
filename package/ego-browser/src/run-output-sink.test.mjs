@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { runMain } from "../dist/src/run.js";
+import { setOverrides } from "../dist/src/state.js";
 import {
   __testing as screencastTesting,
   stopScreencast,
@@ -52,7 +53,7 @@ function captureStream() {
   };
 }
 
-async function runScript(code, ego) {
+async function runScript(code, ego, options = {}) {
   const previous = globalThis.ego;
   if (ego === undefined) {
     delete globalThis.ego;
@@ -69,6 +70,10 @@ async function runScript(code, ego) {
       stdinText: code,
       stdout,
       stderr,
+      env: {
+        EGO_BROWSER_FAILURE_ARTIFACT: "0",
+        ...options.env,
+      },
       services: { printUpdateBanner() {} },
     });
   } catch (err) {
@@ -188,6 +193,34 @@ test("an uncaught hard stop discards output without double-printing the message"
   assert.equal(result.stdout, "");
 });
 
+test("an uncaught hard stop skips failure artifacts even when enabled", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    writeFile: async (path, data) => {
+      writes.push({ path, data });
+    },
+  });
+  try {
+    const ego = hardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL");
+    const result = await runScript(
+      `
+        console.log("before");
+        await taskSpaces.list();
+      `,
+      ego,
+      { env: { EGO_BROWSER_FAILURE_ARTIFACT: "1" } },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.match(result.error.message, /taken control of this task space/);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "");
+    assert.equal(writes.length, 0);
+  } finally {
+    restore();
+  }
+});
+
 test("an ordinary uncaught error still flushes the output logged before it", async () => {
   const result = await runScript(`
     console.log("partial result");
@@ -197,6 +230,168 @@ test("an ordinary uncaught error still flushes the output logged before it", asy
   assert.ok(result.error, "expected runMain to reject");
   assert.equal(result.error.message, "boom");
   assert.equal(result.stdout, "partial result\n");
+});
+
+test("an ordinary uncaught error skips failure artifacts when disabled", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    writeFile: async (path, data) => {
+      writes.push({ path, data });
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        console.log("partial result");
+        throw new Error("boom");
+      `,
+      undefined,
+      { env: { EGO_BROWSER_FAILURE_ARTIFACT: "off" } },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.equal(result.error.message, "boom");
+    assert.equal(result.stdout, "partial result\n");
+    assert.equal(result.stderr, "");
+    assert.equal(writes.length, 0);
+  } finally {
+    restore();
+  }
+});
+
+test("an ordinary uncaught error writes a local failure artifact", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    now: () => Date.parse("2026-08-13T00:00:00.000Z"),
+    writeFile: async (path, data) => {
+      writes.push({ path, text: String(data) });
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        console.log("partial result");
+        throw new Error("boom");
+      `,
+      undefined,
+      {
+        env: {
+          EGO_BROWSER_FAILURE_ARTIFACT: "1",
+          EGO_BROWSER_FAILURE_ARTIFACT_DIR: "/tmp/ego-browser-test-artifacts",
+        },
+      },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.equal(result.error.message, "boom");
+    assert.equal(result.stdout, "partial result\n");
+    assert.match(
+      result.stderr,
+      /ego-browser: failure artifact written to \/tmp\/ego-browser-test-artifacts\/ego-browser-failure-/,
+    );
+    assert.equal(writes.length, 1);
+    assert.match(writes[0].path, /^\/tmp\/ego-browser-test-artifacts\//);
+
+    const artifact = JSON.parse(writes[0].text);
+    assert.equal(artifact.schema, "ego-browser.failure-artifact.v1");
+    assert.equal(artifact.createdAt, "2026-08-13T00:00:00.000Z");
+    assert.equal(artifact.error.message, "boom");
+    assert.equal(artifact.script.lines, 4);
+    assert.equal(artifact.debug.events.count, 0);
+    assert.equal(artifact.debug.errors.info.name, "Error");
+  } finally {
+    restore();
+  }
+});
+
+test("a failure artifact records debugError when debug hits a hard stop", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    now: () => Date.parse("2026-08-13T00:00:00.000Z"),
+    writeFile: async (path, data) => {
+      writes.push({ path, text: String(data) });
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        throw new Error("boom");
+      `,
+      snapshotHardStopEgo("EGO_TASK_SPACE_USER_IN_CONTROL"),
+      {
+        env: {
+          EGO_BROWSER_FAILURE_ARTIFACT: "1",
+          EGO_BROWSER_FAILURE_ARTIFACT_DIR: "/tmp/ego-browser-test-artifacts",
+        },
+      },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.equal(result.error.message, "boom");
+    assert.match(result.stderr, /failure artifact written/);
+    assert.equal(writes.length, 1);
+
+    const artifact = JSON.parse(writes[0].text);
+    assert.equal(artifact.error.message, "boom");
+    assert.equal(artifact.debug, undefined);
+    assert.equal(artifact.debugError.code, "EGO_TASK_SPACE_USER_IN_CONTROL");
+    assert.match(
+      artifact.debugError.message,
+      /taken control of this task space/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("a failure artifact write failure is reported without hiding the script error", async () => {
+  const restore = setOverrides({
+    writeFile: async () => {
+      throw new Error("disk full");
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        console.log("partial result");
+        throw new Error("boom");
+      `,
+      undefined,
+      {
+        env: {
+          EGO_BROWSER_FAILURE_ARTIFACT: "1",
+          EGO_BROWSER_FAILURE_ARTIFACT_DIR: "/tmp/ego-browser-test-artifacts",
+        },
+      },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.equal(result.error.message, "boom");
+    assert.equal(result.stdout, "partial result\n");
+    assert.match(
+      result.stderr,
+      /ego-browser: failed to write failure artifact: disk full/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("a toString TypeError explains the ego-browser logging pattern", async () => {
+  const result = await runScript(`
+    const pageData = { toString: null };
+    pageData.toString();
+  `);
+
+  assert.ok(result.error, "expected runMain to reject");
+  assert.match(result.error.message, /ego-browser hint:/);
+  assert.match(result.error.message, /console\.log\(value\)/);
+  assert.match(
+    result.error.message,
+    /page\.screenshot\(\) returns a file path/,
+  );
+  assert.equal(result.error.stack.match(/ego-browser hint:/g).length, 1);
+  assert.equal(result.stdout, "");
 });
 
 test("runMain finalizes an active screencast when the script ends", async () => {

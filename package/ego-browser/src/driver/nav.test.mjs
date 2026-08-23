@@ -142,6 +142,29 @@ test("newTab throws when the binding returns no targetId", async () => {
   );
 });
 
+test("newTab selects the returned target for subsequent background commands", async () => {
+  const previousPreferredTargetId = state.preferredTargetId;
+  try {
+    await withEgo(
+      {
+        async createTab() {
+          return { targetId: "target-background" };
+        },
+      },
+      async () => {
+        assert.equal(
+          await newTab("https://example.com/background"),
+          "target-background",
+        );
+        assert.equal(state.preferredTargetId, "target-background");
+      },
+    );
+  } finally {
+    state.preferredTargetId = previousPreferredTargetId;
+    invalidateSession();
+  }
+});
+
 test("openOrReuseTab settles a newly opened tab in milliseconds, not seconds", async () => {
   // Regression: the new-tab branch used to sleep(settle * 1000), so settle:500
   // (documented as 500ms) blocked for 500 seconds while the reuse branch

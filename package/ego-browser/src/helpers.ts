@@ -3,7 +3,11 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { setOverrides, state } from "./state.js";
-import { assertNoEgoError, isEgoUserControlError } from "./ego-errors.js";
+import {
+  assertNoEgoError,
+  isEgoHardStopError,
+  isEgoUserControlError,
+} from "./ego-errors.js";
 import { help as helpRuntime, formatHelp } from "./help-runtime.js";
 import { cdp, decodeUnserializableJsValue, evaluate } from "./cdp-eval.js";
 import * as pointer from "./driver/pointer.js";
@@ -11,6 +15,7 @@ import * as keyboard from "./driver/keyboard.js";
 import * as locator from "./driver/locator.js";
 import * as nav from "./driver/nav.js";
 import * as observe from "./driver/observe.js";
+import * as debugDriver from "./driver/debug.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
 import * as downloads from "./driver/downloads.js";
@@ -87,6 +92,7 @@ export {
   elementCenter,
   drainEvents,
 } from "./driver/observe.js";
+export { debug, trace } from "./driver/debug.js";
 export {
   waitForTimeout,
   waitForLoadState,
@@ -99,6 +105,7 @@ export {
 export { setInputFiles } from "./driver/files.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
+export { isEgoHardStopError } from "./ego-errors.js";
 
 /**
  * List all task spaces.
@@ -286,7 +293,11 @@ async function selectTaskSpaceIfProvided(
  * page is gone either way.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
- * @returns {Promise<{done: boolean, visible?: boolean, skipped?: "user-owned"}>} `{ done: true, visible }` when the space was completed with `keep:true`, `{ done: true }` when it was closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * For `{ keep: true }`, `visible` reports whether the page reached a screen.
+ * It is `false` when the browser is running headless — the completion is still
+ * recorded, but nobody can see or click the kept page. `reason`, when present,
+ * describes why the page was not visible.
+ * @returns {Promise<{done: boolean, visible?: boolean, reason?: string, skipped?: "user-owned"}>} `{ done: true, visible }` when the space was completed and kept; `{ done: true }` when closed; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function completeTaskSpace(
   nameOrId: string | number,
@@ -318,11 +329,15 @@ export async function completeTaskSpace(
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
-    const kept = await ego.completeTaskSpace();
-    assertNoEgoError(kept, "completeTaskSpace");
-    // The point of keeping a space is that the user looks at it, so whether they
-    // can is part of the answer. See handOffTaskSpace for the fallback.
-    return { done: true, visible: kept?.visible !== false };
+    const result = await ego.completeTaskSpace();
+    assertNoEgoError(result, "completeTaskSpace");
+    // A backing layer that does not report visibility is one that has a window;
+    // only the Linux port can be windowless, and it always answers.
+    return {
+      done: true,
+      visible: result?.visible !== false,
+      ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+    };
   } else {
     if (match.ownership === "user") {
       await claimResolvedTaskSpace(match, "completeTaskSpace");
@@ -345,9 +360,10 @@ export async function completeTaskSpace(
  *
  * `visible` reports whether the page reached a screen. It is `false` when the
  * browser is running headless — the handoff is still recorded, but nobody can
- * see or click anything, so the caller must not ask the user to.
+ * see or click anything, so the caller must not ask the user to. `reason`, when
+ * present, describes why the page was not visible.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
- * @returns {Promise<{done: boolean, visible?: boolean, skipped?: "user-owned"}>} `{ done: true, visible }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
+ * @returns {Promise<{done: boolean, visible?: boolean, reason?: string, skipped?: "user-owned"}>} `{ done: true, visible }` when control was handed off; `{ done: false, skipped: "user-owned" }` when nothing was done.
  */
 export async function handOffTaskSpace(nameOrId?: string | number) {
   const ego = globalThis.ego;
@@ -365,7 +381,11 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
   assertNoEgoError(result, "handOffTaskSpace");
   // A backing layer that does not report visibility is one that has a window;
   // only the Linux port can be windowless, and it always answers.
-  return { done: true, visible: result?.visible !== false };
+  return {
+    done: true,
+    visible: result?.visible !== false,
+    ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+  };
 }
 
 /**
@@ -435,6 +455,61 @@ export async function waitForAgentControl(
     }
     await waits.waitForTimeout(interval * 1000);
   }
+}
+
+/**
+ * Run one bounded browser task inside a task space and close it on success.
+ *
+ * This is the safe default for one-round automations: it creates or reuses a
+ * task space, optionally narrows helper timeouts for the callback, rethrows
+ * user-control hard stops unchanged, and calls completeTaskSpace after the
+ * callback succeeds. Ordinary callback errors leave the space open for debugging
+ * and for the CLI failure artifact.
+ * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {(task: object) => Promise<any>|any} fn Work to run in the selected task space.
+ * @param {{ keep?: boolean, timeout?: number, complete?: boolean }} [options] `keep` is passed to completeTaskSpace on success (default false); `timeout` temporarily sets page helper timeouts in milliseconds; `complete:false` skips automatic completion.
+ * @returns {Promise<{task: object, result: any, completion: object}>}
+ */
+export async function runTaskSpace(
+  nameOrId: string | number,
+  fn: (task: any) => Promise<any> | any,
+  options: { keep?: boolean; timeout?: number; complete?: boolean } = {},
+) {
+  if (typeof fn !== "function") {
+    throw new Error("taskSpaces.run requires a callback function");
+  }
+  const hasTimeout = Object.prototype.hasOwnProperty.call(options, "timeout");
+  let timeout;
+  if (hasTimeout) {
+    timeout = Number(options.timeout);
+    if (!Number.isFinite(timeout) || timeout < 0) {
+      throw new Error("taskSpaces.run timeout must be a non-negative number");
+    }
+  }
+
+  const task = await useOrCreateTaskSpace(nameOrId);
+  const previousTimeout = state.defaultTimeout;
+  if (hasTimeout) {
+    state.defaultTimeout = timeout;
+  }
+
+  let result;
+  try {
+    result = await fn(task);
+  } catch (error) {
+    if (isEgoHardStopError(error)) throw error;
+    throw error;
+  } finally {
+    if (hasTimeout) {
+      state.defaultTimeout = previousTimeout;
+    }
+  }
+
+  const completion =
+    options.complete === false
+      ? { done: false, skipped: "disabled" as const }
+      : await completeTaskSpace(task.id, { keep: options.keep === true });
+  return { task, result, completion };
 }
 
 function normalizeTaskSpaces(raw) {
@@ -770,6 +845,8 @@ function createPageFacade() {
     waitForEvent: downloads.waitForEvent,
     evaluate,
     screenshot: observe.screenshot,
+    debug: debugDriver.debug,
+    trace: debugDriver.trace,
     snapshot: observe.snapshot,
     snapshotRaw: observe.snapshotRaw,
     elementCenter: observe.elementCenter,
@@ -828,11 +905,13 @@ function createTaskSpacesFacade() {
     switch: switchTaskSpace,
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
+    run: runTaskSpace,
     claim: claimTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
+    isHardStopError: isEgoHardStopError,
   };
 }
 
@@ -847,13 +926,13 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
   locator:
     "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.run(nameOrId, fn, options) for one-round tasks, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

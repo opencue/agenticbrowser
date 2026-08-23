@@ -6,6 +6,7 @@ on:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
       - "package/ego-browser/**"
+      - "package/ego-linux/**"
       - "skills/ego-browser/learnings/**"
   push:
     branches:
@@ -15,6 +16,7 @@ on:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
       - "package/ego-browser/**"
+      - "package/ego-linux/**"
       - "skills/ego-browser/learnings/**"
 
 jobs:
@@ -53,7 +55,7 @@ jobs:
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          files="$(git diff --name-only --diff-filter=ACMR "$base" HEAD | grep -E '^package/ego-browser/.*\.(ts|mjs|js|json|md)$' || true)"
+          files="$(git diff --name-only --diff-filter=ACMR "$base" HEAD | grep -E '^package/ego-(browser|linux)/.*\.(ts|mjs|js|json|md)$' || true)"
           [ -z "$files" ] && exit 0
           package/ego-browser/node_modules/.bin/prettier --check $files
 

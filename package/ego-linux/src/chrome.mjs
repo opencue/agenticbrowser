@@ -1,5 +1,13 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readdir, readFile, readlink, writeFile, rm } from "node:fs/promises";
+import {
+  access,
+  mkdir,
+  readdir,
+  readFile,
+  readlink,
+  writeFile,
+  rm,
+} from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 
@@ -103,7 +111,9 @@ async function resolveBinary() {
 
 function which(name) {
   return new Promise((resolve) => {
-    const child = spawn("which", [name], { stdio: ["ignore", "pipe", "ignore"] });
+    const child = spawn("which", [name], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
     let out = "";
     child.stdout.on("data", (chunk) => {
       out += chunk;
@@ -336,7 +346,11 @@ async function clearProfileLock(profileDir) {
   }
 
   const pid = Number(target.slice(target.lastIndexOf("-") + 1));
-  if (Number.isFinite(pid) && pid > 0 && (await ownsOurProfile(pid, profileDir))) {
+  if (
+    Number.isFinite(pid) &&
+    pid > 0 &&
+    (await ownsOurProfile(pid, profileDir))
+  ) {
     try {
       process.kill(pid, "SIGTERM");
       // Give it a moment to release the lock on its own.
@@ -483,7 +497,8 @@ export async function stopBrowser() {
   // Answering the request is not the same as acting on it. A browser that
   // stayed up has to be signalled anyway — otherwise --stop removes the state
   // file that is the only handle on it and leaves it running, unreachable.
-  if (stopped && state?.pid && !(await waitForProcessExit(state.pid))) stopped = false;
+  if (stopped && state?.pid && !(await waitForProcessExit(state.pid)))
+    stopped = false;
 
   // The blunt instrument, only when the browser did not take the polite request.
   if (!stopped && state?.pid) {
@@ -507,5 +522,7 @@ export async function browserStatus() {
   const state = await readBrowserState();
   if (!state?.port) return { running: false };
   const wsUrl = await probe(state.port);
-  return wsUrl ? { running: true, ...state, wsUrl } : { running: false, ...state };
+  return wsUrl
+    ? { running: true, ...state, wsUrl }
+    : { running: false, ...state };
 }

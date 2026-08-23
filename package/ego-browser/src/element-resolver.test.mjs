@@ -169,6 +169,140 @@ test("css locator matched multiple elements is permanent", async () => {
   );
 });
 
+test("css locator multiple-match error includes diagnostic candidates", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression.includes("__egoLocatorDiagnostics")
+    ) {
+      return {
+        result: {
+          value: [
+            {
+              summary: 'button role=button name="Save" text="Save"',
+              locators: ['loc=role:button[name="Save"]', "loc=css:#save"],
+            },
+          ],
+        },
+      };
+    }
+    if (method === "Runtime.evaluate") {
+      return {
+        result: {
+          value: { error: "Locator css:.duplicate matched 2 elements" },
+        },
+      };
+    }
+    return {};
+  });
+  await assert.rejects(
+    () =>
+      resolveElementCenter(cdp, undefined, new RefMap(), "loc=css:.duplicate"),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.equal(error.kind, "permanent");
+      assert.match(error.message, /Locator diagnostics:/);
+      assert.match(error.message, /button role=button/);
+      assert.match(error.message, /`loc=role:button\[name="Save"\]`/);
+      assert.match(error.message, /`loc=css:#save`/);
+      return true;
+    },
+  );
+});
+
+test("object id locator zero-match error includes diagnostic candidates", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression.includes("__egoLocatorDiagnostics")
+    ) {
+      return {
+        result: {
+          value: [
+            {
+              summary: 'input role=textbox name="Email"',
+              locators: ['loc=role:textbox[name="Email"]', "loc=css:#email"],
+            },
+          ],
+        },
+      };
+    }
+    if (method === "Runtime.evaluate") {
+      return { result: { value: 0 } };
+    }
+    return {};
+  });
+  await assert.rejects(
+    () =>
+      resolveElementObjectId(cdp, undefined, new RefMap(), "loc=css:.missing"),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.equal(error.kind, "transient");
+      assert.match(error.message, /Locator diagnostics:/);
+      assert.match(error.message, /input role=textbox/);
+      assert.match(error.message, /`loc=role:textbox\[name="Email"\]`/);
+      assert.match(error.message, /`loc=css:#email`/);
+      return true;
+    },
+  );
+});
+
+test("role locator multiple-match error includes diagnostic candidates", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [
+          {
+            role: { value: "button" },
+            name: { value: "Save" },
+            backendDOMNodeId: 100,
+          },
+          {
+            role: { value: "button" },
+            name: { value: "Save" },
+            backendDOMNodeId: 200,
+          },
+        ],
+      };
+    }
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression.includes("__egoLocatorDiagnostics")
+    ) {
+      return {
+        result: {
+          value: [
+            {
+              summary: 'button role=button name="Save" id="primary-save"',
+              locators: [
+                'loc=role:button[name="Save"]',
+                "loc=css:#primary-save",
+              ],
+            },
+          ],
+        },
+      };
+    }
+    return {};
+  });
+  await assert.rejects(
+    () =>
+      resolveElementCenter(
+        cdp,
+        undefined,
+        new RefMap(),
+        'loc=role:button[name="Save"]',
+      ),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.equal(error.kind, "permanent");
+      assert.match(error.message, /Locator diagnostics:/);
+      assert.match(error.message, /`loc=css:#primary-save`/);
+      return true;
+    },
+  );
+});
+
 test("raw CSS selector matched multiple elements is permanent", async () => {
   const cdp = new FakeCDP(async (method, params) => {
     if (method === "Runtime.evaluate") {

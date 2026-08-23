@@ -42,6 +42,8 @@ export async function connectCdp(wsUrl) {
   let navWatcher = null;
   let viewportWatcher = null;
   let downloadContextResolver = null;
+  let pageControlGuard = null;
+  let backgroundAgentTabs = false;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
@@ -64,7 +66,8 @@ export async function connectCdp(wsUrl) {
         // Whether a space ever held a real page can only be seen as it happens:
         // a tab is about:blank again the moment it navigates away, so polling
         // its url later cannot tell "never used" from "between pages".
-        if (message.params.url !== "about:blank") navWatcher?.(message.params.url);
+        if (message.params.url !== "about:blank")
+          navWatcher?.(message.params.url, attachedTargetId);
       } else if (message.method === "Emulation.setDeviceMetricsOverride") {
         // Emulation resizes the page's viewport, never the OS window — so a
         // mobile layout renders as a narrow strip inside a desktop-sized window.
@@ -73,9 +76,15 @@ export async function connectCdp(wsUrl) {
         // Explicitly the other half: leaving emulation has to put the window
         // back, or it stays phone-shaped for the rest of the session.
         viewportWatcher?.({ width: 0, height: 0 });
-      } else if (message.method === "Target.activateTarget" && message.params?.targetId) {
+      } else if (
+        message.method === "Target.activateTarget" &&
+        message.params?.targetId
+      ) {
         activeTargetId = message.params.targetId;
-      } else if (message.method === "Target.attachToTarget" && message.params?.targetId) {
+      } else if (
+        message.method === "Target.attachToTarget" &&
+        message.params?.targetId
+      ) {
         // ensureSession() attaches to whatever the harness considers current —
         // its preferredTargetId, which the shim cannot see any other way. The
         // shim's own page reads (snapshot) must target the same tab, or the
@@ -94,7 +103,10 @@ export async function connectCdp(wsUrl) {
 
   await new Promise((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`CDP WebSocket did not open within ${OPEN_TIMEOUT_MS}ms`)),
+      () =>
+        reject(
+          new Error(`CDP WebSocket did not open within ${OPEN_TIMEOUT_MS}ms`),
+        ),
       OPEN_TIMEOUT_MS,
     );
     socket.addEventListener(
@@ -134,7 +146,9 @@ export async function connectCdp(wsUrl) {
       internalPending.delete(data.id);
       clearTimeout(entry.timer);
       if (data.error) {
-        entry.reject(new Error(data.error.message || JSON.stringify(data.error)));
+        entry.reject(
+          new Error(data.error.message || JSON.stringify(data.error)),
+        );
       } else {
         entry.resolve(data.result ?? {});
       }
@@ -206,12 +220,76 @@ export async function connectCdp(wsUrl) {
     }
   }
 
+  function isPageDomainPayload(payload) {
+    try {
+      const message = JSON.parse(payload);
+      const method = typeof message?.method === "string" ? message.method : "";
+      return (
+        method &&
+        !method.startsWith("Target.") &&
+        !method.startsWith("Browser.")
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function pageControlError(payload) {
+    if (!pageControlGuard || !isPageDomainPayload(payload)) return null;
+    return pageControlGuard();
+  }
+
+  /**
+   * Treat a harness tab switch as a logical selection without changing the tab
+   * a person is looking at.
+   *
+   * The harness follows Target.activateTarget with a fresh attachment to the
+   * selected target. It does not need Chrome to paint that target in front; it
+   * only needs the request to succeed and activeHint() to remember the target.
+   * Explicit user presentation uses the shim's internal cdp.call path instead,
+   * so Open / handoff still performs a real foreground activation.
+   */
+  function acknowledgeBackgroundActivation(payload) {
+    if (!backgroundAgentTabs || !payload.includes("Target.activateTarget")) {
+      return false;
+    }
+    try {
+      const message = JSON.parse(payload);
+      if (message.method !== "Target.activateTarget") return false;
+      const response = JSON.stringify({
+        id: message.id,
+        result: {},
+        ...(message.sessionId ? { sessionId: message.sessionId } : {}),
+      });
+      queueMicrotask(() => runtime?.onCDPMessage?.(response));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   return {
     /** Raw passthrough for harness-authored payloads (ids below the shim's base). */
     sendRaw(payload) {
       assertOpen();
+      const blocked = pageControlError(payload);
+      if (blocked) {
+        runtime?.onSendCDPMessageError?.(blocked.error, blocked.error_code);
+        return;
+      }
       noteActivation(payload);
+      if (acknowledgeBackgroundActivation(payload)) return;
       socket.send(aimDownloadsAtCurrentSpace(payload));
+    },
+
+    /** Keep harness-authored tab switches logical until the user asks to see one. */
+    setBackgroundAgentTabs(enabled) {
+      backgroundAgentTabs = enabled === true;
+    },
+
+    /** Select the target for this agent connection without foregrounding it. */
+    selectTarget(targetId) {
+      activeTargetId = targetId || null;
     },
 
     /**
@@ -220,6 +298,19 @@ export async function connectCdp(wsUrl) {
      */
     setDownloadContext(resolver) {
       downloadContextResolver = resolver;
+    },
+
+    /**
+     * Synchronous native-boundary ownership check for harness-authored page CDP.
+     *
+     * sendRaw cannot await: browser-runtime expects native send failures through
+     * onSendCDPMessageError, not a later Promise. The task-space layer therefore
+     * exposes a sync state-file read, and this transport only consults it for
+     * page-domain traffic. Browser/Target domain calls stay available so the
+     * harness can attach, inspect, and regain control.
+     */
+    setPageControlGuard(guard) {
+      pageControlGuard = guard;
     },
 
     /**

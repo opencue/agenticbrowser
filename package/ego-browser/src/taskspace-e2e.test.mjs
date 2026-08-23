@@ -76,6 +76,15 @@ class FakeEgo {
     space.ownership = "agent";
     return { ...space };
   }
+
+  async closeTaskSpace() {
+    this.calls.push(["closeTaskSpace", this.selectedId]);
+    this.taskSpaces = this.taskSpaces.filter(
+      (space) => space.id !== this.selectedId,
+    );
+    this.selectedId = null;
+    return { done: true };
+  }
 }
 
 async function runTaskspaceScript(ego, code) {
@@ -243,8 +252,10 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
     console.log(JSON.stringify({
       taskSpacesType: typeof taskSpaces,
       newType: typeof taskSpaces.new,
+      runType: typeof taskSpaces.run,
       switchType: typeof taskSpaces.switch,
       claimType: typeof taskSpaces.claim,
+      isHardStopErrorType: typeof taskSpaces.isHardStopError,
       oldNewType: typeof newTaskSpace,
       rawClaimType: typeof ego.claimTaskSpace
     }));
@@ -255,11 +266,45 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
   assert.deepEqual(firstJsonLine(result.stdout), {
     taskSpacesType: "object",
     newType: "function",
+    runType: "function",
     switchType: "function",
     claimType: "function",
+    isHardStopErrorType: "function",
     oldNewType: "undefined",
     rawClaimType: "function",
   });
+});
+
+test("taskspace e2e taskSpaces.run completes a successful one-round task", async () => {
+  const ego = new FakeEgo();
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    const out = await taskSpaces.run("checkout-flow", async (task) => {
+      return { taskId: task.id, selected: ego.selectedId };
+    }, { timeout: 1234 });
+    console.log(JSON.stringify({
+      result: out.result,
+      completion: out.completion,
+      remaining: ego.taskSpaces.length
+    }));
+  `,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), {
+    result: { taskId: 1, selected: 1 },
+    completion: { done: true },
+    remaining: 0,
+  });
+  assert.deepEqual(ego.calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "checkout-flow"],
+    ["useTaskSpace", 1],
+    ["listTaskSpaces"],
+    ["useTaskSpace", 1],
+    ["closeTaskSpace", 1],
+  ]);
 });
 
 test("cli e2e exposes the unified helperContext surface (help present, internals hidden)", async () => {

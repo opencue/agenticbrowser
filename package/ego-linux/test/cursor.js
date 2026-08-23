@@ -18,7 +18,9 @@ for (let attempt = 0; attempt < 40; attempt += 1) {
 
 console.log("1. overlay present:      " + (await probe(`!!${HOST}`)));
 
-const transform = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
+const transform = await probe(
+  `${SHADOW}.getElementById('pointer').style.transform`,
+);
 // Drop the function name before reading the numbers — translate3d carries a 3.
 const args = String(transform).replace(/^[^(]*\(/, "");
 const [x, y] = (args.match(/-?[\d.]+/g) || []).map(Number);
@@ -28,15 +30,26 @@ console.log(
     ` (${transform} vs ${center.x},${center.y})`,
 );
 
-console.log("3. badge text:           " + (await probe(`${SHADOW}.getElementById('text').textContent`)));
+console.log(
+  "3. badge text:           " +
+    (await probe(`${SHADOW}.getElementById('text').textContent`)),
+);
 
 // The load-bearing property: pointer-events:none, so the harness's own
 // elementFromPoint hit-tests (wheel and drag fallbacks) still see the page.
-console.log("4. hit test at cursor:   " + (await probe(`document.elementFromPoint(${center.x}, ${center.y}).id`)));
-console.log("5. click still landed:   " + (await probe("document.getElementById('count').textContent")));
+console.log(
+  "4. hit test at cursor:   " +
+    (await probe(`document.elementFromPoint(${center.x}, ${center.y}).id`)),
+);
+console.log(
+  "5. click still landed:   " +
+    (await probe("document.getElementById('count').textContent")),
+);
 
 const snap = await page.snapshotRaw({ scope: "full_page" });
-console.log("6. overlay in snapshot:  " + snap.content.includes("ego-agent-cursor"));
+console.log(
+  "6. overlay in snapshot:  " + snap.content.includes("ego-agent-cursor"),
+);
 
 // A wheel carries coordinates that default to (0, 0) but moves no pointer:
 // following them would snap the cursor into the corner on every scroll.
@@ -45,10 +58,14 @@ console.log("6. overlay in snapshot:  " + snap.content.includes("ego-agent-curso
 // otherwise measure that instead of the wheel.
 await page.mouse.move(center.x, center.y);
 await page.waitForTimeout(300);
-const beforeWheel = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
+const beforeWheel = await probe(
+  `${SHADOW}.getElementById('pointer').style.transform`,
+);
 await page.mouse.wheel(0, 200);
 await page.waitForTimeout(200);
-const afterScroll = await probe(`${SHADOW}.getElementById('pointer').style.transform`);
+const afterScroll = await probe(
+  `${SHADOW}.getElementById('pointer').style.transform`,
+);
 console.log("7. cursor held on wheel: " + (afterScroll === beforeWheel));
 
 // Press and release are asserted apart, because a click's own press lasts 25ms
@@ -86,7 +103,9 @@ await page.waitForTimeout(250);
 
 // The shape and the label both come from whatever is under the cursor.
 const shownShape = () =>
-  probe(`[...${SHADOW}.querySelectorAll('svg.shape.on')].map(s => s.id).join()`);
+  probe(
+    `[...${SHADOW}.querySelectorAll('svg.shape.on')].map(s => s.id).join()`,
+  );
 const badgeText = () => probe(`${SHADOW}.getElementById('text').textContent`);
 
 // A plain <button> is `cursor: default` in every browser — the link is what
@@ -108,14 +127,23 @@ console.log("13. beam over a field:   " + (await shownShape()));
 await page.locator("#name-input").fill("Ada");
 await page.waitForTimeout(200);
 console.log("14. says it is typing:   " + (await badgeText()));
-console.log("15. marks the field:     " + (await probe(`${SHADOW}.getElementById('ring').className`)));
+console.log(
+  "15. marks the field:     " +
+    (await probe(`${SHADOW}.getElementById('ring').className`)),
+);
 await page.waitForTimeout(1000);
-console.log("16. lets go when done:   " + (await probe(`${SHADOW}.getElementById('ring').className`) === ""));
+console.log(
+  "16. lets go when done:   " +
+    ((await probe(`${SHADOW}.getElementById('ring').className`)) === ""),
+);
 
 // The highlighter: a marker an agent draws to explain something, rather than a
 // real selection, which would fight its own work on the page.
-const bandCount = () => probe(`${SHADOW}.getElementById('bands').children.length`);
-const byText = await ego.highlight("must survive the snapshot", { note: "explaining this" });
+const bandCount = () =>
+  probe(`${SHADOW}.getElementById('bands').children.length`);
+const byText = await ego.highlight("must survive the snapshot", {
+  note: "explaining this",
+});
 await page.waitForTimeout(500);
 console.log("17. highlight lines:     " + byText.lines);
 console.log("18. bands drawn:         " + (await bandCount()));
@@ -135,7 +163,9 @@ console.log(
 );
 
 const miss = await ego.highlight("no such words appear anywhere on this page");
-console.log("21. miss draws nothing:  " + (miss.done === false && miss.lines === 0));
+console.log(
+  "21. miss draws nothing:  " + (miss.done === false && miss.lines === 0),
+);
 
 await ego.clearHighlight();
 await page.waitForTimeout(200);
@@ -153,7 +183,9 @@ console.log("24. marks the lines:     " + ((await bandCount()) > 0));
 // including a move back to where the harness last left the cursor.
 await page.mouse.move(center.x, center.y);
 await page.waitForTimeout(150);
-const sweepDone = await probe(`document.getElementById('ego-agent-cursor-overlay').__egoSweep.done`);
+const sweepDone = await probe(
+  `document.getElementById('ego-agent-cursor-overlay').__egoSweep.done`,
+);
 console.log("25. input ends the read: " + sweepDone);
 
 // The trail the Spaces panel reads: transitions, not events, so a burst of
@@ -203,9 +235,14 @@ await page.waitForTimeout(250);
 const moveFor = async (x, y) => {
   await page.mouse.move(x, y);
   await page.waitForTimeout(80);
-  return parseInt(await probe(`${SHADOW}.getElementById('pointer').style.transitionDuration`), 10);
+  return parseInt(
+    await probe(`${SHADOW}.getElementById('pointer').style.transitionDuration`),
+    10,
+  );
 };
 await moveFor(center.x, center.y);
 const near = await moveFor(center.x + 6, center.y);
 const far = await moveFor(30, 30);
-console.log("31. motion scales:       " + (near < far) + ` (${near}ms vs ${far}ms)`);
+console.log(
+  "31. motion scales:       " + (near < far) + ` (${near}ms vs ${far}ms)`,
+);

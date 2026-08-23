@@ -273,19 +273,25 @@ test("runtimeValue throws on result subtype error without exceptionDetails", () 
 /*  cdp() — thin wrapper over state.send                              */
 /* ------------------------------------------------------------------ */
 
-test("cdp sends method and params through cdpOverride", async () => {
+test("cdp sends method, params, session, and timeout through cdpOverride", async () => {
   const calls = [];
   const restore = setOverrides({
-    cdpOverride: async (method, params, sessionId) => {
-      calls.push([method, params, sessionId]);
+    cdpOverride: async (method, params, sessionId, timeoutMs) => {
+      calls.push([method, params, sessionId, timeoutMs]);
       return { value: "ok" };
     },
   });
   try {
-    const result = await cdp("Runtime.evaluate", { expression: "1" });
+    const result = await cdp(
+      "Runtime.evaluate",
+      { expression: "1" },
+      "session-1",
+      1234,
+    );
     assert.equal(result.value, "ok");
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0][0], "Runtime.evaluate");
+    assert.deepEqual(calls, [
+      ["Runtime.evaluate", { expression: "1" }, "session-1", 1234],
+    ]);
   } finally {
     restore();
   }

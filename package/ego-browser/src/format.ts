@@ -442,6 +442,21 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object[]>",
     example: "console.log(await page.drainEvents())",
   },
+  "page.trace": {
+    signature: "page.trace(options?) => Promise<object>",
+    description:
+      "Drain and summarize the chronological CDP activity timeline for debugging.",
+    params: [
+      {
+        name: "options",
+        type: "{ limit?: number, redact?: boolean }",
+        description:
+          "Limit timeline entries and control URL redaction. Redaction is on by default.",
+      },
+    ],
+    returns: "Promise<{ schema, createdAt, count, shown, items }>",
+    example: "console.log(JSON.stringify(await page.trace(), null, 2))",
+  },
   "page.keyboard.press": {
     signature: "page.keyboard.press(key, options?) => Promise<void>",
     description: "Press a keyboard key or shortcut.",
@@ -698,6 +713,34 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object>",
     example: "const task = await taskSpaces.useOrCreate('google sheets task')",
   },
+  "taskSpaces.run": {
+    signature: "taskSpaces.run(nameOrId, fn, options?) => Promise<object>",
+    description:
+      "Run a one-round task in a task space and complete it on success.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Task space name, taskId, or numeric id.",
+      },
+      {
+        name: "fn",
+        type: "(task) => Promise<any> | any",
+        required: true,
+        description: "Callback that performs the browser work.",
+      },
+      {
+        name: "options",
+        type: "{ keep?: boolean, timeout?: number, complete?: boolean }",
+        description:
+          "keep is passed to complete on success; timeout temporarily sets helper timeouts in milliseconds; complete:false skips cleanup.",
+      },
+    ],
+    returns: "Promise<{ task, result, completion }>",
+    example:
+      "await taskSpaces.run('inspect page', async task => { await page.goto('https://example.com'); return page.info() })",
+  },
   "taskSpaces.claim": {
     signature: "taskSpaces.claim(nameOrId) => Promise<object>",
     description: "Claim a user-owned task space and select it.",
@@ -779,6 +822,21 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Promise<void>",
     example: "await taskSpaces.waitForAgentControl(task.id)",
+  },
+  "taskSpaces.isHardStopError": {
+    signature: "taskSpaces.isHardStopError(error) => boolean",
+    description:
+      "Return true when an ego error means the user controls or ended the task space, so automation must stop instead of retrying.",
+    params: [
+      {
+        name: "error",
+        type: "unknown",
+        required: true,
+        description: "Caught error or ego error-shaped value.",
+      },
+    ],
+    returns: "boolean",
+    example: "if (taskSpaces.isHardStopError(error)) throw error",
   },
   "site.skills": {
     signature: "site.skills(url?) => Promise<object[]>",
@@ -925,7 +983,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "const body = await fetch.browser('/api/data')",
   },
   cdp: {
-    signature: "cdp(method, params?) => Promise<any>",
+    signature: "cdp(method, params?, sessionId?, timeoutMs?) => Promise<any>",
     description:
       "Send a supported raw Chrome DevTools Protocol command to the current target. Browser.grantPermissions and Browser.setPermission are not exposed by the task-space bridge.",
     params: [
@@ -939,6 +997,18 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         name: "params",
         type: "object",
         description: "CDP command parameters.",
+      },
+      {
+        name: "sessionId",
+        type: "string",
+        description:
+          "Optional attached target session id. Omit for the current page target.",
+      },
+      {
+        name: "timeoutMs",
+        type: "number",
+        description:
+          "Optional response timeout in milliseconds for long-running CDP commands.",
       },
     ],
     returns: "Promise<any>",

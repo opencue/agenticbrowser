@@ -87,4 +87,8 @@ skills/ego-browser/SKILL.zh.md
 
 # Local agent tooling state (not product code)
 .omc/
+.omx/
+.claude/reviews/
+.claude/worktrees/
 .cue.profile
+.cue.profile.bak-*
