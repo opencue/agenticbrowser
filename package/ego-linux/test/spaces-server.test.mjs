@@ -91,9 +91,9 @@ async function visibilityState(targetId) {
 async function waitForSpace(name, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const { body } = await api("/api/spaces");
-    const space = body.spaces.find((candidate) => candidate.name === name);
-    if (space?.title === "ego linux port fixture") return space;
+    const { taskSpaces = [] } = await shim.ego.listTaskSpaces();
+    const space = taskSpaces.find((candidate) => candidate.name === name);
+    if (space?.targetIds?.length) return space;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`timed out waiting for space ${name}`);
