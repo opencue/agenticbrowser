@@ -4,6 +4,40 @@ ego-shaped Linux host for ego lite: a long-lived Chromium supervisor plus CLI sh
 
 This is **not** the Citro/macOS ego app. It is an OSS-friendly host that approximates the ego product model (shared profile/logins, Task Spaces as tab sets + ownership, CDP-only) on stock Chromium.
 
+## Visible UI contract
+
+The headed surface is a **managed Chrome/Chromium window**. It can receive a
+distinct `ego-lite-linux` desktop class/icon, but it still has the stock browser
+chrome, tabs, and address bar. There is no separate native Ego Lite application
+shell in this host, so tooling and agent instructions must not tell users that
+the visible window is “not Chrome”.
+
+Do not mix this host with `package/ego-linux/bin/ego-browser.mjs`. The other
+Linux implementation uses a different profile and task-space state. For that
+reason this CLI rejects its `--open`, `--spaces`, and `--status` commands instead of
+silently opening a browser agents are not controlling. Use
+`taskSpaces.handOff(...)` to present the selected host task to a user.
+
+Run `ego-browser --control-center` for the host-native Task Space dashboard.
+It is served on loopback with a per-process capability token and supports
+resume, explicit presentation, close, tab counts, ownership, timestamps, and a
+bounded lifecycle event trail. This experimental host does not replace the
+supported `package/ego-linux` desktop launcher or profile.
+
+## Task Space lifecycle
+
+- A goal name reuses its existing agent-owned space instead of creating a
+  duplicate.
+- Empty spaces are provisioned lazily: the first page operation creates a
+  background `about:blank` target and immediately navigates it.
+- Each space persists `createdAt`, `touchedAt`, `lastContentAt`, and its active
+  target. Tab switching therefore survives list ordering and daemon restarts.
+- Agent-owned spaces that never load content are swept after 120 seconds;
+  inactive spaces are swept after 30 minutes. Configure with
+  `EGO_SPACE_ABANDONED_SEC` and `EGO_SPACE_IDLE_MIN`; `0` disables a sweep.
+- Normal work stays backgrounded. Only `handOff`, `presentTaskSpace`, or
+  completion with a kept page activates and raises a browser tab.
+
 ## Status
 
 Experimental Linux host: daemon, CDP bridge, Task Spaces, CLI shim, doctor
@@ -73,6 +107,8 @@ Full smoke needs:
 ./scripts/smoke.sh
 # or
 EGO_LINUX_E2E=1 npm test
+# headed focus isolation + explicit presentation
+EGO_LINUX_FOCUS_E2E=1 npm test
 ```
 
 Without Chrome + display, skip the smoke script; unit/integration tests still pass.

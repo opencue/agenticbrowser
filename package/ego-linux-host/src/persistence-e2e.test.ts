@@ -178,6 +178,8 @@ test(
       runtimeDir,
       seedFromChrome: false,
       noSandbox: process.env.EGO_CHROME_NO_SANDBOX === "1",
+      spaceAbandonedSeconds: 0,
+      spaceIdleMinutes: 0,
     };
 
     let daemon: Awaited<ReturnType<typeof startManagedDaemon>> | null = null;

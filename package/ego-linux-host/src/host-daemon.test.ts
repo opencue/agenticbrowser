@@ -89,6 +89,8 @@ function testConfig(dir: string): HostConfig {
     runtimeDir: join(dir, "run"),
     seedFromChrome: false,
     noSandbox: false,
+    spaceAbandonedSeconds: 0,
+    spaceIdleMinutes: 0,
   };
 }
 
@@ -159,6 +161,44 @@ test("daemon doctor and ego.listTaskSpaces without Chrome", async () => {
       });
       assert.equal(created.name, "from-rpc");
       assert.equal(created.ownership, "agent");
+
+      const control = await rpcCall(daemon.socketPath, "controlCenter");
+      assert.match(control.url, /^http:\/\/127\.0\.0\.1:/);
+      const state = await fetch(
+        new URL("/api/state" + new URL(control.url).search, control.url),
+      ).then((response) => response.json());
+      assert.ok(state.spaces.some((space: any) => space.name === "from-rpc"));
+    } finally {
+      await daemon.close();
+    }
+  });
+});
+
+test("control center sweep removes abandoned spaces while keeping the selected goal", async () => {
+  await withTempDir(async (dir) => {
+    const config = {
+      ...testConfig(dir),
+      spaceAbandonedSeconds: 0.001,
+      spaceIdleMinutes: 0,
+    };
+    const daemon = await startDaemon({ config, skipChrome: true });
+    try {
+      const old = await rpcCall(daemon.socketPath, "ego.createTaskSpace", {
+        name: "old-empty",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const selected = await rpcCall(daemon.socketPath, "ego.createTaskSpace", {
+        name: "selected-empty",
+      });
+      const control = await rpcCall(daemon.socketPath, "controlCenter");
+      const state = await fetch(
+        new URL("/api/state" + new URL(control.url).search, control.url),
+      ).then((response) => response.json());
+      assert.equal(state.spaces.some((space: any) => space.id === old.id), false);
+      assert.equal(
+        state.spaces.some((space: any) => space.id === selected.id),
+        true,
+      );
     } finally {
       await daemon.close();
     }

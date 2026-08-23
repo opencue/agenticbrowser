@@ -33,6 +33,14 @@ Commands:
   ego-browser --help           show this help
   ego-browser --doctor         ensure host and print diagnostics
   ego-browser --reload         reconnect host CDP channel
+  ego-browser --control-center open the Task Space Control Center
+
+Visible UI:
+  This Linux host drives a managed Chrome/Chromium window.
+  There is no separate native Ego Lite app shell.
+  --open, --spaces, and --status belong to the other Linux implementation and
+  are rejected to avoid opening a
+  different browser profile from the one agents control.
 `;
 
 export type RunCliOptions = {
@@ -83,6 +91,30 @@ export function parseCliFlags(argv: string[]): CliFlags {
     reload: false,
     remaining: stripped,
   };
+}
+
+/** Other-port window commands would address a different profile than this host. */
+export function unsupportedWindowCommand(argv: string[]): string | null {
+  const [head] = stripNodejsSubcommand(argv);
+  return head === "--open" || head === "--spaces" || head === "--status"
+    ? head
+    : null;
+}
+
+export function isControlCenterCommand(argv: string[]): boolean {
+  return stripNodejsSubcommand(argv)[0] === "--control-center";
+}
+
+function openControlCenterUrl(url: string, env: NodeJS.ProcessEnv): void {
+  if (env.EGO_NO_OPEN === "1") return;
+  if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return;
+  const child = spawn("xdg-open", [url], {
+    detached: true,
+    stdio: "ignore",
+    env,
+  });
+  child.on("error", () => {});
+  child.unref();
 }
 
 /**
@@ -236,7 +268,18 @@ export async function runCli(
   const stdin = opts.stdin ?? process.stdin;
   const packageRoot = opts.packageRoot ?? PACKAGE_ROOT;
 
+  const unsupported = unsupportedWindowCommand(argv);
+  if (unsupported) {
+    writeStream(
+      stderr,
+      `error: ${unsupported} belongs to another ego-linux implementation and would open a different browser profile.\n` +
+        "This host's visible surface is its managed Chrome/Chromium window; use taskSpaces.handOff(...) for user interaction.\n",
+    );
+    return 2;
+  }
+
   const flags = parseCliFlags(argv);
+  const controlCenter = isControlCenterCommand(argv);
 
   if (flags.help) {
     writeStream(stdout, CLI_HELP);
@@ -254,6 +297,20 @@ export async function runCli(
 
   const config = await loadConfig(env);
   const ensure = opts.ensureHost ?? ensureHost;
+
+  if (controlCenter) {
+    await ensure(config, { env, packageRoot });
+    const conn = await connectHost(config.hostSocket);
+    try {
+      const result = (await conn.request("controlCenter")) as { url?: string };
+      if (!result?.url) throw new Error("host returned no control center URL");
+      writeStream(stdout, result.url + "\n");
+      openControlCenterUrl(result.url, env);
+      return 0;
+    } finally {
+      conn.close();
+    }
+  }
 
   if (flags.doctor) {
     await ensure(config, { env, packageRoot });
