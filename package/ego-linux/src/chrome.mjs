@@ -1,36 +1,39 @@
 import { spawn } from "node:child_process";
-import {
-  access,
-  mkdir,
-  readdir,
-  readFile,
-  readlink,
-  writeFile,
-  rm,
-} from "node:fs/promises";
+import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { join } from "node:path";
 
 import { BROWSER_STATE_FILE, PROFILE_DIR, STATE_DIR } from "./paths.mjs";
-
-const BINARY_CANDIDATES = [
-  process.env.EGO_LINUX_CHROME,
-  "google-chrome",
-  "google-chrome-stable",
-  "chromium",
-  "chromium-browser",
-  "brave-browser",
-  "microsoft-edge",
-].filter(Boolean);
+import { acquireDirectoryLock } from "./launch-lock.mjs";
+import {
+  clearSingletonArtifacts,
+  detachedSpawnOptions,
+  listProcesses,
+  processArgv,
+  processIsAlive,
+  readSingletonOwner,
+  resolveBrowserBinary,
+  terminateProcess,
+} from "./platform.mjs";
 
 // Chrome writes the negotiated port here once the DevTools endpoint is live.
 const PORT_FILE = "DevToolsActivePort";
+const BROWSER_LAUNCH_LOCK = join(STATE_DIR, "browser-launch.lock");
 
 // Shared by the launch args and the orphan reaper that reads them back out of
-// /proc — if the two spellings drifted, the reaper would match nothing.
+// the process table — if the two spellings drifted, the reaper would match
+// nothing.
 const PROFILE_FLAG = "--user-data-dir=";
 
-/** Window class shared with the desktop entry's StartupWMClass. */
+/**
+ * Window class shared with the desktop entry's StartupWMClass.
+ *
+ * On Windows `--class` has no effect on the window — but Chrome still carries
+ * it in its command line, and that is the other half of what this constant is
+ * for: it is the marker that tells our browsers apart from the user's, which
+ * the reaper and the profile-lock check both match on. So it is passed on both
+ * platforms deliberately.
+ */
 export const WM_CLASS = "ego-lite-linux";
 
 /** Shown in Chrome's profile chip so the agent window is identifiable. */
@@ -63,16 +66,18 @@ const LAUNCH_FLAGS = [
   // Give the agent browser its own window class. Without it the window carries
   // Chrome's, so the desktop groups it under the ordinary Chrome icon: it never
   // appears as its own running app and the launcher icon cannot raise it.
-  // Paired with StartupWMClass in the desktop entry.
+  // Paired with StartupWMClass in the desktop entry. On Windows it is inert as
+  // a window hint and serves only as the ownership marker described on WM_CLASS.
   `--class=${WM_CLASS}`,
 ];
 
 /**
  * Is this directory *provably* absent?
  *
- * exists() answers "could I stat it", collapsing every failure into false —
- * fine for picking a browser binary, dangerous for deciding whether to kill a
- * process. A transient ESTALE on NFS, an EIO, or a FUSE timeout would read as
+ * A plain "could I stat it" collapses every failure into false — fine for
+ * picking a browser binary (platform.mjs does exactly that), dangerous for
+ * deciding whether to terminate a process. A transient ESTALE on NFS, an EIO,
+ * or a FUSE timeout would read as
  * "profile deleted" and take a live browser down with it. Only ENOENT is
  * evidence of absence; every other error means "assume it is there".
  */
@@ -83,44 +88,6 @@ async function definitelyGone(path) {
   } catch (error) {
     return error?.code === "ENOENT";
   }
-}
-
-async function exists(path) {
-  try {
-    await access(path, constants.F_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function resolveBinary() {
-  for (const candidate of BINARY_CANDIDATES) {
-    if (candidate.includes("/")) {
-      if (await exists(candidate)) return candidate;
-      continue;
-    }
-    const found = await which(candidate);
-    if (found) return found;
-  }
-  throw new Error(
-    `no Chrome/Chromium binary found (tried: ${BINARY_CANDIDATES.join(", ")}). ` +
-      `Set EGO_LINUX_CHROME to an absolute path.`,
-  );
-}
-
-function which(name) {
-  return new Promise((resolve) => {
-    const child = spawn("which", [name], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    let out = "";
-    child.stdout.on("data", (chunk) => {
-      out += chunk;
-    });
-    child.on("error", () => resolve(null));
-    child.on("close", (code) => resolve(code === 0 ? out.trim() : null));
-  });
 }
 
 /** Ask a running DevTools endpoint for its browser-level WebSocket URL. */
@@ -257,12 +224,8 @@ export async function clearStaleCrashMark(profileDir) {
 
 /** Whether a pid is a browser running against our own profile directory. */
 async function ownsOurProfile(pid, profileDir) {
-  try {
-    const cmdline = await readFile(`/proc/${pid}/cmdline`, "utf8");
-    return cmdline.includes(profileDir);
-  } catch {
-    return false;
-  }
+  const argv = await processArgv(pid);
+  return argv?.some((arg) => arg === `${PROFILE_FLAG}${profileDir}`) ?? false;
 }
 
 /**
@@ -284,42 +247,24 @@ async function ownsOurProfile(pid, profileDir) {
  * @returns {Promise<number>} How many orphans were signalled.
  */
 export async function reapOrphanedBrowsers() {
-  let entries;
-  try {
-    entries = await readdir("/proc");
-  } catch {
-    return 0; // no procfs to walk; nothing to reap
-  }
+  const running = await listProcesses({ contains: `--class=${WM_CLASS}` });
 
   let reaped = 0;
   await Promise.all(
-    entries
-      .filter((entry) => /^\d+$/.test(entry))
-      .map(async (pid) => {
-        let argv;
-        try {
-          argv = (await readFile(`/proc/${pid}/cmdline`, "utf8")).split("\0");
-        } catch {
-          return; // exited under us, or another user's process
-        }
-        // Renderers and helpers inherit --user-data-dir but carry --type=;
-        // signalling the browser process takes its children with it anyway.
-        if (!argv.includes(`--class=${WM_CLASS}`)) return;
-        if (argv.some((arg) => arg.startsWith("--type="))) return;
+    running.map(async ({ pid, argv }) => {
+      // Renderers and helpers inherit --user-data-dir but carry --type=;
+      // signalling the browser process takes its children with it anyway.
+      if (!argv.includes(`--class=${WM_CLASS}`)) return;
+      if (argv.some((arg) => arg.startsWith("--type="))) return;
 
-        const flag = argv.find((arg) => arg.startsWith(PROFILE_FLAG));
-        if (!flag) return;
-        const profileDir = flag.slice(PROFILE_FLAG.length);
-        if (profileDir === PROFILE_DIR) return;
-        if (!(await definitelyGone(profileDir))) return;
+      const flag = argv.find((arg) => arg.startsWith(PROFILE_FLAG));
+      if (!flag) return;
+      const profileDir = flag.slice(PROFILE_FLAG.length);
+      if (profileDir === PROFILE_DIR) return;
+      if (!(await definitelyGone(profileDir))) return;
 
-        try {
-          process.kill(Number(pid), "SIGTERM");
-          reaped += 1;
-        } catch {
-          // already gone, or not ours to signal
-        }
-      }),
+      if (await terminateProcess(pid)) reaped += 1;
+    }),
   );
   return reaped;
 }
@@ -327,9 +272,11 @@ export async function reapOrphanedBrowsers() {
 /**
  * Clear the profile lock before launching.
  *
- * Chrome's SingletonLock is a symlink named `<host>-<pid>`; a browser that dies
- * without a clean shutdown leaves it behind, and the next launch refuses to
- * start ("Failed to create a ProcessSingleton ... Aborting now").
+ * A browser that dies without exiting cleanly leaves its single-instance guard
+ * behind, and the next launch refuses to start ("Failed to create a
+ * ProcessSingleton ... Aborting now"). What that guard *is* differs by platform
+ * — a symlink on POSIX, kernel objects on Windows — so finding its owner and
+ * clearing its leftovers both live in platform.mjs.
  *
  * launch() only runs after ensureBrowser() has confirmed no DevTools endpoint
  * answers, so a lock owner that is still alive is an unreachable orphan of ours
@@ -337,39 +284,29 @@ export async function reapOrphanedBrowsers() {
  * that orphan is terminated rather than left to block every future run.
  */
 async function clearProfileLock(profileDir) {
-  const lock = join(profileDir, "SingletonLock");
-  let target;
-  try {
-    target = await readlink(lock);
-  } catch {
-    return false; // no lock at all
+  const pid = await readSingletonOwner(profileDir, {
+    marker: `--class=${WM_CLASS}`,
+  });
+  if (pid === null) {
+    // Nothing claims the profile. Clearing artifacts anyway is a no-op on a
+    // clean profile and the fix on one holding a stale file.
+    await clearSingletonArtifacts(profileDir);
+    return false;
   }
 
-  const pid = Number(target.slice(target.lastIndexOf("-") + 1));
-  if (
-    Number.isFinite(pid) &&
-    pid > 0 &&
-    (await ownsOurProfile(pid, profileDir))
-  ) {
-    try {
-      process.kill(pid, "SIGTERM");
+  if (await ownsOurProfile(pid, profileDir)) {
+    if (await terminateProcess(pid)) {
       // Give it a moment to release the lock on its own.
       await new Promise((resolve) => setTimeout(resolve, 500));
-    } catch {
-      // already gone
     }
   }
 
-  await Promise.all(
-    ["SingletonLock", "SingletonSocket", "SingletonCookie"].map((name) =>
-      rm(join(profileDir, name), { force: true }),
-    ),
-  );
+  await clearSingletonArtifacts(profileDir);
   return true;
 }
 
 async function launch({ headless }) {
-  const binary = await resolveBinary();
+  const binary = await resolveBrowserBinary();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
@@ -390,10 +327,7 @@ async function launch({ headless }) {
     // every page operation for that reason.
     "about:blank",
   ];
-  const child = spawn(binary, args, {
-    detached: true,
-    stdio: "ignore",
-  });
+  const child = spawn(binary, args, detachedSpawnOptions());
   child.unref();
 
   const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR);
@@ -418,18 +352,35 @@ export async function ensureBrowser({ headless = false } = {}) {
     return { wsUrl: process.env.EGO_LINUX_CDP_URL, launched: false };
   }
 
-  const state = await readBrowserState();
-  if (state?.port) {
+  async function runningBrowser() {
+    const state = await readBrowserState();
+    if (!state?.port) return null;
     const wsUrl = await probe(state.port);
-    if (wsUrl) return { port: state.port, wsUrl, launched: false };
+    return wsUrl ? { port: state.port, wsUrl, launched: false } : null;
   }
-  return launch({ headless });
+
+  const existing = await runningBrowser();
+  if (existing) return existing;
+
+  // Several agents commonly start together. Without serializing this gap, each
+  // process observes no published state and invokes Chrome; ProcessSingleton
+  // folds those invocations into one profile but still opens their about:blank
+  // requests as extra windows/tabs. Re-check after acquiring the kernel-owned
+  // lock so only its owner launches and every waiter reuses the published CDP.
+  const release = await acquireDirectoryLock(BROWSER_LAUNCH_LOCK);
+  try {
+    const winner = await runningBrowser();
+    if (winner) return winner;
+    return await launch({ headless });
+  } finally {
+    await release();
+  }
 }
 
 /**
  * Ask the browser to close itself, over CDP.
  *
- * SIGTERM is recorded by Chrome as a crash: the profile keeps `exit_type:
+ * Termination by pid is recorded by Chrome as a crash: the profile keeps `exit_type:
  * "Crashed"`, and every later launch greets the user with "Chrome didn't shut
  * down correctly — Restore pages?". Browser.close is the graceful path, so the
  * profile records a clean exit and there is nothing left to restore.
@@ -478,11 +429,7 @@ async function closeBrowserGracefully(port, timeoutMs = 5000) {
 async function waitForProcessExit(pid, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    try {
-      process.kill(pid, 0);
-    } catch {
-      return true;
-    }
+    if (!processIsAlive(pid)) return true;
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   return false;
@@ -501,19 +448,12 @@ export async function stopBrowser() {
     stopped = false;
 
   // The blunt instrument, only when the browser did not take the polite request.
-  if (!stopped && state?.pid) {
-    try {
-      process.kill(state.pid, "SIGTERM");
-      stopped = true;
-    } catch {
-      // already gone
-    }
-  }
+  if (!stopped && state?.pid) stopped = await terminateProcess(state.pid);
 
   await rm(BROWSER_STATE_FILE, { force: true });
-  // A SIGTERMed Chrome does not always release its profile lock, which would
-  // block the next launch. After a graceful close there is nothing left to
-  // clear, and this is a no-op.
+  // A force-terminated Chrome does not always release its profile lock, which
+  // would block the next launch. After a graceful close there is nothing left
+  // to clear, and this is a no-op.
   await clearProfileLock(PROFILE_DIR);
   return stopped;
 }

@@ -365,6 +365,24 @@ describe("ego-browser Linux port", () => {
       /31\. motion scales:\s+true/,
       "a nudge and a jump do not take the same time",
     );
+
+    // The label used to trail at a fixed offset, which put it on the heading
+    // whenever the cursor rested near one — covering the very thing it names.
+    assert.match(
+      out,
+      /32\. label clears words:\s+true/,
+      "the label steps around the words the cursor is parked over",
+    );
+    assert.match(
+      out,
+      /33\. clears when on them:\s+true/,
+      "and around them when the cursor is on the words themselves",
+    );
+    assert.match(
+      out,
+      /34\. and stays on screen:\s+true/,
+      "without stepping off the screen to do it",
+    );
   });
 
   it("shares live non-cookie profile storage across task spaces", async () => {
@@ -419,6 +437,18 @@ describe("ego-browser Linux port", () => {
       out,
       /8\. after cleanup:\[\]/,
       "completing a space closes its window",
+    );
+  });
+
+  it("resumes each space's active tab across heredoc processes", async () => {
+    const seeded = await runScript(join(HERE, "active-tab-seed.js"));
+    assert.match(seeded, /"active":"Persisted second tab"/);
+
+    const resumed = await runScript(join(HERE, "active-tab-resume.js"));
+    assert.match(
+      resumed,
+      /RESUMED: Persisted second tab/,
+      "a fresh CLI process resumes the tab selected by the previous one",
     );
   });
 });

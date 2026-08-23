@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { processAncestry } from "./platform.mjs";
+
 /**
  * Who is opening this space.
  *
@@ -13,16 +15,21 @@ import { dirname, join } from "node:path";
  * heredoc — the browser itself has no idea who is driving it.
  */
 
-const RUNTIME_MARKER = "/.config/cue/runtime/";
+/**
+ * cue's per-profile runtime directory, as it appears inside an environment
+ * variable. Written with both separators because the same variable is spelled
+ * with backslashes when a cue-managed session runs on Windows.
+ */
+const RUNTIME_MARKER = /[\\/]\.config[\\/]cue[\\/]runtime[\\/]/;
 
 /** cue launches its sessions against a per-profile runtime directory. */
 function profileFromEnvironment() {
   for (const value of Object.values(process.env)) {
     if (typeof value !== "string") continue;
-    const at = value.indexOf(RUNTIME_MARKER);
-    if (at === -1) continue;
-    const rest = value.slice(at + RUNTIME_MARKER.length);
-    const name = rest.split("/")[0];
+    const match = RUNTIME_MARKER.exec(value);
+    if (!match) continue;
+    const rest = value.slice(match.index + match[0].length);
+    const name = rest.split(/[\\/]/)[0];
     if (name) return name;
   }
   return null;
@@ -56,46 +63,25 @@ function profileFromPinFile(startDir) {
  * which meant a codex run drew a Claude badge.
  *
  * Read from the process ancestry, not the environment. The CLI is a grandchild
- * of the harness that ran the heredoc, so `/proc` answers the question outright.
+ * of the harness that ran the heredoc, so the process table answers the
+ * question outright (see processAncestry() in platform.mjs).
  * Sniffing environment variables gets it wrong in both directions: a shell
  * profile that exports anything `CODEX_*` makes a Claude session look like codex
  * (`CODEX_AUTH_SKIP_TTY_RESTORE` is exported on this developer's machine and is
  * set inside Claude sessions), and a harness that exports no marker of its own
  * would stay invisible.
  *
- * Adding a harness is one row in the table below — `comm` is what
- * `/proc/<pid>/comm` reports, which for a Node-based CLI may be `node` rather
- * than the tool's name.
+ * Adding a harness is one row in the table below. The name is what the OS
+ * reports as the process name, which for a Node-based CLI may be `node` rather
+ * than the tool's name; Windows' `.exe` suffix is stripped before it gets here,
+ * so one row covers both platforms.
  */
 const HARNESS_NAMES = new Map([
   ["codex", "Codex"],
   ["claude", "Claude"],
 ]);
 
-/** Process names from this process up to init, nearest first. */
-function procAncestry(limit = 12) {
-  const names = [];
-  let pid = "self";
-  for (let depth = 0; depth < limit; depth += 1) {
-    let comm;
-    let status;
-    try {
-      comm = readFileSync(`/proc/${pid}/comm`, "utf8").trim();
-      status = readFileSync(`/proc/${pid}/status`, "utf8");
-    } catch {
-      // The process exited under us, or this is not Linux. Either way the walk
-      // is over and what we have is what we know.
-      break;
-    }
-    if (comm) names.push(comm);
-    const parent = /^PPid:\s*(\d+)/m.exec(status)?.[1];
-    if (!parent || parent === "0") break;
-    pid = parent;
-  }
-  return names;
-}
-
-export function agentName({ ancestry = procAncestry } = {}) {
+export function agentName({ ancestry = processAncestry } = {}) {
   const override = process.env.EGO_LINUX_CURSOR_NAME;
   if (override) return override;
   let names = [];
@@ -120,10 +106,17 @@ export function agentIdentity(cwd = process.cwd()) {
     return { profile: null, session: null };
   }
   const profile = profileFromEnvironment() || profileFromPinFile(cwd) || null;
-  const session = process.env.CLAUDE_CODE_SESSION_ID || null;
+  const session =
+    process.env.EGO_BROWSER_SESSION_ID ||
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CODEX_SESSION_ID ||
+    process.env.CODEX_THREAD_ID ||
+    process.env.OMX_SESSION_ID ||
+    null;
   return {
     profile,
-    // Enough to tell two concurrent sessions apart without being a wall of hex.
-    session: session ? session.slice(0, 8) : null,
+    // Keep the full value for collision-free ownership and name matching. The
+    // overview counts sessions but does not render this raw identifier.
+    session,
   };
 }

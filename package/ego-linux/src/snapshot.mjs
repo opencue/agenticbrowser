@@ -488,7 +488,7 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
   walk(0, depth);
 }
 
-export function createSnapshotApi(cdp, { listTabs, assertAgentControl } = {}) {
+export function createSnapshotApi(cdp, { listTabs } = {}) {
   // Snapshot whatever page the harness is actually driving: observation and
   // action drifting apart reads as an empty snapshot. See session.mjs.
   const sessionForActiveTab = createSessionResolver(cdp, {
@@ -498,7 +498,6 @@ export function createSnapshotApi(cdp, { listTabs, assertAgentControl } = {}) {
 
   return {
     async snapshot(options = {}) {
-      await assertAgentControl?.();
       const sessionId = await sessionForActiveTab();
       const scope = options.scope ?? "full_page";
 

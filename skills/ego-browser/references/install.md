@@ -2,7 +2,14 @@
 
 Read this file only when ego lite isn't installed yet, or when the user asks to install ego lite. For day-to-day browser work, go back to `SKILL.md`.
 
-The ego-browser skill depends on a working `ego-browser` command on `PATH`. On **macOS**, that command comes from the Citro **ego lite** app (DMG + onboarding). On **Linux / WSL**, this monorepo ships an **ego-shaped Linux host** (`package/ego-linux-host`) that approximates the same product model (shared Chromium profile, Task Spaces, CDP) without the proprietary Citro app.
+The ego-browser skill depends on a working `ego-browser` command on `PATH`. On
+**macOS**, that command comes from the Citro **ego lite** app (DMG + onboarding).
+On **Linux / WSL**, this fork's supported runtime is `package/ego-linux`. The
+installer preserves its long-lived `~/.local/share/ego-lite-linux` profile and
+links both normal browser work and the Spaces dashboard to that one runtime.
+The experimental `package/ego-linux-host` package has a different profile and
+task-space store; never substitute it during an active task. Both drive stock
+Chrome/Chromium and neither supplies the native Citro/macOS Ego Lite shell.
 
 ego lite website (macOS product): https://lite.ego.app/
 
@@ -12,15 +19,40 @@ an unofficial fork of `citrolabs/ego-lite`, published on branch `linux-port`
 (checked out locally as `main`, which tracks it). On this machine the checkout
 is at `~/Documents/ego-lite-linux`. Full details: `package/ego-linux/README.md`.
 
+## Verify the installed Linux runtime before opening or troubleshooting it
+
+Run these checks before making a claim about which Ego window the user has:
+
+```bash
+command -v ego-browser
+readlink -f "$(command -v ego-browser)"
+grep '^Exec=' ~/.local/share/applications/ego-lite-linux.desktop 2>/dev/null || true
+pgrep -a -f 'package/ego-linux/bin/ego-browser.mjs|ego-lite-linux/profile' | head
+```
+
+- A CLI target under `package/ego-linux/` identifies the supported port and its
+  `~/.local/share/ego-lite-linux` profile.
+- A target under `package/ego-linux-host/` is the experimental host with a
+  different `~/.local/share/ego-lite` profile. Stop and fix the install instead
+  of crossing between the two.
+- The desktop `Exec` should name the same `package/ego-linux` CLI with
+  `--spaces`; this is the Task Space dashboard, not a second browser runtime.
+- A launcher/icon/window class is only desktop identity. The visible surface is
+  still Chrome/Chromium; never claim a native Ego application window exists.
+
 ---
 
 ## Install steps (Linux / WSL)
 
-Use this path on Linux and WSL. **Do not** run the macOS DMG installer (`scripts/install.sh`) here — it only supports Darwin and downloads the Citro app.
+The checked-in `scripts/install.sh` builds the harness and installs the
+supported `package/ego-linux` runtime.
 
-This install builds the OSS packages in the monorepo and symlinks a CLI shim:
+This fork replaces upstream's macOS DMG script at that path with a Linux-aware
+installer. On macOS, use the separate macOS instructions below.
 
-- Host: `package/ego-linux-host` (daemon + `ego-browser` shim)
+This install builds the harness and symlinks the Linux port's CLI shim:
+
+- Port: `package/ego-linux` (browser lifecycle + Task Spaces + `ego-browser` shim)
 - Harness: `package/ego-browser` (helper runtime injected into heredocs)
 
 ### Requirements
@@ -29,64 +61,68 @@ This install builds the OSS packages in the monorepo and symlinks a CLI shim:
 - Node.js ≥ 22 and npm
 - Chrome or Chromium **on the Linux side** (not Windows `chrome.exe` for MVP)
 - For headed mode: a display (`DISPLAY` set) — prefer **WSLg** on Windows
-- For headless: `EGO_HEADLESS=1` (opt-in; no GUI required)
+- For headless: `EGO_LINUX_HEADLESS=1` (opt-in; no GUI required)
 
 ### Run the installer
 
 From the ego-lite repo root (adjust the path if your checkout lives elsewhere):
 
 ```bash
-bash skills/ego-browser/scripts/install-linux.sh
+sh skills/ego-browser/scripts/install.sh
 ```
 
 What it does:
 
-1. Checks Linux + Node ≥ 22
-2. `npm ci` + `npm run build` for `package/ego-browser` and `package/ego-linux-host`
-3. Creates data/config dirs (`~/.local/share/ego-lite`, `~/.config/ego-lite`)
-4. Symlinks `~/.local/bin/ego-browser` → `package/ego-linux-host/bin/ego-browser.mjs`
-5. Detects Chrome/Chromium (warns with install hints if missing; does not auto-`apt install`)
-6. Checks that `~/.local/bin` is on `PATH`
-7. Runs `ego-browser --doctor` (skip with `--no-doctor`)
+1. Checks Linux, Node ≥ 22, and a Linux-side Chrome/Chromium
+2. Runs `npm ci` + `npm run build` for `package/ego-browser`
+3. Symlinks `~/.local/bin/ego-browser` → `package/ego-linux/bin/ego-browser.mjs`
+4. Verifies that the installed command starts
+5. Leaves the existing profile and Task Space state untouched
 
-Optional flags:
+Optional onboarding commands:
 
 ```bash
-bash skills/ego-browser/scripts/install-linux.sh --no-doctor
-bash skills/ego-browser/scripts/install-linux.sh --doctor   # default
+ego-browser --import-chrome-profile   # browser must be stopped first
+ego-browser --install-desktop-entry   # launcher opens --spaces
 ```
 
-### Optional profile seed (`--seed-chrome`) — risky, off by default
+### Optional profile import — risky, off by default
 
-Copying cookies/logins from your **system Chrome** into the ego profile is **not** done by default and is not wired into the installer yet.
+Copying cookies/logins from your **system Chrome** into the ego profile is not
+done by default.
 
-- Config flag `seedFromChrome` in `~/.config/ego-lite/config.json` defaults to `false` (feature flag only).
-- A future installer `--seed-chrome` would copy only selected Default-profile dirs **when the source Chrome is fully closed**.
+- Profile import is explicit through `ego-browser --import-chrome-profile`.
+- It copies selected profile data only while the managed browser is stopped.
 - Seeding while Chrome is running (or blindly copying a live profile) can **corrupt Chrome data**. Leave seeding disabled unless you understand that risk.
 
-Until an explicit, guarded implementation lands, use Chrome’s own export/import or sign in again inside the ego profile.
+Run `ego-browser --stop` first; never copy a live Chrome profile by hand.
 
 ### Headed vs headless (WSL notes)
 
 | Mode | When | How |
 |------|------|-----|
 | Headed (preferred) | Interactive browsing, visual debug | WSLg or native Linux desktop; ensure `DISPLAY` is set |
-| Headless | CI / no GUI | `export EGO_HEADLESS=1` before `ego-browser` |
+| Headless | CI / no GUI | `export EGO_LINUX_HEADLESS=1` before `ego-browser` |
 
 MVP targets **Linux-side** Chrome/Chromium only. Pointing at Windows Chrome under `/mnt/c/...` is out of scope.
 
 If Chrome lives in a non-standard path:
 
 ```bash
-export EGO_CHROME_PATH=/opt/google/chrome/chrome
+export EGO_LINUX_CHROME=/opt/google/chrome/chrome
 ```
 
 ### Confirm install
 
 ```bash
 command -v ego-browser
-ego-browser --doctor
+ego-browser --status
+ego-browser --spaces
 ```
+
+`--spaces` opens the loopback Task Space dashboard. Normal agent navigation
+stays in background tabs; only dashboard Open, handoff, or `keep: true`
+completion explicitly presents a task page.
 
 If `command -v` fails, put `~/.local/bin` on `PATH` (see below) and retry.
 
@@ -143,23 +179,28 @@ EOF
 
 Printing `ego-browser ready` means the environment is ready.
 
-On Linux, you can also run diagnostics without a full heredoc:
+On Linux, you can also inspect the backing browser without a full heredoc:
 
 ```bash
-ego-browser --doctor
+ego-browser --status
 ```
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start from `taskSpaces.useOrCreate(name)` and proceed as usual.
+Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — prefer `taskSpaces.run(name, async task => { ... })` for one-round tasks, and use `taskSpaces.useOrCreate(name)` only when the task intentionally spans multiple heredoc rounds.
 
 ## Troubleshooting
 
-- **Linux / WSL**: use `scripts/install-linux.sh`, not the macOS DMG script. See **Install steps (Linux / WSL)** above.
-- **Not macOS**: the DMG script supports macOS only (`uname -s` is `Darwin`). On Linux use `install-linux.sh`. On other platforms, check https://lite.ego.app/ or build from this monorepo.
-- **This is not the Citro app on Linux**: the Linux host is an OSS-friendly approximation (shared Chromium + CDP + Task Spaces). It does not download or install `ego lite.app`.
-- **Chrome missing on Linux**: install Chromium/Chrome for Linux, or set `EGO_CHROME_PATH`. The installer warns but does not run package managers without consent.
-- **No display (WSL without WSLg)**: use `EGO_HEADLESS=1`, or enable WSLg / a display server.
+- **Linux / WSL**: confirm `command -v`/`readlink` resolves to
+  `package/ego-linux`, and that the desktop entry names the same CLI with
+  `--spaces`. Do not point either surface at the experimental host profile.
+- **Not macOS**: the DMG script supports macOS only (`uname -s` is `Darwin`). On Linux use the matching port instructions above. On other platforms, check https://lite.ego.app/ or build from this monorepo.
+- **Linux versus macOS Citro shell**: neither Linux implementation installs the
+  proprietary `ego lite.app`. A Linux launcher, icon, window class, profile, and
+  task-space store can provide separate desktop identity, but the visible shell
+  remains stock Chrome/Chromium.
+- **Chrome missing on Linux**: install Chromium/Chrome for Linux, or set `EGO_LINUX_CHROME`. The installer does not run package managers.
+- **No display (WSL without WSLg)**: use `EGO_LINUX_HEADLESS=1`, or enable WSLg / a display server.
 - **Download failed (macOS)**: the DMG script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Gatekeeper still blocks it (macOS)**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
-- **Command still unavailable**: confirm `~/.local/bin` is on the PATH (see above). On macOS, reopen ego lite, finish onboarding, and retry. On Linux, re-run `install-linux.sh` or re-create the symlink to `package/ego-linux-host/bin/ego-browser.mjs`.
+- **Command still unavailable**: confirm `~/.local/bin` is on the PATH (see above). On macOS, reopen ego lite, finish onboarding, and retry. On Linux, re-run `scripts/install.sh` or re-create the symlink to `package/ego-linux/bin/ego-browser.mjs`.

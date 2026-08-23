@@ -48,20 +48,24 @@ export const SPACES_HTML = `<!doctype html>
   .sub { color: var(--muted); font-size: 13px; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 390px));
     gap: 30px 26px;
+    justify-content: start;
   }
   /* The outer container stacks sections; only each section's body is a grid. */
   .sections { display: block; }
   .section + .section { margin-top: 38px; }
   .section-head {
-    display: flex; align-items: baseline; gap: 10px;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin-bottom: 14px; padding-bottom: 9px;
     border-bottom: 1px solid var(--line);
   }
-  .section-title { font-weight: 620; letter-spacing: -0.005em; }
-  .section-count { color: var(--muted); font-size: 12px; }
-  .card { display: flex; flex-direction: column; gap: 11px; }
+  .section-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .section-count {
+    color: var(--muted); font-size: 11.5px;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
+  }
+  .card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   .frame {
     position: relative;
     aspect-ratio: 16 / 10;
@@ -110,9 +114,22 @@ export const SPACES_HTML = `<!doctype html>
   }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
   .frame.empty { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
-  .meta { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 0 3px; }
-  .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .tag { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0 3px; }
+  .meta-top, .page-meta {
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    min-width: 0;
+  }
+  .name, .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .name { font-size: 14px; font-weight: 620; }
+  .page-title { color: var(--muted); font-size: 12px; }
+  .page-context { flex: none; color: var(--muted); font-size: 11.5px; }
+  .status {
+    flex: none; padding: 3px 8px; border-radius: 999px;
+    color: var(--muted); background: rgba(127, 127, 127, .08);
+    font-size: 11px; font-weight: 600;
+  }
+  .status.agent { color: #d97757; background: rgba(217, 119, 87, .12); }
+  .status.agentDelegatedToUser { color: #c7891f; background: rgba(224, 160, 42, .12); }
   .close {
     position: absolute; top: 9px; right: 9px;
     width: 25px; height: 25px; border-radius: 50%;
@@ -120,7 +137,7 @@ export const SPACES_HTML = `<!doctype html>
     font-size: 15px; line-height: 1; cursor: pointer;
     opacity: 0; transition: opacity .14s ease;
   }
-  .frame:hover .close { opacity: 1; }
+  .frame:hover .close, .frame:focus-within .close { opacity: 1; }
   .close:hover { color: #d3453c; }
   .add {
     aspect-ratio: 16 / 10;
@@ -133,18 +150,15 @@ export const SPACES_HTML = `<!doctype html>
     transition: border-color .16s ease, color .16s ease, background .16s ease;
   }
   .add:hover { border-color: var(--accent); color: var(--accent); background: var(--card); }
-  /* Ownership controls: quiet until the card is hovered, so a grid of spaces
-     stays calm rather than reading as a wall of buttons. */
-  .controls { display: flex; gap: 8px; padding: 0 3px; min-height: 26px; }
+  .controls { display: flex; gap: 8px; padding: 0 3px; }
   .ctl {
     font: inherit; font-size: 12px; line-height: 1;
     padding: 6px 12px; border-radius: 999px;
     border: 1px solid var(--line); background: var(--card); color: var(--muted);
-    cursor: pointer; opacity: 0;
-    transition: opacity .14s ease, color .14s ease, border-color .14s ease;
+    cursor: pointer;
+    transition: color .14s ease, border-color .14s ease, background .14s ease;
   }
-  .card:hover .ctl, .ctl:focus-visible { opacity: 1; }
-  .ctl:hover { color: var(--text); border-color: var(--accent); }
+  .ctl:hover { color: var(--text); border-color: var(--accent); background: var(--card); }
   .ctl.primary { color: var(--accent); border-color: rgba(47, 109, 246, .45); }
   .note {
     margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
@@ -206,6 +220,17 @@ function liveChip(activity) {
   return chip;
 }
 
+function pageContext(space) {
+  let host = "";
+  try {
+    host = new URL(space.url).hostname;
+  } catch {
+    // A missing or internal URL has no useful host label.
+  }
+  const tabs = space.tabCount + (space.tabCount === 1 ? " tab" : " tabs");
+  return host ? host + " \\u00b7 " + tabs : tabs;
+}
+
 function card(space) {
   const wrap = document.createElement("div");
   wrap.className = "card";
@@ -239,6 +264,7 @@ function card(space) {
   close.className = "close";
   close.textContent = "\\u00d7";
   close.title = "close this space";
+  close.setAttribute("aria-label", "Close " + space.name);
   close.addEventListener("click", (event) => {
     event.stopPropagation();
     act("/api/spaces/" + space.id + "/close", "POST");
@@ -248,6 +274,8 @@ function card(space) {
   const meta = document.createElement("div");
   meta.className = "meta";
 
+  const metaTop = document.createElement("div");
+  metaTop.className = "meta-top";
   const name = document.createElement("span");
   name.className = "name";
   const dot = document.createElement("i");
@@ -260,29 +288,43 @@ function card(space) {
         : "an agent is working here";
   name.append(dot, document.createTextNode(space.name));
 
-  // The native overview labels each space with its category. The useful
-  // equivalent here is the agent profile that opened it.
-  const tag = document.createElement("span");
-  tag.className = "tag";
-  const label = space.profile
-    ? space.profile + (space.session ? " \\u00b7 " + space.session : "")
-    : space.ownership === "user"
-      ? "yours"
-      : "agent";
-  tag.textContent = label;
-  tag.title =
-    (space.profile ? "cue profile: " + space.profile : "no cue profile recorded") +
-    " \\u2014 " +
-    space.tabCount +
-    (space.tabCount === 1 ? " tab" : " tabs");
+  const status = document.createElement("span");
+  status.className = "status " + space.ownership;
+  status.textContent =
+    space.ownership === "agent"
+      ? space.activity
+        ? "Live"
+        : "Agent"
+      : space.ownership === "agentDelegatedToUser"
+        ? "Your control"
+        : "Personal";
+  metaTop.append(name, status);
 
-  meta.append(name, tag);
+  const pageMeta = document.createElement("div");
+  pageMeta.className = "page-meta";
+  const pageTitle = document.createElement("span");
+  pageTitle.className = "page-title";
+  pageTitle.textContent = space.title || "No page yet";
+  pageTitle.title = space.url || "";
+  const context = document.createElement("span");
+  context.className = "page-context";
+  context.textContent = pageContext(space);
+  pageMeta.append(pageTitle, context);
+  meta.append(metaTop, pageMeta);
 
   // The ownership handshake, the same pair the native app puts on its Space
   // overlay: stop hands the space back to you and the agent's cursor goes away;
   // take over gives it back. Shown on hover so a wall of cards stays calm.
   const controls = document.createElement("div");
   controls.className = "controls";
+  const open = document.createElement("button");
+  open.className = "ctl primary";
+  open.textContent = "Open";
+  open.title = "open this space";
+  open.addEventListener("click", (event) => {
+    event.stopPropagation();
+    act("/api/spaces/" + space.id + "/use", "POST");
+  });
   const agentOwned = space.ownership === "agent";
   const action = document.createElement("button");
   action.className = "ctl" + (agentOwned ? "" : " primary");
@@ -294,7 +336,7 @@ function card(space) {
     event.stopPropagation();
     act("/api/spaces/" + space.id + "/" + (agentOwned ? "stop" : "takeover"), "POST");
   });
-  controls.append(action);
+  controls.append(open, action);
 
   wrap.append(frame, meta, controls);
   if (space.trail?.length) wrap.append(trail(space.trail));
@@ -396,7 +438,19 @@ function section(profile, spaces, withAddCard) {
   head.className = "section-head";
   const title = document.createElement("span");
   title.className = "section-title";
-  title.textContent = profile || "not from an agent";
+  const agents = [
+    ...new Set(
+      spaces
+        .map((space) => space.agent || space.activity?.name)
+        .filter(Boolean),
+    ),
+  ];
+  title.textContent = profile
+    ? agents.length > 2
+      ? agents.length + " agents"
+      : agents.join(" + ") || "Agent"
+    : "Personal";
+  title.title = profile ? "cue profile: " + profile : "spaces created by you";
   const count = document.createElement("span");
   count.className = "section-count";
   const sessions = new Set(spaces.map((s) => s.session).filter(Boolean));
@@ -404,6 +458,7 @@ function section(profile, spaces, withAddCard) {
     spaces.length +
     (spaces.length === 1 ? " space" : " spaces") +
     (sessions.size > 1 ? " \\u00b7 " + sessions.size + " sessions" : "");
+  count.title = title.title;
   head.append(title, count);
 
   const body = document.createElement("div");
