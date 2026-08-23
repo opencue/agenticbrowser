@@ -29,10 +29,8 @@ class FakeEgo {
     this.calls.push(["useTaskSpace", id]);
     const space = this.taskSpaces.find((candidate) => candidate.id === id);
     if (space && space.ownership === "user") {
-      return {
-        error: "The task is under user control",
-        error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
-      };
+      this.selectedId = id;
+      return { done: true, readOnly: true };
     }
     this.selectedId = id;
     return id;
@@ -83,6 +81,19 @@ class FakeEgo {
       (space) => space.id !== this.selectedId,
     );
     this.selectedId = null;
+    return { done: true };
+  }
+
+  async presentTaskSpace(id) {
+    if (typeof id !== "number") {
+      throw new TypeError("presentTaskSpace requires numeric id");
+    }
+    this.calls.push(["presentTaskSpace", id]);
+    return { done: true, visible: true };
+  }
+
+  async takeOverTaskSpace() {
+    this.calls.push(["takeOverTaskSpace", this.selectedId]);
     return { done: true };
   }
 }
@@ -223,7 +234,75 @@ test("taskspace e2e claims and selects an existing user-owned task space", async
   ]);
 });
 
-test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claiming and surfaces the owned user-control guidance", async () => {
+test("taskspace e2e takeOver claims and selects a user-owned task space by id", async () => {
+  const ego = new FakeEgo([
+    {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  ]);
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    await taskSpaces.takeOver(7);
+    console.log(JSON.stringify({
+      selected: ego.selectedId,
+      space: ego.taskSpaces.find((space) => space.id === 7)
+    }));
+  `,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), {
+    selected: 7,
+    space: {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "agent",
+      ownership: "agent",
+    },
+  });
+  assert.deepEqual(ego.calls, [
+    ["listTaskSpaces"],
+    ["claimTaskSpace", 7, "checkout-flow"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace", 7],
+  ]);
+});
+
+test("taskspace e2e takeOver resolves digit strings by id", async () => {
+  const ego = new FakeEgo([
+    {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  ]);
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    await taskSpaces.takeOver("7");
+    console.log(JSON.stringify({ selected: ego.selectedId }));
+  `,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), { selected: 7 });
+  assert.deepEqual(ego.calls, [
+    ["listTaskSpaces"],
+    ["claimTaskSpace", 7, "checkout-flow"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace", 7],
+  ]);
+});
+
+test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces read-only without claiming", async () => {
   const ego = new FakeEgo([
     {
       taskId: "checkout-flow",
@@ -234,14 +313,58 @@ test("taskspace e2e useOrCreateTaskSpace selects user-owned spaces without claim
     },
   ]);
 
-  // Native rejects with error_code EGO_TASK_SPACE_USER_IN_CONTROL, so the agent
-  // sees ego-browser's owned guidance block, not the raw native text.
-  await assert.rejects(
-    () =>
-      runTaskspaceScript(ego, `await taskSpaces.useOrCreate("checkout-flow")`),
-    /has taken control of this task space/,
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    const task = await taskSpaces.useOrCreate("checkout-flow");
+    console.log(JSON.stringify({ id: task.id, ownership: task.ownership }));
+  `,
   );
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), {
+    id: 7,
+    ownership: "user",
+  });
+  assert.equal(ego.selectedId, 7);
   assert.deepEqual(ego.calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
+});
+
+test("taskspace e2e bringToFront raises user-owned spaces without taking control", async () => {
+  const ego = new FakeEgo([
+    {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  ]);
+
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    const out = await taskSpaces.bringToFront("checkout-flow");
+    console.log(JSON.stringify({
+      out,
+      selected: ego.selectedId,
+      space: ego.taskSpaces.find((space) => space.id === 7)
+    }));
+  `,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), {
+    out: { done: true, visible: true },
+    selected: null,
+    space: {
+      taskId: "checkout-flow",
+      id: 7,
+      name: "checkout-flow",
+      createdBy: "user",
+      ownership: "user",
+    },
+  });
+  assert.deepEqual(ego.calls, [["listTaskSpaces"], ["presentTaskSpace", 7]]);
 });
 
 test("taskspace e2e exposes taskSpaces facade", async () => {
@@ -255,6 +378,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
       runType: typeof taskSpaces.run,
       switchType: typeof taskSpaces.switch,
       claimType: typeof taskSpaces.claim,
+      bringToFrontType: typeof taskSpaces.bringToFront,
       isHardStopErrorType: typeof taskSpaces.isHardStopError,
       oldNewType: typeof newTaskSpace,
       rawClaimType: typeof ego.claimTaskSpace
@@ -269,6 +393,7 @@ test("taskspace e2e exposes taskSpaces facade", async () => {
     runType: "function",
     switchType: "function",
     claimType: "function",
+    bringToFrontType: "function",
     isHardStopErrorType: "function",
     oldNewType: "undefined",
     rawClaimType: "function",
@@ -307,6 +432,43 @@ test("taskspace e2e taskSpaces.run completes a successful one-round task", async
   ]);
 });
 
+test("taskspace e2e taskSpaces.execute verifies before completing", async () => {
+  const ego = new FakeEgo();
+  const result = await runTaskspaceScript(
+    ego,
+    `
+    const out = await taskSpaces.execute("verified-search", {
+      risk: "read-only",
+      retries: { max: 1, delay: 0, on: ["verification"] },
+      async work({ attempt }) {
+        return { attempt, selected: ego.selectedId };
+      },
+      async verify({ result }) {
+        return { ok: result.attempt === 2, selected: result.selected };
+      }
+    });
+    console.log(JSON.stringify({
+      result: out.result,
+      verification: out.verification,
+      attempts: out.attempts,
+      status: out.receipt.status,
+      completion: out.completion,
+      remaining: ego.taskSpaces.length
+    }));
+  `,
+  );
+
+  assert.equal(result.exitCode, 0);
+  assert.deepEqual(firstJsonLine(result.stdout), {
+    result: { attempt: 2, selected: 1 },
+    verification: { ok: true, selected: 1 },
+    attempts: 2,
+    status: "verified",
+    completion: { done: true },
+    remaining: 0,
+  });
+});
+
 test("cli e2e exposes the unified helperContext surface (help present, internals hidden)", async () => {
   const ego = new FakeEgo();
   const result = await runTaskspaceScript(
@@ -315,6 +477,9 @@ test("cli e2e exposes the unified helperContext surface (help present, internals
     console.log(JSON.stringify({
       helpType: typeof help,
       helpResultType: typeof help("page"),
+      takeOverHelp: help("taskSpaces.takeOver").includes("claims that space"),
+      bringToFrontHelp: help("taskSpaces.bringToFront").includes("without selecting"),
+      executeHelp: help("taskSpaces.execute").includes("Automatic retries"),
       newTabType: typeof newTab,
       pageType: typeof page,
       oldClickType: typeof click,
@@ -328,6 +493,9 @@ test("cli e2e exposes the unified helperContext surface (help present, internals
   assert.deepEqual(firstJsonLine(result.stdout), {
     helpType: "function",
     helpResultType: "string",
+    takeOverHelp: true,
+    bringToFrontHelp: true,
+    executeHelp: true,
     newTabType: "undefined",
     pageType: "object",
     oldClickType: "undefined",

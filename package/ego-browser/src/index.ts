@@ -130,6 +130,7 @@ const LEGACY_GLOBAL_HELPERS = [
   "claimTaskSpace",
   "completeTaskSpace",
   "handOffTaskSpace",
+  "bringToFrontTaskSpace",
   "takeOverTaskSpace",
   "waitForAgentControl",
   "siteSkills",

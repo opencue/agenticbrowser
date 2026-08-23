@@ -138,7 +138,9 @@ export async function hover(target: MouseTarget, options: HoverOptions = {}) {
  */
 export async function drag(points: MouseTarget[], options: DragOptions = {}) {
   if (!Array.isArray(points) || points.length < 2) {
-    throw new Error("drag requires at least two points");
+    throw new Error(
+      "drag requires at least two points; use page.mouse.drag(from, to, options?) or page.mouse.drag([from, to], options?)",
+    );
   }
   const resolved: Point[] = [];
   for (const point of points) {
@@ -641,7 +643,7 @@ async function resolveMouseTarget(
   timeout = undefined,
 ): Promise<Point> {
   if (typeof target === "string") {
-    await waitForSelector(target, { timeout, state: "visible" });
+    await waitForSelector(target, { timeout, state: "visible", strict: true });
     await scrollIntoViewIfNeeded(target);
     return elementCenter(target);
   }
@@ -655,11 +657,19 @@ async function resolveMouseTarget(
       target.selector
     ) {
       if (target.x === undefined && target.y === undefined) {
-        await waitForSelector(target.selector, { timeout, state: "visible" });
+        await waitForSelector(target.selector, {
+          timeout,
+          state: "visible",
+          strict: true,
+        });
         await scrollIntoViewIfNeeded(target.selector);
         return elementCenter(target.selector);
       }
-      await waitForSelector(target.selector, { timeout, state: "visible" });
+      await waitForSelector(target.selector, {
+        timeout,
+        state: "visible",
+        strict: true,
+      });
       await scrollIntoViewIfNeeded(target.selector);
       const [topLeft, center] = await Promise.all([
         elementTopLeft(target.selector),

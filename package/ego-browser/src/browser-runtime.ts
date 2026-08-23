@@ -9,8 +9,10 @@ const MAX_BUFFERED_EVENTS = 10000;
 const MAX_TRACE_ENTRIES = 2000;
 const SESSION_LOST =
   /Session (?:with given id )?not found|Target closed|No session/i;
-const BROWSER_LEVEL = (method) =>
-  method.startsWith("Target.") || method.startsWith("Browser.");
+const BROWSER_LEVEL = (method, params: any = {}) =>
+  method.startsWith("Target.") ||
+  (method.startsWith("Browser.") &&
+    !(method === "Browser.getWindowForTarget" && !params?.targetId));
 type BrowserEventSubscriber = {
   method: string;
   sessionId?: string;
@@ -114,15 +116,16 @@ export async function browserCdp(
     return state.cdpOverride(method, params, sessionId, timeoutMs);
   }
   const explicit = sessionId !== undefined;
+  const browserLevel = BROWSER_LEVEL(method, params);
   let effective = sessionId;
-  if (!explicit && !BROWSER_LEVEL(method)) {
+  if (!explicit && !browserLevel) {
     effective = await ensureSession();
   }
   try {
     return await rawCdp(method, params, effective, timeoutMs);
   } catch (error) {
     const lost = SESSION_LOST.test(error?.message || "");
-    if (lost && !explicit && !BROWSER_LEVEL(method)) {
+    if (lost && !explicit && !browserLevel) {
       invalidateSession();
       const fresh = await ensureSession();
       return rawCdp(method, params, fresh, timeoutMs);
@@ -140,13 +143,27 @@ export async function ensureSession() {
   }
   state.sessionInflight = (async () => {
     try {
-      const result = assertNoEgoError(await browserEgo().listTabs());
+      const ego = browserEgo();
+      const result = assertNoEgoError(await ego.listTabs());
       const tabs = result?.tabs || result?.targetInfos || [];
       const preferred = state.preferredTargetId
         ? tabs.find((t) => t.targetId === state.preferredTargetId)
         : null;
-      const active =
+      let active =
         preferred || tabs.find((t) => t.active) || tabs[tabs.length - 1];
+      if (!active && typeof ego.createTab === "function") {
+        const created = assertNoEgoError(
+          await ego.createTab("about:blank"),
+          "createTab",
+        );
+        if (created?.targetId) {
+          active = {
+            targetId: created.targetId,
+            url: "about:blank",
+            active: true,
+          };
+        }
+      }
       if (!active) {
         throw new Error("no active tab to attach session");
       }

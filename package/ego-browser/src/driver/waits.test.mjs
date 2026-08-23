@@ -895,11 +895,52 @@ test("waitForSelector ramps its poll instead of waiting a flat 300 ms", async ()
     },
   });
   try {
-    assert.equal(await waitForSelector("#late"), true);
+    assert.equal(await waitForSelector("#late", { strict: true }), true);
   } finally {
     restore();
   }
 
   assert.equal(attempts, 3);
   assert.deepEqual(sleeps, [25, 50]);
+});
+
+test("waitForSelector accepts multiple matches and waits for the first by default", async () => {
+  const expressions = [];
+  const restore = setOverrides({
+    defaultTimeout: 5000,
+    cdpOverride(method, params) {
+      if (method === "Runtime.evaluate") {
+        expressions.push(params.expression);
+        if (params.expression.includes("elements.length > 1")) {
+          return {
+            exceptionDetails: {
+              exception: {
+                description: "Error: Locator table matched 5 elements",
+              },
+            },
+          };
+        }
+        if (params.returnByValue) {
+          return { result: { value: 5 } };
+        }
+        return { result: { objectId: "first-table" } };
+      }
+      return {};
+    },
+  });
+  try {
+    assert.equal(await waitForSelector("table"), true);
+  } finally {
+    restore();
+  }
+
+  assert.ok(
+    expressions.some((expression) =>
+      expression.includes('document.querySelectorAll("table")'),
+    ),
+  );
+  assert.ok(
+    expressions.some((expression) => expression.includes("[0] || null")),
+    "the non-strict wait resolves the first matching table",
+  );
 });

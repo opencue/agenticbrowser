@@ -84,18 +84,19 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
   "page.locator": {
     signature: "page.locator(selector) => Locator",
     description:
-      "Create a locator for CSS, XPath, text, loc=..., or @ref selectors.",
+      'Create a locator for CSS, XPath, text, loc=..., or @ref selectors. loc=testid:foo matches data-testid="foo" exactly by default.',
     params: [
       {
         name: "selector",
         type: "string",
         required: true,
         description:
-          "CSS selector, xpath=..., text=..., loc=..., or @N snapshot ref.",
+          "CSS selector, xpath=..., text=..., loc=..., loc=testid:..., or @N snapshot ref.",
       },
     ],
     returns: "Locator",
-    example: "await page.locator('button[type=submit]').click()",
+    example:
+      "await page.locator('button[type=submit]').click()\nawait page.locator('loc=testid:settings__visibilityToggle__topics-/map').click()",
   },
   "page.getByRole": {
     signature: "page.getByRole(role, options?) => Locator",
@@ -211,6 +212,22 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     ],
     returns: "Locator",
     example: "await page.getByTitle('More').click()",
+  },
+  "page.getByTestId": {
+    signature: "page.getByTestId(testId) => Locator",
+    description:
+      "Create a locator by data-testid. Matches the complete data-testid value exactly.",
+    params: [
+      {
+        name: "testId",
+        type: "string",
+        required: true,
+        description: "Exact data-testid value.",
+      },
+    ],
+    returns: "Locator",
+    example:
+      "await page.getByTestId('settings__visibilityToggle__topics-/map').click()",
   },
   "page.waitForTimeout": {
     signature: "page.waitForTimeout(ms) => Promise<void>",
@@ -569,19 +586,28 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "await page.mouse.wheel(0, 900)",
   },
   "page.mouse.drag": {
-    signature: "page.mouse.drag(points, options?) => Promise<void>",
-    description: "Drag between points or element selectors.",
+    signature:
+      "page.mouse.drag(from, to, options?) | page.mouse.drag(points, options?) => Promise<void>",
+    description:
+      "Drag between two targets or through an ordered path of points/selectors.",
     params: [
       {
-        name: "points",
-        type: "array",
+        name: "from",
+        type: "MouseTarget | MouseTarget[]",
         required: true,
-        description: "Source and destination points/selectors.",
+        description:
+          "Source target, or an ordered path containing at least two targets.",
+      },
+      {
+        name: "to",
+        type: "MouseTarget",
+        description: "Destination target when using the from/to call style.",
       },
       { name: "options", type: "object", description: "Drag options." },
     ],
     returns: "Promise<void>",
-    example: "await page.mouse.drag([[100, 100], [300, 300]])",
+    example:
+      "await page.mouse.drag([100, 100], [300, 300])\nawait page.mouse.drag([[100, 100], [200, 160], [300, 300]])",
   },
   "browser.listTabs": {
     signature: "browser.listTabs() => Promise<object[]>",
@@ -789,10 +815,25 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object>",
     example: "await taskSpaces.handOff(task.id)",
   },
-  "taskSpaces.takeOver": {
-    signature: "taskSpaces.takeOver(nameOrId?) => Promise<object>",
+  "taskSpaces.bringToFront": {
+    signature: "taskSpaces.bringToFront(nameOrId) => Promise<object>",
     description:
-      "Take control back after the user explicitly confirms continuation.",
+      "Raise a task space's browser window/tab without selecting it for automation or changing ownership.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Task space name, taskId, or numeric id.",
+      },
+    ],
+    returns: "Promise<{ done: boolean, visible?: boolean, reason?: string }>",
+    example: "await taskSpaces.bringToFront(task.id)",
+  },
+  "taskSpaces.takeOver": {
+    signature: "taskSpaces.takeOver(nameOrId?) => Promise<void>",
+    description:
+      "Take control back after the user explicitly confirms continuation; named/id user-owned spaces are claimed first.",
     params: [
       {
         name: "nameOrId",
@@ -801,13 +842,14 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
           "Task space name, taskId, or numeric id. Defaults to current task space.",
       },
     ],
-    returns: "Promise<object>",
+    returns: "Promise<void>",
     example: "await taskSpaces.takeOver(task.id)",
   },
   "taskSpaces.waitForAgentControl": {
     signature:
       "taskSpaces.waitForAgentControl(nameOrId?, options?) => Promise<void>",
-    description: "Poll until agent control is restored without taking control.",
+    description:
+      "Poll until agent control is restored without taking control or claiming ownership.",
     params: [
       {
         name: "nameOrId",

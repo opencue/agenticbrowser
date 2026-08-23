@@ -12,15 +12,23 @@ ego-browser (Chromium) -> globalThis.ego -> Playwright-style helper facades -> a
 npm ci
 npm run build     # bundle to dist/out/index.js
 npm test          # build + tsc --noEmit + node --test
+npm run e2e       # optional real-browser suite; requires ego-browser on PATH
+```
+
+Run only the verified executor smoke case with:
+
+```bash
+EGO_BROWSER_REAL_E2E_ONLY="verified task executor" npm run e2e
 ```
 
 The build emits a single ESM file `dist/out/index.js`. The ego-browser browser dispatches `ego-browser nodejs <<'EOF' ... EOF` heredocs to that bundle. Inside the heredoc, Playwright-style facades (`page`, `page.locator`, `browser`, `taskSpaces`, `site`, `fetch`, `cdp`) are preloaded.
 
 ```bash
 ego-browser nodejs <<'EOF'
-await taskSpaces.useOrCreate('demo')
-await browser.openOrReuseTab('https://example.com', { wait: true })
-console.log(await page.snapshot())
+await taskSpaces.run('demo', async () => {
+  await browser.openOrReuseTab('https://example.com', { wait: true })
+  console.log(await page.snapshot())
+})
 EOF
 ```
 

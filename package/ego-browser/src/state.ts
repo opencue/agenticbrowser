@@ -35,6 +35,8 @@ export const state = {
   sessionAt: 0,
   sessionInflight: null,
   preferredTargetId: null,
+  selectedTaskSpaceId: null as number | null,
+  taskSpaceReadOnly: false,
   defaultTimeout: 10000,
   // Last observed Network domain state on the default session (tracked in cdp()).
   networkDomainEnabled: false,

@@ -101,6 +101,39 @@ test("screenshot skips page metric JavaScript while a native dialog is pending",
   assert.equal(writes[0].path, "/tmp/ego-browser-dialog-shot.png");
 });
 
+test("screenshot stays passive in a user-controlled task space", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    taskSpaceReadOnly: true,
+    selectedTaskSpaceId: 7,
+    async writeFile(path, data) {
+      writes.push({ path, data });
+    },
+  });
+  try {
+    await withCdpRuntime(async ({ sent }) => {
+      await screenshot({ path: "/tmp/ego-browser-read-only-shot.png" });
+
+      assert.equal(
+        sent.some((request) => request.method === "Runtime.evaluate"),
+        false,
+      );
+      const shot = sent.find(
+        (request) => request.method === "Page.captureScreenshot",
+      );
+      assert.deepEqual(shot.params, {
+        format: "png",
+        captureBeyondViewport: false,
+      });
+    });
+  } finally {
+    restore();
+  }
+
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].path, "/tmp/ego-browser-read-only-shot.png");
+});
+
 test("screenshot creates a missing parent directory", async () => {
   const tempDir = await mkdtemp(join(tmpdir(), "ego-browser-observe-"));
   const path = join(tempDir, "nested", "shot.png");
@@ -110,6 +143,24 @@ test("screenshot creates a missing parent directory", async () => {
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }
+});
+
+test("a generated screenshot is private and cannot overwrite an existing file", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    async writeFile(path, data, options) {
+      writes.push({ path, data, options });
+    },
+  });
+  try {
+    await withCdpRuntime(() => screenshot({ raw: true }));
+  } finally {
+    restore();
+  }
+
+  assert.equal(writes.length, 1);
+  assert.match(writes[0].path, /^\/tmp\/ego-browser-shot-/);
+  assert.deepEqual(writes[0].options, { mode: 0o600, flag: "wx" });
 });
 
 test("screenshot gives captureScreenshot a larger CDP response deadline", async () => {

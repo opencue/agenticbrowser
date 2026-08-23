@@ -107,11 +107,31 @@ export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
 export { isEgoHardStopError } from "./ego-errors.js";
 
+type TaskSpaceNameOrId = string | number;
+type TaskSpaceOwnership = "agent" | "agentDelegatedToUser" | "user" | string;
+type TaskSpace = {
+  taskId: string | number;
+  id: number | string;
+  name: string | number;
+  createdBy?: string;
+  ownership?: TaskSpaceOwnership;
+  recentTabTitles?: string[];
+  [key: string]: any;
+};
+type UserOwnedSelectionPolicy = "select" | "claim" | "reject";
+type TaskExecutionRisk = "read-only" | "reversible" | "destructive";
+type TaskExecutionRetryKind = "error" | "verification";
+
+const MAX_TASK_EXECUTION_RETRIES = 5;
+const TASK_EXECUTION_CONTRACT_CODE = "EGO_TASK_EXECUTION_CONTRACT";
+const TASK_EXECUTION_VERIFICATION_CODE =
+  "EGO_TASK_EXECUTION_VERIFICATION_FAILED";
+
 /**
  * List all task spaces.
  * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>>}
  */
-export async function listTaskSpaces() {
+export async function listTaskSpaces(): Promise<TaskSpace[]> {
   const ego = globalThis.ego;
   if (!ego || typeof ego.listTaskSpaces !== "function") {
     throw new Error("listTaskSpaces requires ego.listTaskSpaces");
@@ -130,11 +150,14 @@ export async function listTaskSpaces() {
  * does when the target space is user-owned:
  *
  *   switchTaskSpace                     -> throws (agent-owned only)
+ *   useOrCreateTaskSpace                -> selects for passive observation without claiming
  *   claimTaskSpace                      -> claims it (ownership transfers to the agent), then selects it
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: true }    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
- *   takeOverTaskSpace / waitForAgentControl -> no ownership check (operates as-is)
+ *   bringToFrontTaskSpace               -> raises it without selecting, claiming, or changing ownership
+ *   takeOverTaskSpace                   -> claims user-owned spaces when nameOrId is provided, then takes over
+ *   waitForAgentControl                 -> waits for user-owned spaces to be handed back
  *
  * Keep this table in sync with the one in skills/ego-browser/SKILL.md.
  */
@@ -147,8 +170,34 @@ export async function listTaskSpaces() {
  * @param {string|undefined} ownership
  * @returns {boolean}
  */
-function isAgentOwned(ownership) {
+function isAgentOwned(ownership: TaskSpaceOwnership | undefined) {
   return ownership === "agent" || ownership === "agentDelegatedToUser";
+}
+
+async function selectResolvedTaskSpaceFor(
+  ego: any,
+  space: TaskSpace,
+  op: string,
+  options: {
+    userOwned: UserOwnedSelectionPolicy;
+    rejectMessage?: (ownership: TaskSpaceOwnership | undefined) => string;
+  },
+) {
+  if (isAgentOwned(space.ownership)) {
+    return selectTaskSpace(ego, space, op);
+  }
+  if (space.ownership === "user") {
+    if (options.userOwned === "claim") {
+      return claimResolvedTaskSpace(space, op);
+    }
+    if (options.userOwned === "select") {
+      return selectTaskSpace(ego, space, op);
+    }
+  }
+  const message =
+    options.rejectMessage?.(space.ownership) ??
+    `${op} cannot use task space ${JSON.stringify(space.name)} with ownership ${JSON.stringify(space.ownership)}`;
+  throw new Error(message);
 }
 
 /**
@@ -156,18 +205,17 @@ function isAgentOwned(ownership) {
  * @param {string|number} nameOrId Task space id or name.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function switchTaskSpace(nameOrId) {
+export async function switchTaskSpace(nameOrId: TaskSpaceNameOrId) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error("switchTaskSpace requires ego.useTaskSpace");
   }
   const space = await findTaskSpace(nameOrId);
-  if (!isAgentOwned(space.ownership)) {
-    throw new Error(
-      `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(space.ownership)}`,
-    );
-  }
-  return selectTaskSpace(ego, space, "switchTaskSpace");
+  return selectResolvedTaskSpaceFor(ego, space, "switchTaskSpace", {
+    userOwned: "reject",
+    rejectMessage: (ownership) =>
+      `switchTaskSpace requires an agent-owned task space, got ownership ${JSON.stringify(ownership)}`,
+  });
 }
 
 /**
@@ -175,7 +223,7 @@ export async function switchTaskSpace(nameOrId) {
  * @param {string} name Task space name.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function newTaskSpace(name) {
+export async function newTaskSpace(name: string) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.createTaskSpace !== "function") {
     throw new Error("newTaskSpace requires ego.createTaskSpace");
@@ -191,9 +239,12 @@ export async function newTaskSpace(name) {
 }
 
 /**
- * Use an existing agent-owned task space, or create it when missing. User-owned
- * spaces are selected but not claimed (the EGO_TASK_SPACE_USER_IN_CONTROL error
- * surfaces) — call claimTaskSpace(nameOrId) to take ownership.
+ * Use an existing task space, or create it when missing. User-controlled spaces
+ * are selected without claiming in read-only observation mode: snapshot,
+ * screenshot, and debug remain available while mutating browser commands keep
+ * raising EGO_TASK_SPACE_USER_IN_CONTROL. After explicit user confirmation,
+ * resume mutation with takeOverTaskSpace(nameOrId); call claimTaskSpace(nameOrId)
+ * only when you need ownership without the take-over overlay.
  *
  * Only a name can be created. Ids are assigned by the browser rather than chosen
  * by the caller, so a numeric nameOrId can only select a space that already
@@ -201,7 +252,7 @@ export async function newTaskSpace(name) {
  * @param {string|number} nameOrId Task space name, or the numeric id of a space that already exists.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function useOrCreateTaskSpace(nameOrId) {
+export async function useOrCreateTaskSpace(nameOrId: TaskSpaceNameOrId) {
   const spaces = await listTaskSpaces();
   const existing = findMatchingTaskSpace(spaces, nameOrId);
   if (!existing) {
@@ -216,21 +267,54 @@ export async function useOrCreateTaskSpace(nameOrId) {
           `space — pass a name to create one. ${describeTaskSpaces(spaces)}`,
       );
     }
-    return newTaskSpace(nameOrId);
+    const created = await newTaskSpace(nameOrId);
+    await restorePreviouslyClosedTabs(created);
+    return created;
   }
-  if (isAgentOwned(existing.ownership)) {
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
-  }
-  if (existing.ownership === "user") {
-    // Don't claim user-owned spaces here. Select it as-is; the user stays in
-    // control, so EGO_TASK_SPACE_USER_IN_CONTROL surfaces (as ego-browser's owned
-    // guidance, not the raw native text). Call claimTaskSpace(nameOrId) to take
-    // ownership.
-    return selectTaskSpace(globalThis.ego, existing, "useOrCreateTaskSpace");
-  }
-  throw new Error(
-    `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(existing.ownership)}`,
+  return selectResolvedTaskSpaceFor(
+    globalThis.ego,
+    existing,
+    "useOrCreateTaskSpace",
+    {
+      userOwned: "select",
+      rejectMessage: (ownership) =>
+        `useOrCreateTaskSpace cannot use task space ${JSON.stringify(nameOrId)} with ownership ${JSON.stringify(ownership)}`,
+    },
   );
+}
+
+async function restorePreviouslyClosedTabs(space: TaskSpace) {
+  const urls = previousPageUrls(space);
+  if (urls.length === 0) return;
+  const restored: string[] = [];
+  for (const url of urls) {
+    const tab = await nav.openOrReuseTab(url, {
+      match: "exact",
+      wait: false,
+    });
+    restored.push(tab.url || url);
+  }
+  space.restoredUrls = restored;
+  if (space.previously && typeof space.previously === "object") {
+    space.previously.restored = true;
+  }
+}
+
+function previousPageUrls(space: TaskSpace) {
+  const urls = space?.previously?.urls;
+  if (!Array.isArray(urls)) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const url of urls) {
+    if (typeof url !== "string" || !url) continue;
+    if (nav.INTERNAL_URL_PREFIXES.some((prefix) => url.startsWith(prefix))) {
+      continue;
+    }
+    if (seen.has(url)) continue;
+    seen.add(url);
+    out.push(url);
+  }
+  return out;
 }
 
 /**
@@ -240,12 +324,12 @@ export async function useOrCreateTaskSpace(nameOrId) {
  * @param {string|number} nameOrId Task space id or name.
  * @returns {Promise<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>}
  */
-export async function claimTaskSpace(nameOrId) {
+export async function claimTaskSpace(nameOrId: TaskSpaceNameOrId) {
   const space = await findTaskSpace(nameOrId);
   return claimResolvedTaskSpace(space, "claimTaskSpace");
 }
 
-async function claimResolvedTaskSpace(space, op = "claimTaskSpace") {
+async function claimResolvedTaskSpace(space: TaskSpace, op = "claimTaskSpace") {
   const ego = globalThis.ego;
   if (!ego || typeof ego.claimTaskSpace !== "function") {
     throw new Error(`${op} requires ego.claimTaskSpace`);
@@ -261,22 +345,32 @@ async function claimResolvedTaskSpace(space, op = "claimTaskSpace") {
   return selectTaskSpace(ego, claimed, op);
 }
 
-async function selectTaskSpace(ego, space, op: string) {
+async function selectTaskSpace(ego: any, space: TaskSpace, op: string) {
   if (!ego || typeof ego.useTaskSpace !== "function") {
     throw new Error(`${op} requires ego.useTaskSpace`);
   }
-  assertNoEgoError(await ego.useTaskSpace(taskSpaceNumericId(space, op)), op);
+  const id = taskSpaceNumericId(space, op);
+  const selected = assertNoEgoError(await ego.useTaskSpace(id), op);
+  state.selectedTaskSpaceId = id;
+  state.taskSpaceReadOnly = selected?.readOnly === true;
   return space;
 }
 
-async function selectTaskSpaceIfProvided(
-  ego,
-  nameOrId?: string | number,
-  op = "taskSpace",
+async function selectTaskSpaceForControlProbe(
+  ego: any,
+  nameOrId: TaskSpaceNameOrId,
+  op: string,
 ) {
-  if (nameOrId === undefined) return;
   const match = await findTaskSpace(nameOrId);
-  await selectTaskSpace(ego, match, op);
+  if (match.ownership === "user") {
+    return false;
+  }
+  await selectResolvedTaskSpaceFor(ego, match, op, {
+    userOwned: "reject",
+    rejectMessage: (ownership) =>
+      `${op} requires an agent-owned task space or a space the user has handed back, got ownership ${JSON.stringify(ownership)}`,
+  });
+  return true;
 }
 
 /**
@@ -325,7 +419,9 @@ export async function completeTaskSpace(
     if (match.ownership === "user") {
       return { done: false, skipped: "user-owned" as const };
     }
-    await selectTaskSpace(ego, match, "completeTaskSpace");
+    await selectResolvedTaskSpaceFor(ego, match, "completeTaskSpace", {
+      userOwned: "reject",
+    });
     if (typeof ego.completeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.completeTaskSpace");
     }
@@ -339,11 +435,9 @@ export async function completeTaskSpace(
       ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
     };
   } else {
-    if (match.ownership === "user") {
-      await claimResolvedTaskSpace(match, "completeTaskSpace");
-    } else {
-      await selectTaskSpace(ego, match, "completeTaskSpace");
-    }
+    await selectResolvedTaskSpaceFor(ego, match, "completeTaskSpace", {
+      userOwned: "claim",
+    });
     if (typeof ego.closeTaskSpace !== "function") {
       throw new Error("completeTaskSpace requires ego.closeTaskSpace");
     }
@@ -375,7 +469,9 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
     if (match.ownership === "user") {
       return { done: false, skipped: "user-owned" as const };
     }
-    await selectTaskSpace(ego, match, "handOffTaskSpace");
+    await selectResolvedTaskSpaceFor(ego, match, "handOffTaskSpace", {
+      userOwned: "reject",
+    });
   }
   const result = await ego.handOffTaskSpace();
   assertNoEgoError(result, "handOffTaskSpace");
@@ -389,6 +485,25 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
 }
 
 /**
+ * Raise a task space's browser window/tab for the user without selecting it for
+ * automation and without changing ownership. Safe for user-owned spaces.
+ * @param {string|number} nameOrId Task space id or name.
+ * @returns {Promise<{done:boolean,visible?:boolean,reason?:string}>}
+ */
+export async function bringToFrontTaskSpace(nameOrId: TaskSpaceNameOrId) {
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.presentTaskSpace !== "function") {
+    throw new Error("bringToFrontTaskSpace requires ego.presentTaskSpace");
+  }
+  const match = await findTaskSpace(nameOrId);
+  const result = await ego.presentTaskSpace(
+    taskSpaceNumericId(match, "bringToFrontTaskSpace"),
+  );
+  assertNoEgoError(result, "bringToFrontTaskSpace");
+  return result;
+}
+
+/**
  * Take over a task space, showing the agent overlay to indicate work has resumed.
  * @param {string|number} [nameOrId] Task space id or name. If provided, switches to that space first.
  * @returns {Promise<void>}
@@ -398,7 +513,12 @@ export async function takeOverTaskSpace(nameOrId?: string | number) {
   if (!ego || typeof ego.takeOverTaskSpace !== "function") {
     throw new Error("takeOverTaskSpace requires ego.takeOverTaskSpace");
   }
-  await selectTaskSpaceIfProvided(ego, nameOrId, "takeOverTaskSpace");
+  if (nameOrId !== undefined) {
+    const match = await findTaskSpace(nameOrId);
+    await selectResolvedTaskSpaceFor(ego, match, "takeOverTaskSpace", {
+      userOwned: "claim",
+    });
+  }
   assertNoEgoError(await ego.takeOverTaskSpace(), "takeOverTaskSpace");
 }
 
@@ -425,7 +545,9 @@ async function probeAgentControl() {
 /**
  * Block until the agent regains control of the named task space.
  * Polls a harmless probe until it succeeds, or throws when the timeout
- * elapses. Read-only — does not call takeOverTaskSpace.
+ * elapses. Read-only — does not call takeOverTaskSpace or claimTaskSpace. If
+ * the named/id space is user-owned, it waits until ownership changes instead
+ * of selecting it and surfacing a hard stop.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ interval?: number, timeout?: number }} [options] interval & timeout in seconds (default 20s / 600s).
  * @returns {Promise<void>}
@@ -444,12 +566,24 @@ export async function waitForAgentControl(
   if (!ego) {
     throw new Error("waitForAgentControl requires ego runtime");
   }
-  await selectTaskSpaceIfProvided(ego, nameOrId, "waitForAgentControl");
   const interval = typeof options.interval === "number" ? options.interval : 20;
   const timeout = typeof options.timeout === "number" ? options.timeout : 600;
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error("waitForAgentControl interval must be a positive number");
+  }
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error(
+      "waitForAgentControl timeout must be a non-negative number",
+    );
+  }
   const deadline = Date.now() + timeout * 1000;
   while (true) {
-    if (await probeAgentControl()) return;
+    const selected = await selectTaskSpaceForControlProbe(
+      ego,
+      nameOrId,
+      "waitForAgentControl",
+    );
+    if (selected && (await probeAgentControl())) return;
     if (Date.now() >= deadline) {
       throw new Error(`waitForAgentControl timed out after ${timeout}s`);
     }
@@ -512,14 +646,333 @@ export async function runTaskSpace(
   return { task, result, completion };
 }
 
-function normalizeTaskSpaces(raw) {
+/**
+ * Run a browser task until an explicit success check passes, then complete its
+ * task space. Automatic retries are available only for work declared
+ * `risk: "read-only"`; reversible and destructive work always runs at most once.
+ * Hard-stop ownership errors are never retried.
+ * @param {string|number} nameOrId Task space name or numeric id.
+ * @param {{goal?: string, risk: "read-only"|"reversible"|"destructive", work: Function, verify: Function, retries?: {max?: number, delay?: number, on?: Array<"error"|"verification">}, keep?: boolean, timeout?: number, complete?: boolean}} options Execution callbacks and safety policy. Retry delay and timeout are milliseconds.
+ * @returns {Promise<{task: object, result: any, verification: object, attempts: number, receipt: object, completion: object}>}
+ */
+export async function executeTaskSpace(
+  nameOrId: TaskSpaceNameOrId,
+  options: any,
+) {
+  const config = normalizeTaskExecutionOptions(options);
+  const receipt: any = {
+    schema: "ego-browser.task-execution.v1",
+    goal:
+      config.goal ??
+      (typeof nameOrId === "string" ? nameOrId : `task-space-${nameOrId}`),
+    risk: config.risk,
+    maxAttempts: config.retries.max + 1,
+    status: "running",
+    attempts: [],
+  };
+
+  const runOptions = {
+    ...(Object.prototype.hasOwnProperty.call(options, "keep")
+      ? { keep: options.keep }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, "timeout")
+      ? { timeout: options.timeout }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(options, "complete")
+      ? { complete: options.complete }
+      : {}),
+  };
+
+  let wrapped;
+  try {
+    wrapped = await runTaskSpace(
+      nameOrId,
+      async (task) => {
+        let previousVerification = null;
+        const maxAttempts = config.retries.max + 1;
+
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          const context = {
+            task,
+            attempt,
+            maxAttempts,
+            previousVerification,
+          };
+          let result;
+          try {
+            result = await config.work(context);
+          } catch (error) {
+            receipt.attempts.push({
+              attempt,
+              outcome: "error",
+              phase: "work",
+              error: summarizeTaskExecutionError(error),
+            });
+            if (isEgoHardStopError(error)) {
+              receipt.status = "hard-stop";
+              throw error;
+            }
+            if (shouldRetryTaskExecution(config, "error", attempt)) {
+              await waitBeforeTaskExecutionRetry(config.retries.delay);
+              continue;
+            }
+            receipt.status = "failed";
+            throw withTaskExecutionReceipt(error, receipt);
+          }
+
+          let verification;
+          try {
+            verification = normalizeTaskExecutionVerification(
+              await config.verify({ ...context, result }),
+            );
+          } catch (error) {
+            receipt.attempts.push({
+              attempt,
+              outcome: "error",
+              phase: "verify",
+              error: summarizeTaskExecutionError(error),
+            });
+            if (isEgoHardStopError(error)) {
+              receipt.status = "hard-stop";
+              throw error;
+            }
+            if (
+              !isTaskExecutionContractError(error) &&
+              shouldRetryTaskExecution(config, "error", attempt)
+            ) {
+              await waitBeforeTaskExecutionRetry(config.retries.delay);
+              continue;
+            }
+            receipt.status = "failed";
+            throw withTaskExecutionReceipt(error, receipt);
+          }
+
+          receipt.attempts.push({
+            attempt,
+            outcome: verification.ok ? "verified" : "verification-failed",
+            verification,
+          });
+          if (verification.ok) {
+            receipt.status = "verified";
+            return { result, verification, attempts: attempt, receipt };
+          }
+
+          previousVerification = verification;
+          if (shouldRetryTaskExecution(config, "verification", attempt)) {
+            await waitBeforeTaskExecutionRetry(config.retries.delay);
+            continue;
+          }
+
+          receipt.status = "failed";
+          throw taskExecutionVerificationError(receipt, verification);
+        }
+
+        throw new Error(
+          "taskSpaces.execute reached an unreachable retry state",
+        );
+      },
+      runOptions,
+    );
+  } catch (error) {
+    if (
+      receipt.attempts.length > 0 &&
+      !isEgoHardStopError(error) &&
+      !error?.executionReceipt
+    ) {
+      if (receipt.status === "verified") receipt.status = "completion-failed";
+      throw withTaskExecutionReceipt(error, receipt);
+    }
+    throw error;
+  }
+
+  return {
+    task: wrapped.task,
+    result: wrapped.result.result,
+    verification: wrapped.result.verification,
+    attempts: wrapped.result.attempts,
+    receipt: wrapped.result.receipt,
+    completion: wrapped.completion,
+  };
+}
+
+function normalizeTaskExecutionOptions(options: any) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw taskExecutionContractError(
+      "taskSpaces.execute requires an options object",
+    );
+  }
+  if (typeof options.work !== "function") {
+    throw taskExecutionContractError(
+      "taskSpaces.execute requires a work function",
+    );
+  }
+  if (typeof options.verify !== "function") {
+    throw taskExecutionContractError(
+      "taskSpaces.execute requires a verify function",
+    );
+  }
+  if (
+    options.risk !== "read-only" &&
+    options.risk !== "reversible" &&
+    options.risk !== "destructive"
+  ) {
+    throw taskExecutionContractError(
+      'taskSpaces.execute risk must be "read-only", "reversible", or "destructive"',
+    );
+  }
+  if (
+    options.goal !== undefined &&
+    (typeof options.goal !== "string" || !options.goal.trim())
+  ) {
+    throw taskExecutionContractError(
+      "taskSpaces.execute goal must be a non-empty string",
+    );
+  }
+
+  const rawRetries = options.retries ?? {};
+  if (
+    !rawRetries ||
+    typeof rawRetries !== "object" ||
+    Array.isArray(rawRetries)
+  ) {
+    throw taskExecutionContractError(
+      "taskSpaces.execute retries must be an object",
+    );
+  }
+  const max = rawRetries.max ?? 0;
+  if (!Number.isInteger(max) || max < 0 || max > MAX_TASK_EXECUTION_RETRIES) {
+    throw taskExecutionContractError(
+      `taskSpaces.execute retries.max must be an integer from 0 to ${MAX_TASK_EXECUTION_RETRIES}`,
+    );
+  }
+  const delay = rawRetries.delay ?? 100;
+  if (!Number.isFinite(delay) || delay < 0) {
+    throw taskExecutionContractError(
+      "taskSpaces.execute retries.delay must be a non-negative number",
+    );
+  }
+  const on = rawRetries.on ?? ["error", "verification"];
+  if (
+    !Array.isArray(on) ||
+    on.some((kind) => kind !== "error" && kind !== "verification")
+  ) {
+    throw taskExecutionContractError(
+      'taskSpaces.execute retries.on accepts only "error" and "verification"',
+    );
+  }
+  if (max > 0 && options.risk !== "read-only") {
+    throw taskExecutionContractError(
+      'taskSpaces.execute automatic retries require risk: "read-only"',
+    );
+  }
+
+  return {
+    goal: options.goal?.trim(),
+    risk: options.risk as TaskExecutionRisk,
+    work: options.work,
+    verify: options.verify,
+    retries: {
+      max,
+      delay,
+      on: new Set(on as TaskExecutionRetryKind[]),
+    },
+  };
+}
+
+function normalizeTaskExecutionVerification(value: any) {
+  if (typeof value === "boolean") return { ok: value };
+  if (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    typeof value.ok === "boolean"
+  ) {
+    return { ...value };
+  }
+  throw taskExecutionContractError(
+    "taskSpaces.execute verify must return a boolean or { ok: boolean, ... }",
+  );
+}
+
+function shouldRetryTaskExecution(config, kind, attempt) {
+  return (
+    config.risk === "read-only" &&
+    attempt <= config.retries.max &&
+    config.retries.on.has(kind)
+  );
+}
+
+async function waitBeforeTaskExecutionRetry(delay) {
+  if (delay > 0) await waits.waitForTimeout(delay);
+}
+
+function taskExecutionContractError(message: string) {
+  return Object.assign(new Error(message), {
+    error_code: TASK_EXECUTION_CONTRACT_CODE,
+  });
+}
+
+function isTaskExecutionContractError(error) {
+  return error?.error_code === TASK_EXECUTION_CONTRACT_CODE;
+}
+
+function taskExecutionVerificationError(receipt, verification) {
+  const detail =
+    typeof verification.message === "string" && verification.message
+      ? `: ${verification.message}`
+      : "";
+  return Object.assign(
+    new Error(
+      `taskSpaces.execute verification failed after ${receipt.attempts.length} attempt(s)${detail}`,
+    ),
+    {
+      error_code: TASK_EXECUTION_VERIFICATION_CODE,
+      verification,
+      executionReceipt: receipt,
+    },
+  );
+}
+
+function summarizeTaskExecutionError(error) {
+  return {
+    name:
+      error && typeof error === "object" && typeof error.name === "string"
+        ? error.name
+        : "Error",
+    message:
+      error && typeof error === "object" && typeof error.message === "string"
+        ? error.message
+        : String(error),
+    ...(error &&
+    typeof error === "object" &&
+    typeof error.error_code === "string"
+      ? { code: error.error_code }
+      : {}),
+  };
+}
+
+function withTaskExecutionReceipt(error, receipt) {
+  if (error && typeof error === "object") {
+    try {
+      error.executionReceipt = receipt;
+      return error;
+    } catch {
+      // Fall through to a wrapper when the original error is frozen/read-only.
+    }
+  }
+  return Object.assign(new Error(String(error), { cause: error }), {
+    executionReceipt: receipt,
+  });
+}
+
+function normalizeTaskSpaces(raw: any): TaskSpace[] {
   if (Array.isArray(raw?.taskSpaces)) {
     return raw.taskSpaces.map(normalizeTaskSpace).filter(Boolean);
   }
   throw new Error("listTaskSpaces expected { taskSpaces: [...] }");
 }
 
-function normalizeTaskSpace(space) {
+function normalizeTaskSpace(space: any): TaskSpace | null {
   const taskId = space?.taskId ?? space?.name ?? space?.id;
   if (taskId === undefined || taskId === null || taskId === "") {
     return null;
@@ -541,7 +994,7 @@ function taskSpaceNumericId(space, op: string) {
   return space.id;
 }
 
-async function findTaskSpace(nameOrId) {
+async function findTaskSpace(nameOrId: TaskSpaceNameOrId): Promise<TaskSpace> {
   const spaces = await listTaskSpaces();
   const match = findMatchingTaskSpace(spaces, nameOrId);
   if (!match) throw new Error(`task space not found: ${nameOrId}`);
@@ -549,7 +1002,7 @@ async function findTaskSpace(nameOrId) {
 }
 
 /** Name the task spaces that do exist, so a miss points somewhere. */
-function describeTaskSpaces(spaces) {
+function describeTaskSpaces(spaces: TaskSpace[]) {
   if (!spaces.length) return "No task spaces exist yet.";
   const shown = spaces
     .slice(0, 10)
@@ -559,14 +1012,34 @@ function describeTaskSpaces(spaces) {
   return `Existing: ${shown}${rest}.`;
 }
 
-function findMatchingTaskSpace(spaces, nameOrId) {
+function findMatchingTaskSpace(
+  spaces: TaskSpace[],
+  nameOrId: TaskSpaceNameOrId,
+) {
   if (typeof nameOrId === "number") {
     return spaces.find((space) => space.id === nameOrId);
   }
-  const byName = spaces.find(
+  const named = spaces.filter(
     (space) => space.name === nameOrId || space.taskId === nameOrId,
   );
-  if (byName) return byName;
+  if (named.length) {
+    const session = currentAgentSession();
+    // Newer task spaces carry their creating session. Once that information is
+    // present, a same-named space from another agent is not a match. Legacy and
+    // native spaces without session metadata keep the established name lookup.
+    if (session && named.some((space) => Boolean(space.session))) {
+      const sameSession = named.find(
+        (space) =>
+          space.session === session ||
+          // Linux builds before full session persistence stored this UI-sized
+          // prefix. Recognize it while old spaces naturally age out.
+          space.session === session.slice(0, 8),
+      );
+      if (sameSession) return sameSession;
+      return undefined;
+    }
+    return named[0];
+  }
   if (/^\d+$/.test(nameOrId)) {
     const id = Number(nameOrId);
     if (Number.isFinite(id)) {
@@ -574,6 +1047,16 @@ function findMatchingTaskSpace(spaces, nameOrId) {
     }
   }
   return undefined;
+}
+
+function currentAgentSession() {
+  const session =
+    process.env.EGO_BROWSER_SESSION_ID ||
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CODEX_SESSION_ID ||
+    process.env.CODEX_THREAD_ID ||
+    process.env.OMX_SESSION_ID;
+  return session || null;
 }
 
 export async function siteSkillsForUrl(url) {
@@ -721,7 +1204,8 @@ function createLocator(selector) {
       locator.evaluateLocator(selector, pageFunction, arg),
     evaluateAll: (pageFunction, arg = undefined) =>
       locator.evaluateAll(selector, pageFunction, arg),
-    waitFor: (options = {}) => waits.waitForSelector(selector, options),
+    waitFor: (options = {}) =>
+      waits.waitForSelector(selector, { ...options, strict: true }),
   };
 }
 
@@ -875,7 +1359,14 @@ function createPageFacade() {
       down: pointer.down,
       up: pointer.up,
       wheel: pointer.wheel,
-      drag: pointer.drag,
+      drag: (pointsOrFrom, toOrOptions = undefined, options = {}) => {
+        const [points, effectiveOptions] = mouseDragArgs(
+          pointsOrFrom,
+          toOrOptions,
+          options,
+        );
+        return pointer.drag(points, effectiveOptions);
+      },
     },
   };
 }
@@ -885,6 +1376,44 @@ function mousePointArgs(x, y, options) {
     return [x, y || {}];
   }
   return [[x, y], options || {}];
+}
+
+function mouseDragArgs(pointsOrFrom, toOrOptions, options) {
+  const firstIsPath =
+    Array.isArray(pointsOrFrom) && !isMouseCoordinatePair(pointsOrFrom);
+  const secondIsTarget = isMouseTargetLike(toOrOptions);
+
+  if (firstIsPath && secondIsTarget) {
+    return [[...pointsOrFrom, toOrOptions], options || {}];
+  }
+  if (firstIsPath) {
+    return [pointsOrFrom, toOrOptions || {}];
+  }
+  if (secondIsTarget) {
+    return [[pointsOrFrom, toOrOptions], options || {}];
+  }
+
+  throw new Error(
+    "page.mouse.drag requires a destination; use page.mouse.drag(from, to, options?) or page.mouse.drag([from, to], options?)",
+  );
+}
+
+function isMouseTargetLike(value) {
+  if (typeof value === "string") return true;
+  if (isMouseCoordinatePair(value)) return true;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return "selector" in value || "x" in value || "y" in value;
+}
+
+function isMouseCoordinatePair(value) {
+  return (
+    Array.isArray(value) &&
+    value.length === 2 &&
+    Number.isFinite(Number(value[0])) &&
+    Number.isFinite(Number(value[1]))
+  );
 }
 
 function createBrowserFacade() {
@@ -906,9 +1435,11 @@ function createTaskSpacesFacade() {
     new: newTaskSpace,
     useOrCreate: useOrCreateTaskSpace,
     run: runTaskSpace,
+    execute: executeTaskSpace,
     claim: claimTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
+    bringToFront: bringToFrontTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
     isHardStopError: isEgoHardStopError,
@@ -926,13 +1457,27 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), and page.mouse.click(x, y). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), page.mouse.click(x, y), and page.mouse.drag(from, to, options?). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  "page.locator":
+    "page.locator(selector) => Locator: create a strict, auto-waiting locator for CSS, XPath, text, loc=..., or @ref selectors. loc=testid:foo matches data-testid=\"foo\" exactly by default. Example: await page.locator('loc=testid:settings__visibilityToggle__topics-/map').click()",
+  "page.getByTestId":
+    "page.getByTestId(testId) => Locator: create a strict, auto-waiting locator that matches the complete data-testid value exactly. Example: await page.getByTestId('settings__visibilityToggle__topics-/map').click()",
+  "page.mouse.drag":
+    "page.mouse.drag(from, to, options?) | page.mouse.drag(points, options?) => Promise<void>: drag between two targets or through an ordered path of points/selectors. Targets can be selectors, @refs, [x, y] coordinate pairs, { x, y } points, or { selector, x, y } offsets.",
   locator:
-    "page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.",
+    'page.locator(selector): returns a strict, auto-waiting locator facade with locator(), getByRole(), getByText(), filter(), first(), nth(index), last(), click(), hover(), dragTo(target), scrollIntoViewIfNeeded(), fill(value), clear(), press(key), check(), selectOption(value), textContent(), innerText(), innerHTML(), isVisible(), isEnabled(), getAttribute(name), screenshot(), count(), evaluate(fn, arg), evaluateAll(fn, arg), and waitFor(options). loc=testid:foo matches data-testid="foo" exactly by default. Narrow multiple matches; use first()/nth() only for confirmed legitimate duplicates.',
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.run(nameOrId, fn, options) for one-round tasks, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
+    "taskSpaces: task-space facade. Use taskSpaces.execute(nameOrId, options) when success must be explicitly verified, taskSpaces.run(nameOrId, fn, options) for a basic one-round task, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.bringToFront(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
+  "taskSpaces.execute":
+    'taskSpaces.execute(nameOrId, { goal?, risk, work, verify, retries?, keep?, timeout?, complete? }) => Promise<object>: run work, require verify to return true or { ok: true, ... }, then complete the task space. Automatic retries (max 5) require risk: "read-only"; hard stops are never retried. Returns result, verification, attempts, receipt, and completion.',
+  "taskSpaces.useOrCreate":
+    "taskSpaces.useOrCreate(nameOrId) => Promise<object>: select or create a task space. A user-controlled space is selected without claiming for passive page.snapshot(), page.screenshot(), and page.debug() verification; mutating commands remain blocked until an explicitly confirmed takeOver().",
+  "taskSpaces.bringToFront":
+    "taskSpaces.bringToFront(nameOrId) => Promise<object>: raise the task space's browser window/tab for the user without selecting it for automation, claiming it, or changing ownership. Use this instead of useOrCreate when the user controls the space and you only need to bring the window forward.",
+  "taskSpaces.takeOver":
+    "taskSpaces.takeOver(nameOrId?) => Promise<void>: after explicit user confirmation, take control back. When nameOrId points at a user-owned space, it claims that space before selecting it and calling the native take-over overlay.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",
@@ -958,7 +1503,10 @@ export function helperContext(extra: any = {}) {
         return FACADE_HELP[names[0]];
       }
       if (names.length === 0) {
-        return Object.values(FACADE_HELP).join("\n\n");
+        return Object.entries(FACADE_HELP)
+          .filter(([key]) => !key.includes("."))
+          .map(([, value]) => value)
+          .join("\n\n");
       }
       const result = helpRuntime(all, ...names);
       if (typeof result === "string") return result;

@@ -123,7 +123,7 @@ test("locator collection helpers evaluate all matching nodes", async () => {
   }
 });
 
-test("test id locators query data-testid attributes exactly", async () => {
+test("test id locators query data-testid attributes exactly by default", async () => {
   const restore = setOverrides({
     cdpOverride(method, params) {
       assert.equal(method, "Runtime.evaluate");
@@ -134,7 +134,30 @@ test("test id locators query data-testid attributes exactly", async () => {
     },
   });
   try {
-    assert.equal(await count('loc=testid:exact:"submit"'), 1);
+    assert.equal(await count("loc=testid:submit"), 1);
+  } finally {
+    restore();
+  }
+});
+
+test("test id locator default does not match prefixed sibling ids", async () => {
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      assert.equal(method, "Runtime.evaluate");
+      assert.ok(
+        params.expression.includes(
+          '=== "settings__visibilityToggle__topics-/map"',
+        ),
+      );
+      assert.doesNotMatch(params.expression, /\.includes\(/);
+      return { result: { value: 1 } };
+    },
+  });
+  try {
+    assert.equal(
+      await count("loc=testid:settings__visibilityToggle__topics-/map"),
+      1,
+    );
   } finally {
     restore();
   }
