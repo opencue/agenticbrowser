@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 
 import { agentIdentity } from "./agent-identity.mjs";
+import { replaceFile } from "./atomic-write.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 
 /**
@@ -119,9 +120,15 @@ export function createTaskSpacesApi(
     }
   }
 
+  /**
+   * Every heredoc is its own process and the panel is another, so this file has
+   * overlapping writers. Writing in place lets a reader see a fragment, and
+   * readState() cannot tell a fragment from an absent file -- both reach its
+   * catch, which answers "no spaces at all". See replaceFile.
+   */
   async function writeState(state) {
     await mkdir(STATE_DIR, { recursive: true });
-    await writeFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
+    await replaceFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
   }
 
   function pageControlErrorSync() {
