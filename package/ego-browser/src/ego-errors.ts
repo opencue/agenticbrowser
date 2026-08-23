@@ -57,7 +57,7 @@ const EGO_ERROR_MESSAGES: Partial<Record<EgoErrorCode, string>> = {
   ].join("\n"),
   EGO_TASK_SPACE_USER_IN_CONTROL: [
     "The user has taken control of this task space, so mutating browser commands are paused.",
-    "This is a hard stop for the failed mutation — do not retry it and do not take control back on your own.",
+    "This is a hard stop for the blocked mutation — do not retry it and do not take control back on your own.",
     "Passive verification is still allowed after taskSpaces.useOrCreate(id): page.snapshot(), page.screenshot(), and page.debug().",
     "Wait until the user explicitly asks you to continue, then take control back with the same id/name and resume:",
     "  await taskSpaces.takeOver(id)",
