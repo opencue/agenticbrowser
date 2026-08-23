@@ -85,6 +85,10 @@ test("screenshot skips page metric JavaScript while a native dialog is pending",
         sent.some((request) => request.method === "Runtime.evaluate"),
         false,
       );
+      assert.equal(
+        sent.some((request) => request.method === "Page.enable"),
+        false,
+      );
       const shot = sent.find(
         (request) => request.method === "Page.captureScreenshot",
       );

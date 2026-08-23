@@ -252,7 +252,11 @@ export function pendingDialog(sessionId = state.sessionId) {
 }
 
 async function enablePageEvents(sessionId) {
-  if (!sessionId || pageEnabledSessions.has(sessionId)) {
+  if (
+    !sessionId ||
+    state.taskSpaceReadOnly ||
+    pageEnabledSessions.has(sessionId)
+  ) {
     return;
   }
   try {
