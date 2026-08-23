@@ -635,8 +635,10 @@ export async function waitForAgentControl(
  * This is the safe default for one-round automations: it creates or reuses a
  * task space, optionally narrows helper timeouts for the callback, rethrows
  * user-control hard stops unchanged, and calls completeTaskSpace after the
- * callback succeeds. Ordinary callback errors leave the space open for debugging
- * and for the CLI failure artifact.
+ * callback succeeds. A space selected read-only is never claimed or completed
+ * automatically; its completion reports `{ done:false, skipped:"user-owned" }`.
+ * Ordinary callback errors leave the space open for debugging and for the CLI
+ * failure artifact.
  * @param {string|number} nameOrId Task space name or numeric id.
  * @param {(task: object) => Promise<any>|any} fn Work to run in the selected task space.
  * @param {{ keep?: boolean, timeout?: number, complete?: boolean }} [options] `keep` is passed to completeTaskSpace on success (default false); `timeout` temporarily sets page helper timeouts in milliseconds; `complete:false` skips automatic completion.
@@ -660,6 +662,7 @@ export async function runTaskSpace(
   }
 
   const task = await useOrCreateTaskSpace(nameOrId);
+  const selectedReadOnly = state.taskSpaceReadOnly;
   const previousTimeout = state.defaultTimeout;
   if (hasTimeout) {
     state.defaultTimeout = timeout;
@@ -680,7 +683,9 @@ export async function runTaskSpace(
   const completion =
     options.complete === false
       ? { done: false, skipped: "disabled" as const }
-      : await completeTaskSpace(task.id, { keep: options.keep === true });
+      : selectedReadOnly
+        ? { done: false, skipped: "user-owned" as const }
+        : await completeTaskSpace(task.id, { keep: options.keep === true });
   return { task, result, completion };
 }
 

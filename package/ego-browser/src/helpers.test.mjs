@@ -434,6 +434,60 @@ test("runTaskSpace completes a successful one-round task", async () => {
   ]);
 });
 
+test("runTaskSpace never auto-claims or completes a read-only user space", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    selectedTaskSpaceId: null,
+    taskSpaceReadOnly: false,
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          calls.push(["listTaskSpaces"]);
+          return {
+            taskSpaces: [
+              {
+                taskId: "user-review",
+                id: 7,
+                name: "user-review",
+                ownership: "user",
+              },
+            ],
+          };
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return { done: true, readOnly: true };
+        },
+        async claimTaskSpace() {
+          calls.push(["claimTaskSpace"]);
+          throw new Error("read-only run must not claim");
+        },
+        async closeTaskSpace() {
+          calls.push(["closeTaskSpace"]);
+          throw new Error("read-only run must not close");
+        },
+      },
+      async () => {
+        const out = await runTaskSpace("user-review", async (task) => {
+          assert.equal(task.ownership, "user");
+          assert.equal(state.taskSpaceReadOnly, true);
+          return "verified";
+        });
+        assert.equal(out.result, "verified");
+        assert.deepEqual(out.completion, {
+          done: false,
+          skipped: "user-owned",
+        });
+      },
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
+});
+
 test("runTaskSpace validates timeout before touching task spaces", async () => {
   const calls = [];
   await withEgo(

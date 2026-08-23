@@ -122,7 +122,10 @@ kinds, and allows at most five retries. `risk: "reversible"` and
 `taskSpaces.complete(task.id, { keep })` after the callback succeeds. If the
 callback throws, the task space is left open so the failure artifact and the
 next retry can inspect the same page. `complete: false` is an escape hatch for
-advanced multi-step scripts that want the wrapper's setup and timeout only.
+advanced multi-step scripts that want the wrapper's setup and timeout only. If
+selection is read-only because the user controls the space, `run` never claims
+or closes it automatically and reports
+`{ done:false, skipped:'user-owned' }` as its completion.
 
 **`taskSpaces.complete(nameOrId, { keep })` must run only after the result is
 captured and verified.** For one-round tasks that do not use `taskSpaces.run`,
