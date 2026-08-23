@@ -387,10 +387,15 @@ export function createPlatform({
    */
   async function listProcesses({ contains }) {
     if (isWindows) {
+      // The query text carries `contains`, so PowerShell's own command line
+      // matches it and WMI hands back the process asking the question. $PID is
+      // that process, and excluding it is the whole fix; filtering by name
+      // afterwards would also drop a browser someone launched from a script.
       const rows = await powerShellJson(
         `@(Get-CimInstance Win32_Process -Filter "CommandLine LIKE '%${wqlLiteral(
           contains,
-        )}%'" | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`,
+        )}%'" | Where-Object { $_.ProcessId -ne $PID }` +
+          ` | Select-Object ProcessId,CommandLine) | ConvertTo-Json -Compress`,
       );
       return rows
         .filter((row) => row?.CommandLine?.includes(contains))

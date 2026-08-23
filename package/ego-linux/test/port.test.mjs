@@ -1,10 +1,11 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
@@ -168,11 +169,13 @@ describe("ego-browser Linux port", () => {
       /8\. getByRole count:\s+1/,
       "getByRole matches the computed accessible name",
     );
-    assert.match(
-      out,
-      /9\. screenshot:\s+\/.*\.png/,
-      "screenshot round trips to a file",
-    );
+    // Matching a leading "/" would be asserting that this is not Windows, where
+    // the path is `C:\...`. Checking the path it actually printed is both
+    // platform-neutral and closer to what the message claims.
+    const shot = /9\. screenshot:\s+(\S.*?\.png)\s*$/m.exec(out)?.[1];
+    assert.ok(shot, `no screenshot path in:\n${out}`);
+    assert.ok(isAbsolute(shot), `the screenshot path is not absolute: ${shot}`);
+    assert.ok(existsSync(shot), `the screenshot path names no file: ${shot}`);
   });
 
   it("draws the agent's cursor without disturbing the page it acts on", async () => {

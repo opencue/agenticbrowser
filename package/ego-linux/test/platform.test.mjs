@@ -144,10 +144,11 @@ describe("platform: finding a browser", () => {
     const real = join(sandbox, "chrome");
     await writeFile(real, "");
     try {
-      assert.equal(
-        await linux({ EGO_LINUX_CHROME: real }).resolveBrowserBinary(),
-        real,
-      );
+      // This machine's platform, not a faked one: the path comes from the real
+      // filesystem, and asking the POSIX branch to recognise `C:\...` as
+      // absolute is a question about the test, not about the code.
+      const platform = createPlatform({ env: { EGO_LINUX_CHROME: real } });
+      assert.equal(await platform.resolveBrowserBinary(), real);
     } finally {
       await rm(sandbox, { recursive: true, force: true });
     }
