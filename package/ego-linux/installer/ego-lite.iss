@@ -77,10 +77,14 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 Filename: "{app}\{#AppExeName}"; Parameters: "--open"; WorkingDir: "{app}"; Description: "Open {#AppName}"; Flags: postinstall nowait skipifsilent runminimized
 
 [Code]
-{ Whether {app} is missing from the user's PATH.
-
-  Compared with a semicolon on both ends so that a directory whose name is a
-  suffix of an existing entry is not mistaken for it. }
+// Whether the install directory is missing from the user's PATH.
+//
+// Line comments, not { }: a Pascal block comment does not nest, so naming an
+// Inno constant inside one ends the comment at that constant's closing brace
+// and the rest of the sentence is compiled as code.
+//
+// Compared with a semicolon on both ends so that a directory whose name is a
+// suffix of an existing entry is not mistaken for it.
 function NeedsAddPath(Dir: string): boolean;
 var
   Existing: string;
@@ -93,10 +97,10 @@ begin
   Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Existing) + ';') = 0;
 end;
 
-{ Take the entry back out on uninstall.
-
-  Without this every install/uninstall cycle leaves another dead directory on
-  the user's PATH, and they accumulate silently. }
+// Take the entry back out on uninstall.
+//
+// Without this every install/uninstall cycle leaves another dead directory on
+// the user's PATH, and they accumulate silently.
 procedure RemoveFromPath(Dir: string);
 var
   Existing: string;

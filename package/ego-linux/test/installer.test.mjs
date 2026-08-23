@@ -184,6 +184,27 @@ describe("ego-lite.iss", () => {
     );
   });
 
+  it("keeps the [Code] section free of brace comments", () => {
+    // A Pascal block comment does not nest, so `{ ... {app} ... }` ends at the
+    // closing brace of {app} and the rest of the sentence is compiled as code.
+    // That is a compile error only ISCC can report, and ISCC only runs on
+    // Windows -- so the rule is checked here instead: line comments in [Code].
+    const code = iss.split("[Code]")[1] ?? "";
+    assert.ok(
+      code.includes("function NeedsAddPath"),
+      "found no [Code] section",
+    );
+    const braceComments = code
+      .split("\n")
+      .map((line, index) => ({ line, number: index + 1 }))
+      .filter(({ line }) => line.trimStart().startsWith("{"));
+    assert.deepEqual(
+      braceComments.map((c) => c.line.trim()),
+      [],
+      "use // comments in [Code]; a { } comment ends at the first } it meets",
+    );
+  });
+
   it("only launches flags the CLI actually has", () => {
     // --doctor exists in the sibling host packages and not in this one; an
     // installer whose finish-page checkbox errors out is a bad first minute.
