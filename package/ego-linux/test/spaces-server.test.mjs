@@ -90,6 +90,32 @@ async function visibilityState(targetId) {
   }
 }
 
+/**
+ * Wait for a space, or for the agent script to die trying.
+ *
+ * Racing the two matters more than it looks. The script runs in another
+ * process, and when it fails the space simply never appears -- so waiting alone
+ * reports "timed out waiting for space", which says nothing about why, and the
+ * child's own error is never read because the timeout throws first. On Windows
+ * that cost a full CI round: the real error was in the child, and the log had
+ * only the timeout.
+ */
+async function waitForSpaceOrFailure(name, running, timeoutMs) {
+  const died = running.then(
+    (output) => {
+      throw new Error(
+        `the agent script exited before the space appeared:\n${output}`,
+      );
+    },
+    (error) => {
+      throw error;
+    },
+  );
+  // The race may settle on the space instead, leaving this rejection unclaimed.
+  died.catch(() => {});
+  return Promise.race([waitForSpace(name, timeoutMs), died]);
+}
+
 async function waitForSpace(name, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -413,7 +439,7 @@ describe("Spaces overview server", () => {
         await new Promise((resolve) => setTimeout(resolve, 1200));
       `);
 
-      space = await waitForSpace(name);
+      space = await waitForSpaceOrFailure(name, running);
       const taskId = space.id;
       const { taskSpaces } = await shim.ego.listTaskSpaces();
       const target = taskSpaces.find((candidate) => candidate.id === taskId);
