@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { terminateProcess } from "../src/platform.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
 
@@ -73,7 +75,10 @@ async function waitForExitType(want, timeoutMs = 10000) {
 after(async () => {
   try {
     const state = JSON.parse(await readFile(BROWSER_STATE, "utf8"));
-    if (state.pid) process.kill(state.pid, "SIGTERM");
+    // Kills the tree, not just the browser process: on Windows the renderer
+    // children outlive their parent and hold the profile open, which is what
+    // makes the removal below grind and the process refuse to exit.
+    if (state.pid) await terminateProcess(state.pid);
   } catch {
     // nothing running
   }
