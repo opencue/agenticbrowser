@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
 const FIXTURE_URL = `file://${join(HERE, "fixture", "index.html")}`;
@@ -129,16 +131,21 @@ function jpegSize(dataUri) {
 }
 
 after(async () => {
+  // close() stops new connections but waits on live ones, and the panel holds a
+  // keep-alive connection for its screencast. Without this the server handle
+  // outlives the suite and node never exits.
+  server.closeAllConnections?.();
   server.close();
   shim.close();
   try {
     const state = JSON.parse(
-      await readFile(
-        join(SANDBOX, "state", "ego-lite-linux", "browser.json"),
-        "utf8",
-      ),
+      await readFile(join(SANDBOX, "state", APP_DIR, "browser.json"), "utf8"),
     );
-    if (state.pid) process.kill(state.pid, "SIGTERM");
+    // Not process.kill: on Windows that terminates only the browser process,
+    // and Chrome's renderer and GPU children survive holding the profile
+    // directory open -- which is what left four orphan chrome processes and a
+    // node that would not exit behind the first Windows CI run.
+    if (state.pid) await terminateProcess(state.pid);
   } catch {
     // nothing running
   }
