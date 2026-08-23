@@ -234,12 +234,7 @@ test("object id locator zero-match error includes diagnostic candidates", async 
   });
   await assert.rejects(
     () =>
-      resolveElementObjectId(
-        cdp,
-        undefined,
-        new RefMap(),
-        "loc=css:.missing",
-      ),
+      resolveElementObjectId(cdp, undefined, new RefMap(), "loc=css:.missing"),
     (error) => {
       assert.ok(error instanceof ElementResolutionError);
       assert.equal(error.kind, "transient");

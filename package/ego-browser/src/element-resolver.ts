@@ -425,11 +425,7 @@ async function locatorResolutionError(
 }
 
 async function locatorDiagnosticMessage(cdp, sessionId, locator, message) {
-  const candidates = await locatorDiagnosticCandidates(
-    cdp,
-    sessionId,
-    locator,
-  );
+  const candidates = await locatorDiagnosticCandidates(cdp, sessionId, locator);
   if (!candidates.length) {
     return message;
   }
@@ -481,9 +477,7 @@ function formatLocatorDiagnosticCandidate(candidate, index) {
 }
 
 function truncateLocatorDiagnosticText(value: string, maxChars: number) {
-  return value.length <= maxChars
-    ? value
-    : `${value.slice(0, maxChars - 1)}…`;
+  return value.length <= maxChars ? value : `${value.slice(0, maxChars - 1)}…`;
 }
 
 async function findBackendNodeIdByRoleName(

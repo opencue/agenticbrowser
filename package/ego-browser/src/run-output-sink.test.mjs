@@ -335,7 +335,10 @@ test("a failure artifact records debugError when debug hits a hard stop", async 
     assert.equal(artifact.error.message, "boom");
     assert.equal(artifact.debug, undefined);
     assert.equal(artifact.debugError.code, "EGO_TASK_SPACE_USER_IN_CONTROL");
-    assert.match(artifact.debugError.message, /taken control of this task space/);
+    assert.match(
+      artifact.debugError.message,
+      /taken control of this task space/,
+    );
   } finally {
     restore();
   }
@@ -383,7 +386,10 @@ test("a toString TypeError explains the ego-browser logging pattern", async () =
   assert.ok(result.error, "expected runMain to reject");
   assert.match(result.error.message, /ego-browser hint:/);
   assert.match(result.error.message, /console\.log\(value\)/);
-  assert.match(result.error.message, /page\.screenshot\(\) returns a file path/);
+  assert.match(
+    result.error.message,
+    /page\.screenshot\(\) returns a file path/,
+  );
   assert.equal(result.error.stack.match(/ego-browser hint:/g).length, 1);
   assert.equal(result.stdout, "");
 });

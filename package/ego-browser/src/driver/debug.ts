@@ -228,17 +228,19 @@ function summarizeEvent(event: any, redact: boolean) {
     out.message = truncate(String(params.message), 500);
   }
   if (Array.isArray(params.args)) {
-    out.args = params.args.slice(0, 5).map((arg) =>
-      truncate(
-        String(
-          arg?.value ??
-            arg?.unserializableValue ??
-            arg?.description ??
-            arg?.type,
+    out.args = params.args
+      .slice(0, 5)
+      .map((arg) =>
+        truncate(
+          String(
+            arg?.value ??
+              arg?.unserializableValue ??
+              arg?.description ??
+              arg?.type,
+          ),
+          200,
         ),
-        200,
-      ),
-    );
+      );
   }
   if (params.exceptionDetails) {
     out.exception = {
@@ -252,7 +254,10 @@ function summarizeEvent(event: any, redact: boolean) {
   return out;
 }
 
-function formatTrace(entries: any[], options: { limit: number; redact: boolean }) {
+function formatTrace(
+  entries: any[],
+  options: { limit: number; redact: boolean },
+) {
   const shown = options.limit === 0 ? [] : entries.slice(-options.limit);
   return {
     schema: TRACE_SCHEMA,
@@ -310,7 +315,8 @@ function traceSummary(entry: any, redact: boolean) {
   if (kind === "cdp.response") {
     const duration =
       typeof entry.durationMs === "number" ? ` in ${entry.durationMs}ms` : "";
-    if (result.errorText) return `${method} returned ${result.errorText}${duration}`;
+    if (result.errorText)
+      return `${method} returned ${result.errorText}${duration}`;
     if (result.exceptionText) return `${method} returned exception${duration}`;
     return `${method} completed${duration}`;
   }

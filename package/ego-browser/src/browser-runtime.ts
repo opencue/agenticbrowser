@@ -449,15 +449,17 @@ function summarizeEventParams(method, params: any = {}) {
     copyTraceScalar(out, params.response, "status");
   }
   if (Array.isArray(params.args)) {
-    out.args = params.args.slice(0, 5).map((arg) =>
-      String(
-        arg?.value ??
-          arg?.unserializableValue ??
-          arg?.description ??
-          arg?.type ??
-          "",
-      ),
-    );
+    out.args = params.args
+      .slice(0, 5)
+      .map((arg) =>
+        String(
+          arg?.value ??
+            arg?.unserializableValue ??
+            arg?.description ??
+            arg?.type ??
+            "",
+        ),
+      );
   }
   if (params.exceptionDetails) {
     out.exceptionText = String(params.exceptionDetails.text || "");
@@ -476,7 +478,11 @@ function summarizeTraceError(error) {
   };
 }
 
-function copyTraceScalar(out: Record<string, unknown>, params: any, key: string) {
+function copyTraceScalar(
+  out: Record<string, unknown>,
+  params: any,
+  key: string,
+) {
   const value = params?.[key];
   if (
     value === undefined ||

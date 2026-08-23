@@ -247,7 +247,7 @@ remaining differences are structural rather than unfinished native methods.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                     |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                      |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.

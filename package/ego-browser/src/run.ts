@@ -179,10 +179,7 @@ async function execute(
   }
   if (thrown) {
     thrown = withExecutionHint(thrown);
-    if (
-      failureArtifactsEnabled(env) &&
-      !helpers.isEgoHardStopError(thrown)
-    ) {
+    if (failureArtifactsEnabled(env) && !helpers.isEgoHardStopError(thrown)) {
       await emitFailureArtifact(thrown, code, stderr, env);
     }
   }
@@ -258,7 +255,9 @@ function summarizeError(error: unknown) {
     const out: Record<string, unknown> = {
       name: typeof obj.name === "string" ? obj.name : "Error",
       message:
-        typeof obj.message === "string" ? obj.message : formatErrorMessage(error),
+        typeof obj.message === "string"
+          ? obj.message
+          : formatErrorMessage(error),
     };
     if (typeof obj.stack === "string") {
       out.stack = obj.stack;

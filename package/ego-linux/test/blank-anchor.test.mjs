@@ -94,7 +94,9 @@ describe("the space's blank anchor tab is used, not stranded", () => {
       await createTaskSpacesApi(cdp).createTaskSpace("work");
 
       assert.ok(
-        !cdp.calls.some((call) => call.method === "Target.createBrowserContext"),
+        !cdp.calls.some(
+          (call) => call.method === "Target.createBrowserContext",
+        ),
         "shared storage is the default, so no isolated context is created",
       );
       const create = cdp.calls.find(
@@ -102,6 +104,7 @@ describe("the space's blank anchor tab is used, not stranded", () => {
       );
       assert.deepEqual(create?.params, {
         url: "about:blank",
+        background: true,
         focus: false,
       });
       assert.ok(
@@ -117,7 +120,8 @@ describe("the space's blank anchor tab is used, not stranded", () => {
         "the fallback page explains why it is visible if it ever remains onscreen",
       );
     } finally {
-      if (previous === undefined) delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+      if (previous === undefined)
+        delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
       else process.env.EGO_LINUX_TASK_SPACE_STORAGE = previous;
     }
   });
@@ -139,10 +143,12 @@ describe("the space's blank anchor tab is used, not stranded", () => {
       assert.deepEqual(create?.params, {
         url: "about:blank",
         browserContextId: "ctx",
+        background: true,
         focus: false,
       });
     } finally {
-      if (previous === undefined) delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+      if (previous === undefined)
+        delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
       else process.env.EGO_LINUX_TASK_SPACE_STORAGE = previous;
     }
   });
