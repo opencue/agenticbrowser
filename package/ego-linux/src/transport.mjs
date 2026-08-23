@@ -322,8 +322,7 @@ export async function connectCdp(wsUrl) {
 
     /** Persist logical tab selection outside this short-lived connection. */
     watchActiveTarget(watcher) {
-      activeTargetWatcher =
-        typeof watcher === "function" ? watcher : null;
+      activeTargetWatcher = typeof watcher === "function" ? watcher : null;
     },
 
     /**

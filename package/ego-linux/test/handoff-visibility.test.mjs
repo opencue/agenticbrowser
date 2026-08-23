@@ -14,7 +14,8 @@ process.env.EGO_LINUX_SPACE_IDLE_MIN = "0";
 const { STATE_DIR, TASK_SPACE_FILE } = await import("../src/paths.mjs");
 const { createTaskSpacesApi } = await import("../src/task-spaces.mjs");
 
-const VISIBLE_UA = "Mozilla/5.0 (X11; Linux x86_64) Chrome/148.0.0.0 Safari/537.36";
+const VISIBLE_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) Chrome/148.0.0.0 Safari/537.36";
 // What --headless=new answers. Note the product string does not say headless —
 // "Chrome/148.0.7778.167" — which is why the port reads the user agent instead.
 const HEADLESS_UA =
@@ -28,9 +29,7 @@ function fakeCdp({
   userAgent = VISIBLE_UA,
   windowState = "normal",
   failBringToFront = false,
-  targetInfos = [
-    { type: "page", targetId: "t-a", url: "https://a.example" },
-  ],
+  targetInfos = [{ type: "page", targetId: "t-a", url: "https://a.example" }],
 } = {}) {
   const calls = [];
   return {
@@ -51,7 +50,9 @@ function fakeCdp({
         case "Browser.getWindowForTarget":
           return { windowId: 7 };
         case "Browser.getWindowBounds":
-          return { bounds: { windowState, left: 0, top: 0, width: 1280, height: 900 } };
+          return {
+            bounds: { windowState, left: 0, top: 0, width: 1280, height: 900 },
+          };
         case "Target.attachToTarget":
           return { sessionId: "s-1" };
         case "Page.bringToFront":
@@ -116,10 +117,17 @@ describe("handing a space to the user puts it where they can see it", () => {
     const result = await createTaskSpacesApi(cdp).handOffTaskSpace(1);
 
     assert.deepEqual(result, { done: true, visible: true });
-    assert.equal(await ownership(), "agentDelegatedToUser", "control moved to the user");
+    assert.equal(
+      await ownership(),
+      "agentDelegatedToUser",
+      "control moved to the user",
+    );
 
     const methods = cdp.calls.map((call) => call.method);
-    assert.ok(methods.includes("Target.activateTarget"), "the space's tab is selected");
+    assert.ok(
+      methods.includes("Target.activateTarget"),
+      "the space's tab is selected",
+    );
     assert.ok(
       methods.includes("Page.bringToFront"),
       "and the window itself is raised — selecting a tab in a buried window shows nobody anything",
@@ -160,8 +168,13 @@ describe("handing a space to the user puts it where they can see it", () => {
     const cdp = fakeCdp({ windowState: "minimized" });
     await createTaskSpacesApi(cdp).handOffTaskSpace(1);
 
-    const restore = cdp.calls.find((call) => call.method === "Browser.setWindowBounds");
-    assert.deepEqual(restore?.params, { windowId: 7, bounds: { windowState: "normal" } });
+    const restore = cdp.calls.find(
+      (call) => call.method === "Browser.setWindowBounds",
+    );
+    assert.deepEqual(restore?.params, {
+      windowId: 7,
+      bounds: { windowState: "normal" },
+    });
   });
 
   it("leaves a maximized window maximized", async () => {
@@ -184,7 +197,11 @@ describe("handing a space to the user puts it where they can see it", () => {
       result = await createTaskSpacesApi(cdp).handOffTaskSpace(1);
     });
 
-    assert.deepEqual(result, { done: true, visible: false, reason: "headless" });
+    assert.deepEqual(result, {
+      done: true,
+      visible: false,
+      reason: "headless",
+    });
     // Still a real handoff: headless CI hands off with nobody watching, and the
     // e2e suite drives the port with --headless.
     assert.equal(await ownership(), "agentDelegatedToUser");
@@ -209,8 +226,14 @@ describe("handing a space to the user puts it where they can see it", () => {
     const cdp = fakeCdp({ failBringToFront: true });
     const result = await createTaskSpacesApi(cdp).handOffTaskSpace(1);
 
-    assert.deepEqual(result, { done: true, visible: false, reason: "raise-failed" });
-    assert.ok(cdp.calls.some((call) => call.method === "Target.detachFromTarget"));
+    assert.deepEqual(result, {
+      done: true,
+      visible: false,
+      reason: "raise-failed",
+    });
+    assert.ok(
+      cdp.calls.some((call) => call.method === "Target.detachFromTarget"),
+    );
     assert.ok(cdp.calls.some((call) => call.method === "releaseSession"));
   });
 
@@ -221,7 +244,9 @@ describe("handing a space to the user puts it where they can see it", () => {
 
     assert.deepEqual(result, { done: true, visible: true });
     assert.equal(await ownership(), "user");
-    assert.ok(cdp.calls.map((call) => call.method).includes("Page.bringToFront"));
+    assert.ok(
+      cdp.calls.map((call) => call.method).includes("Page.bringToFront"),
+    );
   });
 
   it("reports a space whose tabs are gone as invisible", async () => {
@@ -237,7 +262,11 @@ describe("handing a space to the user puts it where they can see it", () => {
       result = await createTaskSpacesApi(closed).handOffTaskSpace(1);
     });
 
-    assert.deepEqual(result, { done: true, visible: false, reason: "no-live-tab" });
+    assert.deepEqual(result, {
+      done: true,
+      visible: false,
+      reason: "no-live-tab",
+    });
     assert.match(warning, /no live tab/i);
     assert.doesNotMatch(warning, /EGO_LINUX_HEADLESS/);
   });

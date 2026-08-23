@@ -237,9 +237,8 @@ async function runSpacesDaemon() {
     const timer = setInterval(async () => {
       let targets;
       try {
-        ({ targetInfos: targets = [] } = await shim.cdp.call(
-          "Target.getTargets",
-        ));
+        ({ targetInfos: targets = [] } =
+          await shim.cdp.call("Target.getTargets"));
       } catch {
         // The browser went away, taking every window — including this panel —
         // with it. That is a restart, not a decision, so hand off to a fresh

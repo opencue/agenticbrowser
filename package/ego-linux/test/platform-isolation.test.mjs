@@ -113,7 +113,10 @@ function codeLines(source) {
 describe("platform isolation", () => {
   it("keeps every platform-specific call inside platform.mjs", async () => {
     const files = await sourceFiles();
-    assert.ok(files.length > 5, `expected a source tree, found ${files.length}`);
+    assert.ok(
+      files.length > 5,
+      `expected a source tree, found ${files.length}`,
+    );
 
     const violations = [];
     for (const file of files) {
@@ -142,16 +145,46 @@ describe("platform isolation", () => {
   it("checks the files it claims to, including the ones that were ported", async () => {
     // A walk that silently found nothing would make the rule above vacuous.
     const files = await sourceFiles();
+    // The files the port actually rewired. A module added later is covered by
+    // the walk regardless — this list only guards against the walk itself
+    // silently finding nothing.
     for (const expected of [
       "src/chrome.mjs",
       "src/paths.mjs",
       "src/agent-identity.mjs",
       "src/desktop.mjs",
-      "src/launch-lock.mjs",
       "bin/ego-browser.mjs",
     ]) {
       assert.ok(files.includes(expected), `${expected} is not being scanned`);
     }
+  });
+
+  it("keeps the suites off a hardcoded app directory name", async () => {
+    // The directory is ego-lite-linux on Linux and ego-lite on Windows. A test
+    // that spells it out builds a path to a state file that does not exist on
+    // the other platform, reads nothing, and carries on -- which is how three
+    // teardowns came to kill no browser at all on Windows, leaving the profile
+    // locked and the suite hanging until it timed out.
+    const { readdir } = await import("node:fs/promises");
+    const violations = [];
+    for (const entry of await readdir(join(ROOT, "test"))) {
+      if (!entry.endsWith(".mjs")) continue;
+      // platform.test.mjs asserts the constant's value, which is the point of
+      // it, and this file has to name the literal to be able to look for it.
+      if (entry === "platform.test.mjs") continue;
+      if (entry === "platform-isolation.test.mjs") continue;
+      const source = await readFile(join(ROOT, "test", entry), "utf8");
+      for (const { line, number } of codeLines(source)) {
+        if (line.includes('"ego-lite-linux"')) {
+          violations.push(`test/${entry}:${number} ${line.trim()}`);
+        }
+      }
+    }
+    assert.deepEqual(
+      violations,
+      [],
+      `use APP_DIR from ${PLATFORM_MODULE} instead:\n${violations.join("\n")}`,
+    );
   });
 
   it("would actually catch a regression", async () => {
@@ -182,10 +215,7 @@ describe("platform isolation", () => {
     for (const line of allowed) {
       const isComment = codeLines(line).length === 0;
       const flagged = RULES.some((rule) => rule.pattern.test(line));
-      assert.ok(
-        isComment || !flagged,
-        `false positive on: ${line}`,
-      );
+      assert.ok(isComment || !flagged, `false positive on: ${line}`);
     }
   });
 });

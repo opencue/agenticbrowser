@@ -211,9 +211,7 @@ describe("Linux user-control boundary", () => {
       assert.equal(errors.length, 2);
       assert.deepEqual(socket.sent, [], "navigation was not sent");
 
-      cdp.sendRaw(
-        JSON.stringify({ id: 3, method: "Page.captureScreenshot" }),
-      );
+      cdp.sendRaw(JSON.stringify({ id: 3, method: "Page.captureScreenshot" }));
       cdp.sendRaw(JSON.stringify({ id: 4, method: "Browser.getVersion" }));
       cdp.sendRaw(
         JSON.stringify({

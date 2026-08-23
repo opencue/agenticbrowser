@@ -155,7 +155,12 @@ export async function buildIcon({ sizes = SIZES, out = ICO } = {}) {
 }
 
 // Only when run directly, so the test can import packIco without rendering.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const { out, sizes, bytes } = await buildIcon();
-  process.stdout.write(`wrote ${out} (${sizes.join(", ")}px, ${bytes} bytes)\n`);
+  process.stdout.write(
+    `wrote ${out} (${sizes.join(", ")}px, ${bytes} bytes)\n`,
+  );
 }

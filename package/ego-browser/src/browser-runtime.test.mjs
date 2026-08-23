@@ -762,7 +762,9 @@ test("ensureSession lazily creates the first background target when a space is e
   const calls = installAutoEgo({ tabs: [] });
   try {
     await ensureSession();
-    const attach = calls.find((call) => call.method === "Target.attachToTarget");
+    const attach = calls.find(
+      (call) => call.method === "Target.attachToTarget",
+    );
     assert.equal(attach?.params.targetId, "auto-created-tab");
   } finally {
     cleanup();

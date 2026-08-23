@@ -1,10 +1,13 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
+
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
@@ -22,12 +25,11 @@ const TEST_ENV = {
   // encode who happened to run it.
   EGO_LINUX_CURSOR_NAME: "Testbot",
 };
-const TEST_BROWSER_STATE = join(
-  SANDBOX,
-  "state",
-  "ego-lite-linux",
-  "browser.json",
-);
+// APP_DIR, not the literal: the directory is named ego-lite-linux on Linux and
+// ego-lite on Windows, so a hardcoded name here reads no state file at all on
+// the other platform -- teardown then finds no pid, kills nothing, and the
+// surviving browser holds the profile open until the suite times out.
+const TEST_BROWSER_STATE = join(SANDBOX, "state", APP_DIR, "browser.json");
 
 /** Run a script through the real CLI, exactly as an agent would. */
 function runScript(scriptPath, { timeout = 120000 } = {}) {
@@ -69,7 +71,11 @@ function runScript(scriptPath, { timeout = 120000 } = {}) {
 after(async () => {
   try {
     const state = JSON.parse(await readFile(TEST_BROWSER_STATE, "utf8"));
-    if (state.pid) process.kill(state.pid, "SIGTERM");
+    // Not process.kill: on Windows that terminates only the browser process,
+    // and Chrome's renderer and GPU children survive holding the profile
+    // directory open -- which is what left four orphan chrome processes and a
+    // node that would not exit behind the first Windows CI run.
+    if (state.pid) await terminateProcess(state.pid);
   } catch {
     // nothing running
   }
@@ -168,11 +174,13 @@ describe("ego-browser Linux port", () => {
       /8\. getByRole count:\s+1/,
       "getByRole matches the computed accessible name",
     );
-    assert.match(
-      out,
-      /9\. screenshot:\s+\/.*\.png/,
-      "screenshot round trips to a file",
-    );
+    // Matching a leading "/" would be asserting that this is not Windows, where
+    // the path is `C:\...`. Checking the path it actually printed is both
+    // platform-neutral and closer to what the message claims.
+    const shot = /9\. screenshot:\s+(\S.*?\.png)\s*$/m.exec(out)?.[1];
+    assert.ok(shot, `no screenshot path in:\n${out}`);
+    assert.ok(isAbsolute(shot), `the screenshot path is not absolute: ${shot}`);
+    assert.ok(existsSync(shot), `the screenshot path names no file: ${shot}`);
   });
 
   it("draws the agent's cursor without disturbing the page it acts on", async () => {

@@ -139,10 +139,18 @@ export async function stage({ out, nodeExe = null } = {}) {
     await readFile(join(PORT, "package.json"), "utf8"),
   ).version;
 
-  return { payload, version, files: await manifest(payload), bundledNode: Boolean(nodeExe) };
+  return {
+    payload,
+    version,
+    files: await manifest(payload),
+    bundledNode: Boolean(nodeExe),
+  };
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
   const argv = process.argv.slice(2);
   const at = argv.indexOf("--node");
   const nodeExe = at === -1 ? null : argv[at + 1];

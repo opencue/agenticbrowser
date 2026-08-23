@@ -58,9 +58,12 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "payload\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-; runminimized, not hidden: the target is a console command, and --spaces starts
-; a detached daemon and returns within seconds. Minimized keeps that off the
-; user's screen without a VBScript wrapper, which antivirus heuristics dislike.
+; --spaces is what the Linux desktop entry runs: it opens the Spaces panel,
+; which is what clicking the app icon should do on either platform.
+;
+; runminimized, not hidden: the target is a console command that returns within
+; seconds. Minimized keeps it off the user's screen without a VBScript wrapper,
+; which antivirus heuristics dislike.
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Comment: "The browser you and your AI agents share"; Flags: runminimized
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Flags: runminimized; Tasks: desktopicon
 
@@ -69,15 +72,19 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 
 [Run]
 ; The conventional "launch it now" checkbox, running exactly what the Start
-; Menu shortcut runs. --doctor does not exist in this package; --spaces is the
-; entry point a user wants after installing.
+; Menu shortcut runs. (--doctor, which installers often use here, does not exist
+; in this package -- test/installer.test.mjs checks that against the real CLI.)
 Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; Description: "Open {#AppName}"; Flags: postinstall nowait skipifsilent runminimized
 
 [Code]
-{ Whether {app} is missing from the user's PATH.
-
-  Compared with a semicolon on both ends so that a directory whose name is a
-  suffix of an existing entry is not mistaken for it. }
+// Whether the install directory is missing from the user's PATH.
+//
+// Line comments, not { }: a Pascal block comment does not nest, so naming an
+// Inno constant inside one ends the comment at that constant's closing brace
+// and the rest of the sentence is compiled as code.
+//
+// Compared with a semicolon on both ends so that a directory whose name is a
+// suffix of an existing entry is not mistaken for it.
 function NeedsAddPath(Dir: string): boolean;
 var
   Existing: string;
@@ -90,10 +97,10 @@ begin
   Result := Pos(';' + Uppercase(Dir) + ';', ';' + Uppercase(Existing) + ';') = 0;
 end;
 
-{ Take the entry back out on uninstall.
-
-  Without this every install/uninstall cycle leaves another dead directory on
-  the user's PATH, and they accumulate silently. }
+// Take the entry back out on uninstall.
+//
+// Without this every install/uninstall cycle leaves another dead directory on
+// the user's PATH, and they accumulate silently.
 procedure RemoveFromPath(Dir: string);
 var
   Existing: string;

@@ -30,8 +30,8 @@ that takes the `PATH` entry back out with it.
 > A shell that was already open keeps the old `PATH`. Open a new terminal after
 > installing.
 
-> The installer is **not code-signed**, so SmartScreen shows *"Windows protected
-> your PC — Unknown publisher"* on first run: choose **More info → Run anyway**.
+> The installer is **not code-signed**, so SmartScreen shows _"Windows protected
+> your PC — Unknown publisher"_ on first run: choose **More info → Run anyway**.
 > Signing it needs a certificate (roughly $200–400/year), which this project does
 > not have.
 
@@ -45,7 +45,7 @@ node installer\stage.mjs --node <path to node.exe>
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\ego-lite.iss
 ```
 
-What the installer *contains* is decided by `installer/stage.mjs` and checked by
+What the installer _contains_ is decided by `installer/stage.mjs` and checked by
 `test/installer.test.mjs`, which runs everywhere — a renamed or moved file still
 compiles into a perfectly valid installer that fails on the user's machine, so
 that check reads `ego-lite.iss` back and verifies every path it points at was
@@ -150,7 +150,7 @@ the desktop and icon caches. On Windows it writes
 shell's own COM object, which is the only supported way to produce a valid
 `.lnk` without a native dependency, and points it at `assets/ego-lite.ico`.
 
-Launching either runs `--open`, which brings up the shared agent browser window.
+Launching either runs `--spaces`, which opens the Spaces overview panel.
 The icon is upstream's mark with a badge, so a port window is never mistaken for
 an upstream build.
 
@@ -319,7 +319,7 @@ then aborts with "Failed to create a ProcessSingleton". Since `launch()` only
 runs after no DevTools endpoint answered, a guard still held by a live process
 means an unreachable orphan of ours, which is terminated first.
 
-What that guard *is* differs: POSIX Chrome writes `SingletonLock` as a symlink
+What that guard _is_ differs: POSIX Chrome writes `SingletonLock` as a symlink
 naming its owner's pid, so the owner is readable off the filesystem. Windows
 Chrome uses a named mutex and a message window — nothing on disk names the owner
 — so the port finds it in the process table instead, by the `--class=` marker
@@ -330,15 +330,15 @@ Windows and is passed there purely as that marker.
 
 Everything above applies on Windows, with these differences:
 
-| Linux                                   | Windows                                                        |
-| --------------------------------------- | -------------------------------------------------------------- |
-| `~/.local/share/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite`                                      |
-| `~/.local/state/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite` (Windows has no data/state split)    |
-| browser found on `PATH`                 | standard install paths first, `where.exe` as a backstop        |
-| `/proc` for argv and ancestry           | `Win32_Process` over PowerShell, ancestry cached per process   |
-| `SIGTERM`                               | `taskkill /T /F` (both leave the crash mark `--stop` clears)   |
-| XDG desktop entry, SVG icon             | Start Menu `.lnk`, `.ico` icon                                 |
-| `--class` sets the window class         | inert as a hint; still the ownership marker                    |
+| Linux                           | Windows                                                      |
+| ------------------------------- | ------------------------------------------------------------ |
+| `~/.local/share/ego-lite-linux` | `%LOCALAPPDATA%\ego-lite`                                    |
+| `~/.local/state/ego-lite-linux` | `%LOCALAPPDATA%\ego-lite` (Windows has no data/state split)  |
+| browser found on `PATH`         | standard install paths first, `where.exe` as a backstop      |
+| `/proc` for argv and ancestry   | `Win32_Process` over PowerShell, ancestry cached per process |
+| `SIGTERM`                       | `taskkill /T /F` (both leave the crash mark `--stop` clears) |
+| XDG desktop entry, SVG icon     | Start Menu `.lnk`, `.ico` icon                               |
+| `--class` sets the window class | inert as a hint; still the ownership marker                  |
 
 Packaging: `installer/` builds `ego-lite-setup.exe` (Inno Setup, per-user, with
 a bundled Node runtime), and `scripts/make-icon.mjs` builds the `.ico` both the
@@ -378,7 +378,7 @@ remaining differences are structural rather than unfinished native methods.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                     |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                      |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.

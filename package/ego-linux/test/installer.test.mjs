@@ -29,13 +29,18 @@ after(() => rm(SANDBOX, { recursive: true, force: true }));
 const NODE_STUB = join(SANDBOX, "node.exe");
 await writeFile(NODE_STUB, "not really node, but a file that exists");
 
-const staged = await stage({ out: join(SANDBOX, "payload"), nodeExe: NODE_STUB });
+const staged = await stage({
+  out: join(SANDBOX, "payload"),
+  nodeExe: NODE_STUB,
+});
 const iss = await readFile(ISS, "utf8");
 
 /** Resolve the .iss preprocessor defines, so `{#IconPath}` reads as a path. */
 function expandDefines(text) {
   const defines = new Map();
-  for (const [, name, value] of text.matchAll(/^#define\s+(\w+)\s+"([^"]*)"/gm)) {
+  for (const [, name, value] of text.matchAll(
+    /^#define\s+(\w+)\s+"([^"]*)"/gm,
+  )) {
     defines.set(name, value);
   }
   return text.replace(/\{#(\w+)\}/g, (whole, name) =>
@@ -101,7 +106,11 @@ describe("the installer payload", () => {
 
   it("refuses to stage a payload with a missing piece", async () => {
     await assert.rejects(
-      () => stage({ out: join(SANDBOX, "bad"), nodeExe: join(SANDBOX, "nope.exe") }),
+      () =>
+        stage({
+          out: join(SANDBOX, "bad"),
+          nodeExe: join(SANDBOX, "nope.exe"),
+        }),
       /--node points at nothing/,
     );
   });
@@ -109,7 +118,10 @@ describe("the installer payload", () => {
 
 describe("the PATH shim", () => {
   it("runs the CLI through the bundled runtime, relative to itself", async () => {
-    const shim = await readFile(join(staged.payload, "ego-browser.cmd"), "utf8");
+    const shim = await readFile(
+      join(staged.payload, "ego-browser.cmd"),
+      "utf8",
+    );
     // %~dp0 ends with a separator and is what makes the install relocatable.
     assert.match(shim, /"%~dp0node\\node\.exe"/);
     assert.match(shim, /"%~dp0package\\ego-linux\\bin\\ego-browser\.mjs"/);
@@ -117,7 +129,10 @@ describe("the PATH shim", () => {
   });
 
   it("is CRLF, which is what cmd.exe requires", async () => {
-    const shim = await readFile(join(staged.payload, "ego-browser.cmd"), "utf8");
+    const shim = await readFile(
+      join(staged.payload, "ego-browser.cmd"),
+      "utf8",
+    );
     assert.ok(shim.includes("\r\n"), "LF-only .cmd files misparse on Windows");
     assert.ok(!/[^\r]\n/.test(shim), "every line ending has to be CRLF");
   });
@@ -169,6 +184,27 @@ describe("ego-lite.iss", () => {
     );
   });
 
+  it("keeps the [Code] section free of brace comments", () => {
+    // A Pascal block comment does not nest, so `{ ... {app} ... }` ends at the
+    // closing brace of {app} and the rest of the sentence is compiled as code.
+    // That is a compile error only ISCC can report, and ISCC only runs on
+    // Windows -- so the rule is checked here instead: line comments in [Code].
+    const code = iss.split("[Code]")[1] ?? "";
+    assert.ok(
+      code.includes("function NeedsAddPath"),
+      "found no [Code] section",
+    );
+    const braceComments = code
+      .split("\n")
+      .map((line, index) => ({ line, number: index + 1 }))
+      .filter(({ line }) => line.trimStart().startsWith("{"));
+    assert.deepEqual(
+      braceComments.map((c) => c.line.trim()),
+      [],
+      "use // comments in [Code]; a { } comment ends at the first } it meets",
+    );
+  });
+
   it("only launches flags the CLI actually has", () => {
     // --doctor exists in the sibling host packages and not in this one; an
     // installer whose finish-page checkbox errors out is a bad first minute.
@@ -183,10 +219,15 @@ describe("ego-lite.iss", () => {
       "--install-desktop-entry",
       "--open",
     ]);
-    const used = [...iss.matchAll(/Parameters: "(--[\w-]+)"/g)].map((m) => m[1]);
+    const used = [...iss.matchAll(/Parameters: "(--[\w-]+)"/g)].map(
+      (m) => m[1],
+    );
     assert.ok(used.length > 0, "expected the shortcuts to pass a flag");
     for (const flag of used) {
-      assert.ok(supported.has(flag), `${flag} is not a flag bin/ego-browser.mjs handles`);
+      assert.ok(
+        supported.has(flag),
+        `${flag} is not a flag bin/ego-browser.mjs handles`,
+      );
     }
   });
 });
