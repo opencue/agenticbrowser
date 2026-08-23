@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { terminateProcess } from "../src/platform.mjs";
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
@@ -19,7 +19,7 @@ const TEST_ENV = {
   EGO_LINUX_PROFILE: join(SANDBOX, "profile"),
 };
 const PREFERENCES = join(SANDBOX, "profile", "Default", "Preferences");
-const BROWSER_STATE = join(SANDBOX, "state", "ego-lite-linux", "browser.json");
+const BROWSER_STATE = join(SANDBOX, "state", APP_DIR, "browser.json");
 
 function runCli(args, { stdin = null, timeout = 120000 } = {}) {
   return new Promise((resolve, reject) => {

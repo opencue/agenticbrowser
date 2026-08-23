@@ -159,6 +159,34 @@ describe("platform isolation", () => {
     }
   });
 
+  it("keeps the suites off a hardcoded app directory name", async () => {
+    // The directory is ego-lite-linux on Linux and ego-lite on Windows. A test
+    // that spells it out builds a path to a state file that does not exist on
+    // the other platform, reads nothing, and carries on -- which is how three
+    // teardowns came to kill no browser at all on Windows, leaving the profile
+    // locked and the suite hanging until it timed out.
+    const { readdir } = await import("node:fs/promises");
+    const violations = [];
+    for (const entry of await readdir(join(ROOT, "test"))) {
+      if (!entry.endsWith(".mjs")) continue;
+      // platform.test.mjs asserts the constant's value, which is the point of
+      // it, and this file has to name the literal to be able to look for it.
+      if (entry === "platform.test.mjs") continue;
+      if (entry === "platform-isolation.test.mjs") continue;
+      const source = await readFile(join(ROOT, "test", entry), "utf8");
+      for (const { line, number } of codeLines(source)) {
+        if (line.includes('"ego-lite-linux"')) {
+          violations.push(`test/${entry}:${number} ${line.trim()}`);
+        }
+      }
+    }
+    assert.deepEqual(
+      violations,
+      [],
+      `use APP_DIR from ${PLATFORM_MODULE} instead:\n${violations.join("\n")}`,
+    );
+  });
+
   it("would actually catch a regression", async () => {
     // Proves the rules match real code and not just their own description.
     const regressions = [

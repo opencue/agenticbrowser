@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, isAbsolute, join } from "node:path";
 
-import { terminateProcess } from "../src/platform.mjs";
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
@@ -25,12 +25,11 @@ const TEST_ENV = {
   // encode who happened to run it.
   EGO_LINUX_CURSOR_NAME: "Testbot",
 };
-const TEST_BROWSER_STATE = join(
-  SANDBOX,
-  "state",
-  "ego-lite-linux",
-  "browser.json",
-);
+// APP_DIR, not the literal: the directory is named ego-lite-linux on Linux and
+// ego-lite on Windows, so a hardcoded name here reads no state file at all on
+// the other platform -- teardown then finds no pid, kills nothing, and the
+// surviving browser holds the profile open until the suite times out.
+const TEST_BROWSER_STATE = join(SANDBOX, "state", APP_DIR, "browser.json");
 
 /** Run a script through the real CLI, exactly as an agent would. */
 function runScript(scriptPath, { timeout = 120000 } = {}) {

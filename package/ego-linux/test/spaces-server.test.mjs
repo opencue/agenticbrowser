@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-import { terminateProcess } from "../src/platform.mjs";
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
@@ -139,10 +139,7 @@ after(async () => {
   shim.close();
   try {
     const state = JSON.parse(
-      await readFile(
-        join(SANDBOX, "state", "ego-lite-linux", "browser.json"),
-        "utf8",
-      ),
+      await readFile(join(SANDBOX, "state", APP_DIR, "browser.json"), "utf8"),
     );
     // Not process.kill: on Windows that terminates only the browser process,
     // and Chrome's renderer and GPU children survive holding the profile
