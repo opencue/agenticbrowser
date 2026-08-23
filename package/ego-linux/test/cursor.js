@@ -246,3 +246,64 @@ const far = await moveFor(30, 30);
 console.log(
   "31. motion scales:       " + (near < far) + ` (${near}ms vs ${far}ms)`,
 );
+
+// The label names what the cursor came to point at, so dropping it on top of
+// that hides the one thing a screenshot of the moment was taken for. Measured
+// against the words rather than the element: a heading's box runs the full
+// column width, and clearing that is not the same as clearing the text.
+const wordsOf = (selector) => `(() => {
+  const range = document.createRange();
+  range.selectNodeContents(document.querySelector('${selector}'));
+  return range.getBoundingClientRect();
+})()`;
+const clearOf = async (selector) =>
+  JSON.parse(
+    await probe(`(() => {
+      const words = ${wordsOf(selector)};
+      const badge = ${SHADOW}.getElementById('badge').getBoundingClientRect();
+      const across = Math.min(badge.right, words.right) - Math.max(badge.left, words.left);
+      const down = Math.min(badge.bottom, words.bottom) - Math.max(badge.top, words.top);
+      return JSON.stringify({
+        clear: !(across > 0 && down > 0),
+        onScreen: badge.top >= 0 && badge.left >= 0 &&
+          badge.bottom <= innerHeight && badge.right <= innerWidth,
+      });
+    })()`),
+  );
+
+// Resting in the margin above the heading — where a navigation parks it. The
+// arrow itself is over nothing, so only the offset the label trails at says
+// whether the heading is about to be covered.
+const above = JSON.parse(
+  await probe(`(() => {
+    const words = ${wordsOf("h1")};
+    return JSON.stringify({
+      x: Math.round(words.left + 20),
+      y: Math.max(6, Math.round(words.top - 10)),
+    });
+  })()`),
+);
+await page.mouse.move(above.x, above.y);
+await page.waitForTimeout(250);
+const resting = await clearOf("h1");
+console.log("32. label clears words:  " + resting.clear);
+
+// And with the arrow on the words themselves. Near their top edge, because a
+// fixed downward offset only lands on what it is naming when the thing being
+// named has room under the cursor — a heading, a card, a field with height.
+const onWords = JSON.parse(
+  await probe(`(() => {
+    const words = ${wordsOf("h1")};
+    return JSON.stringify({
+      x: Math.round(words.left + 20),
+      y: Math.round(words.top + 4),
+    });
+  })()`),
+);
+await page.mouse.move(onWords.x, onWords.y);
+await page.waitForTimeout(250);
+const marking = await clearOf("h1");
+console.log("33. clears when on them: " + marking.clear);
+console.log(
+  "34. and stays on screen: " + (resting.onScreen && marking.onScreen),
+);

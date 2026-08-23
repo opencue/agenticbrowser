@@ -212,6 +212,32 @@ test("runtimeValue reports thrown primitive exception values", () => {
   );
 });
 
+test("runtimeValue explains getComputedStyle failures caused by a missing element", () => {
+  assert.throws(
+    () =>
+      runtimeValue(
+        {
+          result: {
+            type: "object",
+            subtype: "error",
+            description:
+              "TypeError: Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.",
+          },
+          exceptionDetails: { text: "Uncaught" },
+        },
+        "getComputedStyle(document.querySelector('.pgrid'))",
+      ),
+    (error) => {
+      assert.match(
+        error.message,
+        /getComputedStyle\(\) received a non-Element/,
+      );
+      assert.match(error.message, /verify the selector exists/i);
+      return true;
+    },
+  );
+});
+
 test("runtimeValue falls back to exception className", () => {
   assert.throws(
     () =>

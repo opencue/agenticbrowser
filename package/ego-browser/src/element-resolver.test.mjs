@@ -247,6 +247,65 @@ test("object id locator zero-match error includes diagnostic candidates", async 
   );
 });
 
+test("locator zero-match on an empty task-space anchor explains the real problem", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression.includes("__egoLocatorDiagnostics")
+    ) {
+      return {
+        result: {
+          value: [
+            {
+              summary: 'h1 role=heading name="Ego Lite agent space is ready"',
+              locators: [
+                'loc=role:heading[name="Ego Lite agent space is ready"]',
+                "loc=css:h1",
+              ],
+            },
+          ],
+        },
+      };
+    }
+    if (
+      method === "Runtime.evaluate" &&
+      params.expression.includes("bodyText")
+    ) {
+      return {
+        result: {
+          value: {
+            url: "about:blank",
+            title: "Ego Lite agent space",
+            bodyText:
+              "Ego Lite agent space is ready\nThe agent has created a browser task space and should navigate this tab shortly.",
+          },
+        },
+      };
+    }
+    if (method === "Runtime.evaluate") {
+      return { result: { value: 0 } };
+    }
+    return {};
+  });
+
+  await assert.rejects(
+    () =>
+      resolveElementObjectId(
+        cdp,
+        undefined,
+        new RefMap(),
+        "loc=testid:settings__nodeHeaderToggle__topics-/scan_front_filtered_foxglove",
+      ),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.match(error.message, /new empty Ego Lite task-space anchor/);
+      assert.match(error.message, /browser\.openOrReuseTab/);
+      assert.match(error.message, /Locator diagnostics:/);
+      return true;
+    },
+  );
+});
+
 test("role locator multiple-match error includes diagnostic candidates", async () => {
   const cdp = new FakeCDP(async (method, params) => {
     if (method === "Accessibility.getFullAXTree") {
@@ -545,7 +604,7 @@ test("label locator resolves form controls by label text", async () => {
   assert.deepEqual(point, { x: 30, y: 40, sessionId: undefined });
 });
 
-test("test id locator resolves data-testid attributes exactly", async () => {
+test("test id locator resolves data-testid attributes exactly by default", async () => {
   const cdp = new FakeCDP(async (method, params) => {
     if (method === "Runtime.evaluate") {
       assert.match(params.expression, /\[data-testid\]/);
@@ -559,9 +618,31 @@ test("test id locator resolves data-testid attributes exactly", async () => {
     cdp,
     undefined,
     new RefMap(),
-    'loc=testid:exact:"submit"',
+    "loc=testid:submit",
   );
   assert.deepEqual(point, { x: 30, y: 40, sessionId: undefined });
+});
+
+test("test id locator default does not match prefixed sibling ids", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Runtime.evaluate") {
+      assert.ok(
+        params.expression.includes(
+          '=== "settings__visibilityToggle__topics-/map"',
+        ),
+      );
+      assert.doesNotMatch(params.expression, /\.includes\(/);
+      return { result: { value: 1, objectId: "object-1" } };
+    }
+    return {};
+  });
+  const { objectId } = await resolveElementObjectId(
+    cdp,
+    undefined,
+    new RefMap(),
+    "loc=testid:settings__visibilityToggle__topics-/map",
+  );
+  assert.equal(objectId, "object-1");
 });
 
 test("scoped locator center uses the matched descendant", async () => {

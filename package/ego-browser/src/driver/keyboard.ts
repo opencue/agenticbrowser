@@ -280,7 +280,10 @@ export async function focus(selector) {
 export async function fill(selector, value, options: FillOptions = {}) {
   const clearFirst = options.clearFirst ?? true;
   const timeout = options.timeout ?? state.defaultTimeout;
-  if (timeout > 0 && !(await waitForSelector(selector, { timeout }))) {
+  if (
+    timeout > 0 &&
+    !(await waitForSelector(selector, { timeout, strict: true }))
+  ) {
     throw new Error(`fill: element not found: ${JSON.stringify(selector)}`);
   }
   await withHandle(selector, async ({ objectId, sessionId }) => {
@@ -462,7 +465,10 @@ export async function selectOption(
 }
 
 async function focusWithTimeout(selector, timeout = state.defaultTimeout) {
-  if (timeout > 0 && !(await waitForSelector(selector, { timeout }))) {
+  if (
+    timeout > 0 &&
+    !(await waitForSelector(selector, { timeout, strict: true }))
+  ) {
     throw new Error(`focus: element not found: ${JSON.stringify(selector)}`);
   }
   await focus(selector);

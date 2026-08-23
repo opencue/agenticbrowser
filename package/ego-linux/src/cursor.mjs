@@ -626,6 +626,12 @@ function labelOf(taskState) {
  * every move, and re-creates itself after a navigation blew the old one away.
  */
 function renderOverlay(payload) {
+  // Declared up here, not beside the one function that reads it: the first
+  // sync() below runs the badge placement, and a const declared further down
+  // this body is still in its dead zone by then — the render would throw, the
+  // shim would swallow it, and the label would sit unplaced at the origin.
+  const EDGE = 4;
+
   const parent = document.body || document.documentElement;
   if (!parent) return;
 
@@ -1232,10 +1238,11 @@ function renderOverlay(payload) {
    * Where the label goes, in viewport coordinates: what matters is where the
    * cursor currently sits on screen, not where on the page it is marking.
    *
-   * Near an edge the badge flips back over the cursor, so the label is never the
-   * thing that gets clipped. Past the edge — the cursor scrolled out of view
-   * entirely — it stops following and docks, because a label that leaves with
-   * the cursor tells a watcher nothing about what is still happening.
+   * On screen it trails the cursor at whichever offset is clear of the thing
+   * being pointed at — see badgeSlot. Past the edge — the cursor scrolled out
+   * of view entirely — it stops following and docks, because a label that
+   * leaves with the cursor tells a watcher nothing about what is still
+   * happening.
    */
   function placeBadge(atX, atY) {
     const outY = atY < 4 ? "↑" : atY > window.innerHeight - 4 ? "↓" : "";
@@ -1255,16 +1262,9 @@ function renderOverlay(payload) {
       "px)";
 
     if (!away) {
-      // Trailing the cursor at the offset it used to sit at as a child of it,
-      // then flipped back over it near an edge so the label is never the thing
-      // that gets clipped.
       badge.classList.remove("docked");
-      badge.style.transform =
-        toPage(atX + 20, atY + 22) +
-        (atX + 340 > window.innerWidth
-          ? " translateX(calc(-100% - 40px))"
-          : "") +
-        (atY + 70 > window.innerHeight ? " translateY(-60px)" : "");
+      const slot = badgeSlot(atX, atY);
+      badge.style.transform = toPage(slot.x, slot.y);
       return;
     }
 
@@ -1281,6 +1281,218 @@ function renderOverlay(payload) {
     );
     badge.classList.add("docked");
     badge.style.transform = toPage(dockX, dockY);
+  }
+
+  /** The area two rectangles share, which is nothing at all when they miss. */
+  function overlapArea(x, y, w, h, rect) {
+    const across = Math.min(x + w, rect.right) - Math.max(x, rect.left);
+    const down = Math.min(y + h, rect.bottom) - Math.max(y, rect.top);
+    return across > 0 && down > 0 ? across * down : 0;
+  }
+
+  /**
+   * An element measured tight to its glyphs.
+   *
+   * Its own box is the wrong shape to step around: a heading's runs the full
+   * width of the column that holds it, so treating that as occupied reserves
+   * space past the last word where nothing is drawn — and the label would then
+   * dodge somewhere worse for no reason. A range over the contents gives the
+   * line boxes the text actually fills.
+   *
+   * Scenery is not a subject. Covering a corner of a section costs a watcher
+   * nothing, while protecting one leaves nowhere on screen to move to, so
+   * anything large enough to be a container is passed over.
+   */
+  function subjectRect(element) {
+    if (!element || element.tagName === "HTML" || element.tagName === "BODY")
+      return null;
+    const box = element.getBoundingClientRect();
+    if (!box.width || !box.height) return null;
+    if (box.width * box.height > window.innerWidth * window.innerHeight * 0.35)
+      return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      for (const line of range.getClientRects()) {
+        if (!line.width || !line.height) continue;
+        left = Math.min(left, line.left);
+        top = Math.min(top, line.top);
+        right = Math.max(right, line.right);
+        bottom = Math.max(bottom, line.bottom);
+      }
+    } catch {
+      // A node that cannot be ranged over still has a box, used just below.
+    }
+    // Nothing to walk — an input, an image, a control drawn entirely from its
+    // own box. That box is then the honest answer.
+    if (!(left < right && top < bottom)) return box;
+    return { left, top, right, bottom };
+  }
+
+  /**
+   * How much of the label's body would sit on this text.
+   *
+   * Its outermost pixels do not count. A rounded corner grazing the line below
+   * is not covering it, and calling that a collision sends the label walking
+   * down the page a block at a time, hunting a gap wider than any page leaves
+   * between paragraphs — it ends up further from the cursor and on top of
+   * something else. The same inset is where the probes below sample, so what
+   * counts as covered and what gets looked at are the same rectangle.
+   */
+  function covered(slot, w, h, rect) {
+    return overlapArea(
+      slot.x + EDGE,
+      slot.y + EDGE,
+      w - EDGE * 2,
+      h - EDGE * 2,
+      rect,
+    );
+  }
+
+  /**
+   * Note the element at one point, if it is text the label would sit on. Says
+   * whether that was something new, so a caller can tell when to look again.
+   *
+   * Only text actually under the label counts. The blank to the right of a
+   * heading hit-tests as the heading, and treating that as occupied would send
+   * the label away from space it could have used — so a hit whose glyphs miss
+   * the badge is remembered as seen and otherwise ignored.
+   */
+  function noteAt(rects, seen, x, y, slot, w, h) {
+    const element = document.elementFromPoint(x, y);
+    if (!element || seen.indexOf(element) !== -1) return false;
+    seen.push(element);
+    const rect = subjectRect(element);
+    if (!rect || (slot && !covered(slot, w, h, rect))) return false;
+    rects.push(rect);
+    return true;
+  }
+
+  /**
+   * Add whatever the label would land on to the list it has to clear.
+   *
+   * Six points, not one in the middle: a label is much wider than it is tall,
+   * so the word it half-covers is as often at one end as under the centre — and
+   * a single row through the middle misses a line the badge only clips with its
+   * top edge, which is exactly how it ends up sitting on a heading.
+   */
+  function absorb(rects, seen, slot, w, h) {
+    let added = false;
+    for (const y of [slot.y + EDGE, slot.y + h - EDGE])
+      for (const x of [slot.x + 6, slot.x + w / 2, slot.x + w - 6])
+        if (noteAt(rects, seen, x, y, slot, w, h)) added = true;
+    return added;
+  }
+
+  /**
+   * The offset that covers the least of what it has been told to avoid, and of
+   * those the one nearest the cursor.
+   *
+   * Trailing down and to the right is what reads best, and with nothing to
+   * avoid it wins on distance alone. Each rectangle in the way adds the three
+   * ways out of it — past the end of the text, below the line, above the line —
+   * so the choices grow with the obstacles rather than being fixed up front.
+   *
+   * Free beats near and near beats far: stepping past the end of a heading that
+   * runs the width of the page is legal and sometimes the only move, but it
+   * leaves the label so far from the arrow that the two stop reading as one
+   * object. The weight only has to outrank the widest step a page can ask for.
+   */
+  function clearestSlot(atX, atY, w, h, rects) {
+    const tries = [
+      { x: atX + 20, y: atY + 22 },
+      { x: atX + 20, y: atY - h - 10 },
+      { x: atX - w - 14, y: atY + 22 },
+      { x: atX - w - 14, y: atY - h - 10 },
+    ];
+    // Clearance measured in single figures, because the gaps a page leaves
+    // between a paragraph and the heading under it are barely taller than the
+    // label itself. Ask for ten and the only slot that fits stops fitting, and
+    // the label sets off down the page looking for room that is not there.
+    for (const rect of rects) {
+      tries.push({ x: rect.right + 12, y: atY - h / 2 });
+      tries.push({ x: atX + 20, y: rect.bottom + 4 });
+      tries.push({ x: atX + 20, y: rect.top - h - 4 });
+    }
+
+    let best = null;
+    let least = Infinity;
+    for (const spot of tries) {
+      // Clipped is worse than overlapping: a label with its end cut off says
+      // less than one sitting on a word.
+      if (spot.x < 8 || spot.y < 8) continue;
+      if (spot.x + w > window.innerWidth - 8) continue;
+      if (spot.y + h > window.innerHeight - 8) continue;
+      let over = 0;
+      for (const rect of rects) over += covered(spot, w, h, rect);
+      const score = over * 100000 + Math.hypot(spot.x - atX, spot.y - atY);
+      if (score < least) {
+        best = spot;
+        least = score;
+      }
+    }
+    // Every offset ran off an edge — a viewport too small to step around
+    // anything in. The label still has to be readable, so the default folds
+    // back inside the screen and covers whatever it covers.
+    return (
+      best || {
+        x: Math.min(
+          Math.max(atX + 20, 8),
+          Math.max(8, window.innerWidth - w - 8),
+        ),
+        y: Math.min(
+          Math.max(atY + 22, 8),
+          Math.max(8, window.innerHeight - h - 8),
+        ),
+      }
+    );
+  }
+
+  /**
+   * Where the label can sit without covering what the page came to say.
+   *
+   * Step out of the way, then look at where stepping landed it. One pass is not
+   * enough because a page is only legible one point at a time: the words the
+   * label has to clear are rarely the ones under the arrow — the cursor rests
+   * in a margin after a navigation, or on the padding of the card it is aiming
+   * at — and the heading it drops onto is two lines away from anything it
+   * asked about. Each pass adds what it actually landed on and picks again.
+   *
+   * Four is a ceiling, not a target: a label that lands on nothing settles on
+   * the first pass, which is what happens on most of a page.
+   */
+  function badgeSlot(atX, atY) {
+    const w = badge.offsetWidth || 240;
+    const h = badge.offsetHeight || 26;
+    // Everything below is a layout read, and placeBadge runs twice per render —
+    // once from sync(), once from the render itself — then again on every
+    // scroll event. A position that has not moved answers from the last one.
+    const key = Math.round(atX) + ":" + Math.round(atY) + ":" + w + ":" + h;
+    if (badge.__egoSlot && badge.__egoSlot.key === key)
+      return badge.__egoSlot.slot;
+
+    // What the cursor came to point at is protected before any offset is
+    // considered, rather than only when an offset happens to land on it. That
+    // is the one overlap with a cost — the label naming a button while covering
+    // it says less than nothing — and it holds however the search below goes.
+    const rects = [];
+    const seen = [];
+    noteAt(rects, seen, atX, atY, null, w, h);
+    // Choosing is always the last thing done, so the offset returned accounts
+    // for everything looked at. Ending on a look instead would hand back a
+    // place nothing had checked, which on a dense page is how the label ends up
+    // on the paragraph it walked to.
+    let slot = clearestSlot(atX, atY, w, h, rects);
+    for (let pass = 0; pass < 3; pass += 1) {
+      if (!absorb(rects, seen, slot, w, h)) break;
+      slot = clearestSlot(atX, atY, w, h, rects);
+    }
+    badge.__egoSlot = { key, slot };
+    return slot;
   }
 
   /** The page's own cursor for this element is the honest source of shape. */

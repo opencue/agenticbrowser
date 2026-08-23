@@ -19,6 +19,8 @@ export type HostConfig = {
   runtimeDir: string;
   seedFromChrome: boolean;
   noSandbox: boolean;
+  spaceAbandonedSeconds: number;
+  spaceIdleMinutes: number;
 };
 
 /** Optional fields from ~/.config/ego-lite/config.json */
@@ -30,6 +32,8 @@ type FileConfig = {
   seedFromChrome?: boolean;
   hostSocket?: string;
   noSandbox?: boolean;
+  spaceAbandonedSeconds?: number;
+  spaceIdleMinutes?: number;
 };
 
 function configFilePath(env: NodeJS.ProcessEnv): string {
@@ -58,6 +62,15 @@ function parseTruthy(raw: string | undefined): boolean | undefined {
   if (v === "1" || v === "true" || v === "yes") return true;
   if (v === "0" || v === "false" || v === "no") return false;
   return Boolean(raw);
+}
+
+function nonNegativeNumber(
+  envValue: string | undefined,
+  fileValue: number | undefined,
+  fallback: number,
+): number {
+  const value = envValue !== undefined ? Number(envValue) : Number(fileValue ?? fallback);
+  return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
 /**
@@ -116,6 +129,16 @@ export async function loadConfig(
   const noSandboxEnv = parseTruthy(env.EGO_CHROME_NO_SANDBOX);
   const noSandbox =
     noSandboxEnv !== undefined ? noSandboxEnv : (file.noSandbox ?? false);
+  const spaceAbandonedSeconds = nonNegativeNumber(
+    env.EGO_SPACE_ABANDONED_SEC,
+    file.spaceAbandonedSeconds,
+    120,
+  );
+  const spaceIdleMinutes = nonNegativeNumber(
+    env.EGO_SPACE_IDLE_MIN,
+    file.spaceIdleMinutes,
+    30,
+  );
 
   return {
     chromePath,
@@ -127,5 +150,7 @@ export async function loadConfig(
     runtimeDir,
     seedFromChrome,
     noSandbox,
+    spaceAbandonedSeconds,
+    spaceIdleMinutes,
   };
 }

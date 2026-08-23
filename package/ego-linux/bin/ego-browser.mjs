@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { browserStatus, stopBrowser } from "../src/chrome.mjs";
 import { installDesktopEntry } from "../src/desktop.mjs";
+import { acquireLaunchLock } from "../src/launch-lock.mjs";
 import {
   CHROME_CONFIG_CANDIDATES,
   PROFILE_DIR,
@@ -23,11 +24,13 @@ import {
   TASK_SPACE_FILE,
   STATE_DIR,
 } from "../src/paths.mjs";
+import { detachedSpawnOptions } from "../src/platform.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
 const HARNESS = new URL("../../ego-browser/dist/out/index.js", import.meta.url);
 const SKILL_WORKSPACE = new URL("../../../skills/ego-browser", import.meta.url);
+const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 
 const USAGE = `ego-browser (Linux port)
 
@@ -41,10 +44,15 @@ Linux-only commands:
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
   --prune-spaces            close spaces that hold nothing but about:blank
-                            Spaces nobody returns to are also closed on their
-                            own after 30 minutes idle; a space stays alive as
-                            long as its session keeps using it. Set
-                            EGO_LINUX_SPACE_IDLE_MIN to change the window, or
+                            Two sweeps do this on their own. A space that never
+                            loads a page is closed 120 seconds after it opens —
+                            that is the ready anchor appearing and vanishing
+                            when a run stops before navigating. A space that
+                            did work is closed after 30 minutes without its
+                            session coming back. Either closure is listed by
+                            name for whoever asks for it again. Set
+                            EGO_LINUX_SPACE_ABANDONED_SEC or
+                            EGO_LINUX_SPACE_IDLE_MIN to change a window, or
                             0 to sweep only by hand
   --stop                    stop the backing browser
   --import-chrome-profile   copy your real Chrome profile in, to inherit logins
@@ -96,17 +104,101 @@ async function liveSpacesServer() {
   }
 }
 
-/** Open the panel as a chrome-less app window on the shared browser. */
-async function openPanelWindow(url) {
-  const status = await browserStatus();
-  spawn(
-    status.binary || "google-chrome",
-    [`--user-data-dir=${PROFILE_DIR}`, `--app=${url}`],
-    {
-      detached: true,
-      stdio: "ignore",
-    },
-  ).unref();
+function isSpacesTarget(target, url) {
+  return (
+    target.type === "page" &&
+    (target.url === url ||
+      (target.title === "Spaces" &&
+        /^http:\/\/127\.0\.0\.1:\d+\/$/.test(target.url)))
+  );
+}
+
+async function trackedTaskTargets() {
+  try {
+    const state = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
+    return new Set(
+      (state.spaces || []).flatMap((space) => space.targetIds || []),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/** Open or raise the one Spaces tab in the shared agent browser window. */
+async function openPanelTab(url, shim, { recreate = false } = {}) {
+  async function targets() {
+    const { targetInfos = [] } = await shim.cdp.call("Target.getTargets");
+    return targetInfos;
+  }
+
+  let targetInfos = await targets();
+  let target = recreate
+    ? null
+    : targetInfos.find((candidate) => candidate.url === url);
+  for (const candidate of targetInfos) {
+    if (!isSpacesTarget(candidate, url)) continue;
+    if (candidate.targetId === target?.targetId) continue;
+    await shim.cdp
+      .call("Target.closeTarget", { targetId: candidate.targetId })
+      .catch(() => {});
+  }
+
+  if (!target) {
+    const { targetId } = await shim.cdp.call("Target.createTarget", { url });
+    target = { targetId, type: "page", url };
+  }
+
+  const targetId = target.targetId;
+  await shim.cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+  try {
+    const { windowId } = await shim.cdp.call("Browser.getWindowForTarget", {
+      targetId,
+    });
+    const { bounds } = await shim.cdp.call("Browser.getWindowBounds", {
+      windowId,
+    });
+    if (bounds?.windowState === "minimized") {
+      await shim.cdp.call("Browser.setWindowBounds", {
+        windowId,
+        bounds: { windowState: "normal" },
+      });
+    }
+  } catch {
+    // Raising is best-effort on compositors that reject window bounds changes.
+  }
+
+  let sessionId;
+  try {
+    ({ sessionId } = await shim.cdp.call("Target.attachToTarget", {
+      targetId,
+      flatten: true,
+    }));
+    await shim.cdp.call("Page.bringToFront", {}, sessionId).catch(() => {});
+  } finally {
+    if (sessionId) {
+      await shim.cdp
+        .call("Target.detachFromTarget", { sessionId })
+        .catch(() => {});
+    }
+  }
+
+  // The browser needs one page at startup, but the Spaces tab now fulfils that
+  // role. Remove only untracked blank tabs; task-space blank anchors stay put.
+  const tracked = await trackedTaskTargets();
+  targetInfos = await targets();
+  for (const candidate of targetInfos) {
+    if (
+      candidate.type !== "page" ||
+      candidate.url !== "about:blank" ||
+      tracked.has(candidate.targetId)
+    ) {
+      continue;
+    }
+    await shim.cdp
+      .call("Target.closeTarget", { targetId: candidate.targetId })
+      .catch(() => {});
+  }
+  return targetId;
 }
 
 /**
@@ -125,14 +217,14 @@ async function runSpacesDaemon() {
   const spaces = await startSpacesServer(shim);
   const url = `http://127.0.0.1:${spaces.port}/`;
 
+  // A fresh daemon replaces any stale overview tab, then publishes itself.
+  // Publishing afterwards prevents concurrent launchers from racing the tab.
+  const targetId = await openPanelTab(url, shim, { recreate: true });
   await mkdir(STATE_DIR, { recursive: true });
   await writeFile(
     SPACES_STATE_FILE,
-    JSON.stringify({ port: spaces.port, pid: process.pid }, null, 2),
+    JSON.stringify({ port: spaces.port, pid: process.pid, targetId }, null, 2),
   );
-
-  // The daemon owns the window it serves, so starting one always shows it.
-  await openPanelWindow(url);
 
   const outcome = await new Promise((resolve) => {
     process.on("SIGINT", () => resolve("signal"));
@@ -143,9 +235,11 @@ async function runSpacesDaemon() {
     const started = Date.now();
 
     const timer = setInterval(async () => {
-      let tabs;
+      let targets;
       try {
-        ({ tabs } = await shim.ego.listTabs());
+        ({ targetInfos: targets = [] } = await shim.cdp.call(
+          "Target.getTargets",
+        ));
       } catch {
         // The browser went away, taking every window — including this panel —
         // with it. That is a restart, not a decision, so hand off to a fresh
@@ -155,7 +249,12 @@ async function runSpacesDaemon() {
         return;
       }
 
-      const open = tabs.some((tab) => tab.url.startsWith(url));
+      // ego.listTabs() is scoped to the agent's selected task space. Once an
+      // agent selects one, that list intentionally hides this overview page and
+      // made the daemon mistake a live panel for a closed one.
+      const open = targets.some(
+        (target) => target.type === "page" && target.url.startsWith(url),
+      );
       if (open) {
         seenPanel = true;
         return;
@@ -171,16 +270,23 @@ async function runSpacesDaemon() {
 
   spaces.close();
   shim.close();
-  await rm(SPACES_STATE_FILE, { force: true });
+  // A replaced daemon can outlive its successor long enough to reach cleanup.
+  // Remove only our own record; never erase a newer daemon's published state.
+  try {
+    const state = JSON.parse(await readFile(SPACES_STATE_FILE, "utf8"));
+    if (state.pid === process.pid) {
+      await rm(SPACES_STATE_FILE, { force: true });
+    }
+  } catch {
+    // Missing or malformed state already means there is nothing of ours to
+    // clean up.
+  }
 
   if (outcome === "browser-gone") {
     spawn(
       process.execPath,
       [fileURLToPath(import.meta.url), "--spaces-daemon"],
-      {
-        detached: true,
-        stdio: "ignore",
-      },
+      detachedSpawnOptions(),
     ).unref();
   }
   return 0;
@@ -189,25 +295,29 @@ async function runSpacesDaemon() {
 /**
  * Open the Spaces overview.
  *
- * The panel is a real Chrome app window (`--app`): no tab strip, no toolbar, its
- * own app_id. Chrome routes the request to the already-running instance because
- * the profile matches, so this adds a window rather than a second browser.
+ * Spaces is a normal tab in the shared agent browser. Reusing one browser window
+ * avoids a blank backing window plus a separate overview window.
  */
-async function openSpaces() {
+async function openSpacesUnlocked() {
   const running = await liveSpacesServer();
 
-  // A running daemon already owns a window; ask it for another one. A cold start
-  // opens its own, so opening one here too would give you two.
+  // A running daemon already owns the panel; reconnect and raise its tab.
   if (running) {
-    await openPanelWindow(`http://127.0.0.1:${running}/`);
+    const shim = await createEgoShim({ headless: false });
+    try {
+      await openPanelTab(`http://127.0.0.1:${running}/`, shim);
+    } finally {
+      shim.close();
+    }
     process.stderr.write(`Spaces panel: http://127.0.0.1:${running}/\n`);
     return 0;
   }
 
-  spawn(process.execPath, [fileURLToPath(import.meta.url), "--spaces-daemon"], {
-    detached: true,
-    stdio: "ignore",
-  }).unref();
+  spawn(
+    process.execPath,
+    [fileURLToPath(import.meta.url), "--spaces-daemon"],
+    detachedSpawnOptions(),
+  ).unref();
 
   let port = null;
   const deadline = Date.now() + 30000;
@@ -222,6 +332,16 @@ async function openSpaces() {
 
   process.stderr.write(`Spaces panel: http://127.0.0.1:${port}/\n`);
   return 0;
+}
+
+async function openSpaces() {
+  await mkdir(STATE_DIR, { recursive: true });
+  const release = await acquireLaunchLock(SPACES_LAUNCH_LOCK);
+  try {
+    return await openSpacesUnlocked();
+  } finally {
+    await release();
+  }
 }
 
 /**
@@ -324,7 +444,11 @@ async function main() {
   }
   if (argv[0] === "--install-desktop-entry") {
     const { entryPath, iconPath } = await installDesktopEntry();
-    process.stdout.write(`installed ${entryPath}\n         ${iconPath}\n`);
+    process.stdout.write(
+      iconPath
+        ? `installed ${entryPath}\n         ${iconPath}\n`
+        : `installed ${entryPath}\n`,
+    );
     return 0;
   }
   if (argv[0] === "--open") {

@@ -23,6 +23,8 @@ function baseConfig(overrides: Partial<HostConfig> = {}): HostConfig {
     runtimeDir: join(tmpdir(), `ego-chrome-runtime-${process.pid}`),
     seedFromChrome: false,
     noSandbox: false,
+    spaceAbandonedSeconds: 0,
+    spaceIdleMinutes: 0,
     ...overrides,
   };
 }
@@ -30,6 +32,7 @@ function baseConfig(overrides: Partial<HostConfig> = {}): HostConfig {
 test("buildChromeArgs keeps CDP local and makes no-sandbox explicit", () => {
   const secure = buildChromeArgs(baseConfig());
   assert.ok(secure.includes("--remote-debugging-address=127.0.0.1"));
+  assert.ok(secure.includes("--class=ego-lite-linux"));
   assert.ok(!secure.includes("--no-sandbox"));
 
   const containerFallback = buildChromeArgs(baseConfig({ noSandbox: true }));

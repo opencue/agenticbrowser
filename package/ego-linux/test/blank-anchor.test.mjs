@@ -165,6 +165,20 @@ describe("the space's blank anchor tab is used, not stranded", () => {
     );
   });
 
+  it("keeps a used space in the background when the overview owns focus", async () => {
+    await seed({ ...baseSpace, lastContentAt: Date.now() });
+    const cdp = fakeCdp("https://example.com");
+
+    await createTaskSpacesApi(cdp, {
+      shouldAutoFocus: async () => false,
+    }).useTaskSpace(1);
+
+    assert.ok(
+      !cdp.calls.some((call) => call.method === "Target.activateTarget"),
+      "selecting agent work must not replace the Spaces overview",
+    );
+  });
+
   it("navigates the anchor instead of opening a second tab", async () => {
     await seed({ ...baseSpace });
     const cdp = fakeCdp("about:blank");
@@ -187,6 +201,29 @@ describe("the space's blank anchor tab is used, not stranded", () => {
     assert.ok(
       !cdp.calls.some((c) => c.method === "Target.createTarget"),
       "and no second tab is opened — this is the blank tab people were seeing",
+    );
+    assert.ok(
+      cdp.calls.some((c) => c.method === "Target.detachFromTarget"),
+      "the temporary navigation session is always detached",
+    );
+  });
+
+  it("navigates the first tab in the background while Spaces is open", async () => {
+    await seed({ ...baseSpace });
+    const cdp = fakeCdp("about:blank");
+    const api = createTaskSpacesApi(cdp, {
+      shouldAutoFocus: async () => false,
+    });
+
+    await api.createTabInSelectedSpace(tabsApi(cdp), "https://example.com");
+
+    assert.ok(
+      cdp.calls.some((call) => call.method === "Page.navigate"),
+      "the background tab still navigates",
+    );
+    assert.ok(
+      !cdp.calls.some((call) => call.method === "Target.activateTarget"),
+      "background navigation does not steal the foreground",
     );
   });
 

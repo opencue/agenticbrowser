@@ -20,6 +20,8 @@ export type EgoRuntimeDeps = {
   spaceManager: SpaceManager;
   getCdp: () => CdpBridge;
   ensureSession: () => Promise<string>;
+  /** Whether Chrome was started without a visible desktop window. */
+  headless?: boolean;
   /** Package version reported by ping when routed through runtime (optional). */
   version?: string;
 };
@@ -118,14 +120,17 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
   }
 
   async function listTabs(): Promise<{ tabs: any[] }> {
-    const allowed = new Set(deps.spaceManager.targetsForSelected());
     const all = await deps.getCdp().listPageTargets();
+    deps.spaceManager.reconcileTargets(all);
+    const allowed = new Set(deps.spaceManager.targetsForSelected());
     const filtered = all.filter((t) => allowed.has(t.targetId));
+    const activeTargetId = deps.spaceManager.activeTargetForSelected();
+    const fallbackTargetId = filtered.at(-1)?.targetId;
     const tabs = filtered.map((t, index) => ({
       targetId: t.targetId,
       title: t.title,
       url: t.url,
-      active: index === filtered.length - 1,
+      active: t.targetId === (activeTargetId ?? fallbackTargetId),
       index,
     }));
     return { tabs };
@@ -198,6 +203,17 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
     }
 
     try {
+      if (
+        method === "Target.activateTarget" &&
+        typeof msg?.params?.targetId === "string"
+      ) {
+        try {
+          deps.spaceManager.setActiveTarget(msg.params.targetId);
+        } catch {
+          // The CDP layer remains authoritative for browser-level targets that
+          // do not belong to the selected task space.
+        }
+      }
       deps.getCdp().sendRaw(msg);
     } catch (err) {
       const code =
@@ -218,6 +234,7 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
   }
 
   async function listTaskSpaces() {
+    deps.spaceManager.reconcileTargets(await deps.getCdp().listPageTargets());
     return { taskSpaces: deps.spaceManager.listPublic() };
   }
 
@@ -226,8 +243,8 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
       typeof params?.name === "string" && params.name !== ""
         ? params.name
         : "untitled";
-    const space = deps.spaceManager.createAgentSpace(name);
-    return publicSpace(space);
+    const { space, reused } = deps.spaceManager.useOrCreateAgentSpace(name);
+    return { ...publicSpace(space), reused };
   }
 
   async function useTaskSpace(params: { id?: number } = {}) {
@@ -281,8 +298,9 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
         "task space not selected",
       );
     }
+    const presentation = await presentTaskSpace();
     deps.spaceManager.completeKeep();
-    return { ok: true };
+    return presentation;
   }
 
   async function closeTaskSpace() {
@@ -302,7 +320,94 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
         // ignore close failures
       }
     }
-    return { ok: true };
+    return { done: true };
+  }
+
+  async function presentTaskSpace(params: { id?: number } = {}): Promise<{
+    done: true;
+    visible: boolean;
+    reason?: "headless" | "no-live-tab" | "raise-failed";
+  }> {
+    const selected = deps.spaceManager.selected();
+    const spaceId = Number.isFinite(Number(params.id))
+      ? Number(params.id)
+      : selected?.id;
+    if (!spaceId) {
+      throw makeEgoError(
+        "EGO_TASK_SPACE_NOT_SELECTED",
+        "task space not selected",
+      );
+    }
+
+    const cdp = deps.getCdp();
+    const allTargets = await cdp.listPageTargets();
+    deps.spaceManager.reconcileTargets(allTargets);
+    const space = deps.spaceManager
+      .list()
+      .find((candidate) => candidate.id === spaceId);
+    if (!space) {
+      throw makeEgoError(
+        "EGO_TASK_SPACE_NOT_FOUND",
+        `task space not found: ${spaceId}`,
+      );
+    }
+    const selectedTargets = new Set(space.targetIds);
+    const liveTargets = allTargets.filter((target) =>
+      selectedTargets.has(target.targetId),
+    );
+    const activeTargetId = deps.spaceManager.activeTargetFor(spaceId);
+    const activeTarget = liveTargets.find(
+      (candidate) => candidate.targetId === activeTargetId,
+    );
+    const target =
+      (activeTarget?.url !== "about:blank" ? activeTarget : undefined) ??
+      liveTargets.find((candidate) => candidate.url !== "about:blank") ??
+      activeTarget ??
+      liveTargets.at(-1);
+    if (!target) {
+      return { done: true, visible: false, reason: "no-live-tab" };
+    }
+
+    await cdp
+      .send("Target.activateTarget", { targetId: target.targetId })
+      .catch(() => {});
+    deps.spaceManager.setActiveTarget(target.targetId, spaceId);
+    if (deps.headless === true) {
+      return { done: true, visible: false, reason: "headless" };
+    }
+
+    try {
+      const { windowId } = await cdp.send("Browser.getWindowForTarget", {
+        targetId: target.targetId,
+      });
+      const { bounds } = await cdp.send("Browser.getWindowBounds", {
+        windowId,
+      });
+      if (bounds?.windowState === "minimized") {
+        await cdp.send("Browser.setWindowBounds", {
+          windowId,
+          bounds: { windowState: "normal" },
+        });
+      }
+    } catch {
+      // Some compositors reject window-bound operations. Page.bringToFront may
+      // still succeed, so keep trying rather than claiming the raise failed.
+    }
+
+    let sessionId: string | undefined;
+    try {
+      sessionId = await cdp.attach(target.targetId);
+      await cdp.send("Page.bringToFront", {}, sessionId);
+      return { done: true, visible: true };
+    } catch {
+      return { done: true, visible: false, reason: "raise-failed" };
+    } finally {
+      if (sessionId) {
+        await cdp
+          .send("Target.detachFromTarget", { sessionId })
+          .catch(() => {});
+      }
+    }
   }
 
   async function handOffTaskSpace() {
@@ -312,8 +417,12 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
         "task space not selected",
       );
     }
+    // Raise the selected page before ownership moves to the user. If Chrome is
+    // headless or the window cannot be raised, return that fact to the caller
+    // instead of claiming the user can see it.
+    const presentation = await presentTaskSpace();
     deps.spaceManager.handOff();
-    return { ok: true };
+    return presentation;
   }
 
   async function takeOverTaskSpace() {
@@ -324,7 +433,7 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
       );
     }
     deps.spaceManager.takeOver();
-    return { ok: true };
+    return { done: true };
   }
 
   async function handle(method: string, params: any = {}): Promise<any> {
@@ -344,6 +453,8 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
         return closeTaskSpace();
       case "handOffTaskSpace":
         return handOffTaskSpace();
+      case "presentTaskSpace":
+        return presentTaskSpace(params);
       case "takeOverTaskSpace":
         return takeOverTaskSpace();
       case "listTabs":

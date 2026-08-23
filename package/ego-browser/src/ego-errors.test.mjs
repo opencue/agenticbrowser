@@ -37,6 +37,7 @@ test("egoErrorCode extracts the code from every error shape", () => {
 
 test("isEgoErrorCode narrows to known codes only", () => {
   assert.equal(isEgoErrorCode("EGO_TASK_SPACE_NOT_FOUND"), true);
+  assert.equal(isEgoErrorCode("EGO_TASK_SPACE_STATE_UNAVAILABLE"), true);
   assert.equal(isEgoErrorCode("EGO_FUTURE_CODE"), false);
   assert.equal(isEgoErrorCode(undefined), false);
 });
@@ -89,11 +90,12 @@ test("resolveEgoError falls back to the raw code for a bare non-owned code", () 
   });
 });
 
-test("resolveEgoError uses the id-less guidance block for a bare user-control code", () => {
+test("resolveEgoError tells agents to resume with the same id/name for user-control", () => {
   const { code, message } = resolveEgoError("EGO_TASK_SPACE_USER_IN_CONTROL");
   assert.equal(code, "EGO_TASK_SPACE_USER_IN_CONTROL");
   assert.match(message, /taken control of this task space/);
-  assert.match(message, /taskSpaces\.takeOver\(\)/);
+  assert.match(message, /taskSpaces\.takeOver\(id\)/);
+  assert.match(message, /taskSpaces\.bringToFront\(id\)/);
   assert.doesNotMatch(message, /<id>/);
 });
 

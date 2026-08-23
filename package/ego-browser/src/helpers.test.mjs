@@ -4,9 +4,12 @@ import assert from "node:assert/strict";
 import * as helperExports from "../dist/src/helpers.js";
 import { setOverrides, state } from "../dist/src/state.js";
 import {
+  bringToFrontTaskSpace,
   claimTaskSpace,
   completeTaskSpace,
+  executeTaskSpace,
   handOffTaskSpace,
+  requestUserActionTaskSpace,
   newTaskSpace,
   helperContext,
   isEgoHardStopError,
@@ -14,6 +17,7 @@ import {
   runTaskSpace,
   useOrCreateTaskSpace,
   switchTaskSpace,
+  takeOverTaskSpace,
   waitForAgentControl,
 } from "../dist/src/helpers.js";
 
@@ -123,6 +127,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.page.mouse.click, "function");
   assert.equal(typeof context.page.mouse.down, "function");
   assert.equal(typeof context.page.mouse.up, "function");
+  assert.equal(typeof context.page.mouse.drag, "function");
   const locator = context.page.locator("#target");
   assert.equal(typeof locator.click, "function");
   assert.equal(typeof locator.fill, "function");
@@ -209,7 +214,10 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
   assert.equal(typeof context.taskSpaces.run, "function");
+  assert.equal(typeof context.taskSpaces.execute, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
+  assert.equal(typeof context.taskSpaces.bringToFront, "function");
+  assert.equal(typeof context.taskSpaces.requestUserAction, "function");
   assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
@@ -229,6 +237,130 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("help exposes test id exact-default locator guidance", () => {
+  const context = helperContext();
+  assert.match(context.help("locator"), /data-testid="foo" exactly/);
+  assert.match(context.help("page.locator"), /data-testid="foo" exactly/);
+  assert.match(context.help("page.locator"), /settings__visibilityToggle/);
+  assert.match(context.help("page.getByTestId"), /complete data-testid/);
+  assert.match(context.help("page.getByTestId"), /settings__visibilityToggle/);
+  assert.doesNotMatch(context.help(), /settings__visibilityToggle/);
+});
+
+test("page.mouse.drag accepts Playwright-style from/to arguments", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      return {};
+    },
+  });
+  try {
+    await helperContext().page.mouse.drag([10, 20], [30, 40], {
+      button: "right",
+      delay: 1,
+    });
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === "Input.dispatchMouseEvent")
+      .map((call) => ({
+        type: call.params.type,
+        x: call.params.x,
+        y: call.params.y,
+        button: call.params.button,
+        buttons: call.params.buttons,
+      })),
+    [
+      { type: "mousePressed", x: 10, y: 20, button: "right", buttons: 2 },
+      { type: "mouseMoved", x: 30, y: 40, button: "right", buttons: 2 },
+      { type: "mouseReleased", x: 30, y: 40, button: "right", buttons: 0 },
+    ],
+  );
+});
+
+test("page.mouse.drag keeps path-array arguments working", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      return {};
+    },
+  });
+  try {
+    await helperContext().page.mouse.drag(
+      [
+        [10, 20],
+        [20, 30],
+        [30, 40],
+      ],
+      { delay: 1 },
+    );
+  } finally {
+    restore();
+  }
+
+  assert.deepEqual(
+    calls
+      .filter((call) => call.method === "Input.dispatchMouseEvent")
+      .map((call) => ({
+        type: call.params.type,
+        x: call.params.x,
+        y: call.params.y,
+      })),
+    [
+      { type: "mousePressed", x: 10, y: 20 },
+      { type: "mouseMoved", x: 20, y: 30 },
+      { type: "mouseMoved", x: 30, y: 40 },
+      { type: "mouseReleased", x: 30, y: 40 },
+    ],
+  );
+});
+
+test("page.mouse.drag explains a missing destination", async () => {
+  await assert.rejects(
+    async () => helperContext().page.mouse.drag({ x: 10, y: 20 }),
+    /page\.mouse\.drag requires a destination/,
+  );
+});
+
+test("help exposes nested page.mouse.drag guidance", () => {
+  const context = helperContext();
+  assert.match(context.help("page.mouse.drag"), /from, to/);
+  assert.match(context.help("page.mouse.drag"), /ordered path/);
+  assert.match(context.help(), /page\.mouse\.drag\(from, to/);
+  assert.doesNotMatch(context.help(), /ordered path/);
+});
+
+test("help exposes nested taskSpaces.takeOver guidance", () => {
+  const context = helperContext();
+  assert.match(context.help("taskSpaces.takeOver"), /Promise<void>/);
+  assert.match(context.help("taskSpaces.takeOver"), /claims that space/);
+  assert.doesNotMatch(context.help(), /taskSpaces\.takeOver\(nameOrId\?\) =>/);
+});
+
+test("help exposes nested taskSpaces.bringToFront guidance", () => {
+  const context = helperContext();
+  assert.match(context.help("taskSpaces.bringToFront"), /Promise<object>/);
+  assert.match(context.help("taskSpaces.bringToFront"), /without selecting/);
+  assert.doesNotMatch(
+    context.help(),
+    /taskSpaces\.bringToFront\(nameOrId\) =>/,
+  );
+});
+
+test("help exposes nested taskSpaces.requestUserAction guidance", () => {
+  const context = helperContext();
+  assert.match(
+    context.help("taskSpaces.requestUserAction"),
+    /require visible: true/,
+  );
+  assert.match(context.help(), /taskSpaces\.requestUserAction\(nameOrId\)/);
 });
 
 test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
@@ -363,6 +495,359 @@ test("runTaskSpace leaves the space open when the callback fails", async () => {
   ]);
 });
 
+test("executeTaskSpace completes only after explicit verification succeeds", async () => {
+  const calls = [];
+  const spaces = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        calls.push(["createTaskSpace", name]);
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return { done: true };
+      },
+      async closeTaskSpace() {
+        calls.push(["closeTaskSpace"]);
+        spaces.length = 0;
+        return { done: true };
+      },
+    },
+    async () => {
+      const out = await executeTaskSpace("verified-search", {
+        goal: "return a verified result",
+        risk: "destructive",
+        async work({ task, attempt }) {
+          calls.push(["work", task.id, attempt]);
+          return { found: 3 };
+        },
+        async verify({ result, attempt }) {
+          calls.push(["verify", result.found, attempt]);
+          return { ok: result.found === 3, evidence: "three results" };
+        },
+      });
+
+      assert.deepEqual(out.result, { found: 3 });
+      assert.deepEqual(out.verification, {
+        ok: true,
+        evidence: "three results",
+      });
+      assert.equal(out.attempts, 1);
+      assert.equal(out.receipt.status, "verified");
+      assert.equal(out.receipt.risk, "destructive");
+      assert.deepEqual(out.completion, { done: true });
+    },
+  );
+
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "verified-search"],
+    ["useTaskSpace", 7],
+    ["work", 7, 1],
+    ["verify", 3, 1],
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["closeTaskSpace"],
+  ]);
+});
+
+test("executeTaskSpace retries failed verification for read-only work", async () => {
+  const spaces = [];
+  let workCalls = 0;
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+    },
+    async () => {
+      const out = await executeTaskSpace("eventual-result", {
+        risk: "read-only",
+        retries: { max: 2, delay: 0, on: ["verification"] },
+        complete: false,
+        async work({ attempt, previousVerification }) {
+          workCalls += 1;
+          assert.equal(previousVerification?.ok ?? false, false);
+          return attempt;
+        },
+        async verify({ result }) {
+          return { ok: result === 2, observed: result };
+        },
+      });
+
+      assert.equal(out.result, 2);
+      assert.equal(out.attempts, 2);
+      assert.deepEqual(
+        out.receipt.attempts.map((attempt) => attempt.outcome),
+        ["verification-failed", "verified"],
+      );
+      assert.deepEqual(out.completion, { done: false, skipped: "disabled" });
+    },
+  );
+  assert.equal(workCalls, 2);
+  assert.equal(spaces.length, 1);
+});
+
+test("executeTaskSpace retries ordinary read-only work errors", async () => {
+  const spaces = [];
+  let workCalls = 0;
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+    },
+    async () => {
+      const out = await executeTaskSpace("retry-read", {
+        risk: "read-only",
+        retries: { max: 1, delay: 0, on: ["error"] },
+        complete: false,
+        async work() {
+          workCalls += 1;
+          if (workCalls === 1) throw new Error("temporary read failure");
+          return "ready";
+        },
+        async verify({ result }) {
+          return result === "ready";
+        },
+      });
+
+      assert.equal(out.result, "ready");
+      assert.deepEqual(
+        out.receipt.attempts.map((attempt) => attempt.outcome),
+        ["error", "verified"],
+      );
+    },
+  );
+  assert.equal(workCalls, 2);
+});
+
+test("executeTaskSpace attaches its receipt when completion fails", async () => {
+  const spaces = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+      async closeTaskSpace() {
+        throw new Error("close failed");
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          executeTaskSpace("completion-failure", {
+            risk: "destructive",
+            work() {
+              return "done";
+            },
+            verify() {
+              return true;
+            },
+          }),
+        (error) => {
+          assert.match(error.message, /close failed/);
+          assert.equal(error.executionReceipt.status, "completion-failed");
+          assert.equal(error.executionReceipt.attempts[0].outcome, "verified");
+          return true;
+        },
+      );
+    },
+  );
+});
+
+test("executeTaskSpace leaves the space open when verification is exhausted", async () => {
+  const spaces = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+      async closeTaskSpace() {
+        assert.fail("unverified work must not complete its task space");
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          executeTaskSpace("unverified-result", {
+            risk: "read-only",
+            retries: { max: 1, delay: 0 },
+            async work({ attempt }) {
+              return attempt;
+            },
+            async verify({ result }) {
+              return { ok: false, message: `result ${result} is not ready` };
+            },
+          }),
+        (error) => {
+          assert.equal(
+            error.error_code,
+            "EGO_TASK_EXECUTION_VERIFICATION_FAILED",
+          );
+          assert.equal(error.executionReceipt.status, "failed");
+          assert.equal(error.executionReceipt.attempts.length, 2);
+          assert.match(error.message, /result 2 is not ready/);
+          return true;
+        },
+      );
+    },
+  );
+  assert.equal(spaces.length, 1);
+});
+
+test("executeTaskSpace never retries task-space hard stops", async () => {
+  const spaces = [];
+  const hardStop = Object.assign(new Error("user is controlling"), {
+    error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
+  });
+  let workCalls = 0;
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          executeTaskSpace("handoff", {
+            risk: "read-only",
+            retries: { max: 5, delay: 0 },
+            async work() {
+              workCalls += 1;
+              throw hardStop;
+            },
+            async verify() {
+              assert.fail("verify must not run after a hard stop");
+            },
+          }),
+        (error) => error === hardStop,
+      );
+    },
+  );
+  assert.equal(workCalls, 1);
+});
+
+test("executeTaskSpace validates retry safety before touching task spaces", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          executeTaskSpace("unsafe-retry", {
+            risk: "reversible",
+            retries: { max: 1 },
+            work() {},
+            verify() {
+              return true;
+            },
+          }),
+        (error) => {
+          assert.equal(error.error_code, "EGO_TASK_EXECUTION_CONTRACT");
+          assert.match(error.message, /require risk: "read-only"/);
+          return true;
+        },
+      );
+    },
+  );
+  assert.deepEqual(calls, []);
+});
+
+test("executeTaskSpace rejects an invalid verification contract without retrying", async () => {
+  const spaces = [];
+  let workCalls = 0;
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return { taskSpaces: spaces.map((space) => ({ ...space })) };
+      },
+      async createTaskSpace(name) {
+        const created = { taskId: name, id: 7, name, ownership: "agent" };
+        spaces.push(created);
+        return created;
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () =>
+          executeTaskSpace("bad-verifier", {
+            risk: "read-only",
+            retries: { max: 3, delay: 0 },
+            work() {
+              workCalls += 1;
+            },
+            verify() {
+              return { evidence: "missing ok" };
+            },
+          }),
+        (error) => {
+          assert.equal(error.error_code, "EGO_TASK_EXECUTION_CONTRACT");
+          assert.equal(error.executionReceipt.attempts.length, 1);
+          return true;
+        },
+      );
+    },
+  );
+  assert.equal(workCalls, 1);
+});
+
 test("page.url reads the current URL asynchronously", async () => {
   const restore = setOverrides({
     cdpOverride: async (method) => {
@@ -478,6 +963,67 @@ test("page.debug returns a structured redacted dump for agents", async () => {
         assert.equal(dump.trace.schema, "ego-browser.trace.v1");
         assert.equal(dump.trace.count, 0);
         assert.deepEqual(dump.errors, undefined);
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("page.debug completes passive verification in a user-controlled space", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    taskSpaceReadOnly: true,
+    selectedTaskSpaceId: 7,
+    writeFile: async (path, data) => {
+      writes.push({ path, data });
+    },
+    cdpOverride: async (method) => {
+      assert.equal(method, "Page.captureScreenshot");
+      return { data: Buffer.from("png").toString("base64") };
+    },
+  });
+  try {
+    await withEgo(
+      {
+        async listTabs() {
+          return {
+            tabs: [
+              {
+                targetId: "tab-7",
+                title: "User view",
+                url: "https://example.com/user-view",
+                active: true,
+                index: 0,
+              },
+            ],
+          };
+        },
+        async snapshot() {
+          return { content: "heading User view", refs: [] };
+        },
+      },
+      async () => {
+        const dump = await helperContext().page.debug({
+          includeEvents: false,
+          includeTrace: false,
+        });
+
+        assert.deepEqual(dump.session, {
+          hasSession: false,
+          targetId: null,
+          preferredTargetId: null,
+          defaultTimeout: state.defaultTimeout,
+          networkDomainEnabled: false,
+          taskSpaceId: 7,
+          readOnly: true,
+        });
+        assert.equal(dump.info, undefined);
+        assert.equal(dump.currentTab.targetId, "tab-7");
+        assert.equal(dump.snapshot.excerpt, "heading User view");
+        assert.match(dump.screenshot.path, /ego-browser-shot-/);
+        assert.equal(writes.length, 1);
+        assert.equal(dump.errors, undefined);
       },
     );
   } finally {
@@ -745,7 +1291,103 @@ test("useOrCreateTaskSpace reuses existing agent-owned spaces", async () => {
   assert.deepEqual(calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
 });
 
-test("useOrCreateTaskSpace selects user-owned spaces without claiming and surfaces the owned user-control guidance", async () => {
+test("useOrCreateTaskSpace does not reuse another agent session's same-named space", async () => {
+  const calls = [];
+  const previous = process.env.CODEX_SESSION_ID;
+  process.env.CODEX_SESSION_ID = "current-session-1234";
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          calls.push(["listTaskSpaces"]);
+          return {
+            taskSpaces: [
+              {
+                taskId: 7,
+                id: 7,
+                name: "checkout-flow",
+                ownership: "agent",
+                session: "other-session-1234",
+              },
+            ],
+          };
+        },
+        async createTaskSpace(name) {
+          calls.push(["createTaskSpace", name]);
+          return {
+            taskId: 8,
+            id: 8,
+            name,
+            ownership: "agent",
+            session: "current-session-1234",
+          };
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return { done: true };
+        },
+      },
+      async () => {
+        const result = await useOrCreateTaskSpace("checkout-flow");
+        assert.equal(result.id, 8);
+        assert.equal(result.session, "current-session-1234");
+      },
+    );
+  } finally {
+    if (previous === undefined) delete process.env.CODEX_SESSION_ID;
+    else process.env.CODEX_SESSION_ID = previous;
+  }
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "checkout-flow"],
+    ["useTaskSpace", 8],
+  ]);
+});
+
+test("useOrCreateTaskSpace selects user-owned spaces read-only without claiming", async () => {
+  const calls = [];
+  const previousId = state.selectedTaskSpaceId;
+  const previousReadOnly = state.taskSpaceReadOnly;
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          calls.push(["listTaskSpaces"]);
+          return {
+            taskSpaces: [
+              {
+                taskId: "checkout-flow",
+                id: 7,
+                name: "checkout-flow",
+                ownership: "user",
+              },
+            ],
+          };
+        },
+        async claimTaskSpace(id, name) {
+          calls.push(["claimTaskSpace", id, name]);
+          return { taskId: name, id, name, ownership: "agent" };
+        },
+        useTaskSpace(taskId) {
+          calls.push(["useTaskSpace", taskId]);
+          return { done: true, readOnly: true };
+        },
+      },
+      async () => {
+        const result = await useOrCreateTaskSpace("checkout-flow");
+        assert.equal(result.ownership, "user");
+        assert.equal(state.selectedTaskSpaceId, 7);
+        assert.equal(state.taskSpaceReadOnly, true);
+      },
+    );
+  } finally {
+    state.selectedTaskSpaceId = previousId;
+    state.taskSpaceReadOnly = previousReadOnly;
+  }
+  assert.deepEqual(calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
+});
+
+test("bringToFrontTaskSpace raises user-owned spaces without selecting or claiming", async () => {
   const calls = [];
   await withEgo(
     {
@@ -762,28 +1404,27 @@ test("useOrCreateTaskSpace selects user-owned spaces without claiming and surfac
           ],
         };
       },
+      async presentTaskSpace(id) {
+        calls.push(["presentTaskSpace", id]);
+        return { done: true, visible: true };
+      },
       async claimTaskSpace(id, name) {
         calls.push(["claimTaskSpace", id, name]);
         return { taskId: name, id, name, ownership: "agent" };
       },
       useTaskSpace(taskId) {
         calls.push(["useTaskSpace", taskId]);
-        // Native attaches the stable code; resolveEgoError overrides the live
-        // text with ego-browser's owned EGO_TASK_SPACE_USER_IN_CONTROL guidance.
-        return {
-          error: "The task is under user control",
-          error_code: "EGO_TASK_SPACE_USER_IN_CONTROL",
-        };
+        return taskId;
       },
     },
     async () => {
-      await assert.rejects(
-        () => useOrCreateTaskSpace("checkout-flow"),
-        /useOrCreateTaskSpace: The user has taken control of this task space/,
-      );
+      assert.deepEqual(await bringToFrontTaskSpace("checkout-flow"), {
+        done: true,
+        visible: true,
+      });
     },
   );
-  assert.deepEqual(calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
+  assert.deepEqual(calls, [["listTaskSpaces"], ["presentTaskSpace", 7]]);
 });
 
 test("claimTaskSpace claims and selects an existing user-owned space", async () => {
@@ -825,6 +1466,172 @@ test("claimTaskSpace claims and selects an existing user-owned space", async () 
     ["listTaskSpaces"],
     ["claimTaskSpace", 7, "checkout-flow"],
     ["useTaskSpace", 7],
+  ]);
+});
+
+test("takeOverTaskSpace claims a user-owned named space before taking over", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async claimTaskSpace(id, name) {
+        calls.push(["claimTaskSpace", id, name]);
+        return { taskId: name, id, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      assert.equal(await takeOverTaskSpace("checkout-flow"), undefined);
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["claimTaskSpace", 7, "checkout-flow"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace"],
+  ]);
+});
+
+test("takeOverTaskSpace selects agent-owned spaces without claiming", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async claimTaskSpace(id, name) {
+        calls.push(["claimTaskSpace", id, name]);
+        return { taskId: name, id, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      assert.equal(await takeOverTaskSpace("checkout-flow"), undefined);
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace"],
+  ]);
+});
+
+test("takeOverTaskSpace treats agentDelegatedToUser as agent-owned", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agentDelegatedToUser",
+            },
+          ],
+        };
+      },
+      async claimTaskSpace(id, name) {
+        calls.push(["claimTaskSpace", id, name]);
+        return { taskId: name, id, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      assert.equal(await takeOverTaskSpace("checkout-flow"), undefined);
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace"],
+  ]);
+});
+
+test("takeOverTaskSpace resolves digit strings by id and claims user-owned spaces", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "other",
+              id: 7,
+              name: "other",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async claimTaskSpace(id, name) {
+        calls.push(["claimTaskSpace", id, name]);
+        return { taskId: name, id, name, ownership: "agent" };
+      },
+      useTaskSpace(taskId) {
+        calls.push(["useTaskSpace", taskId]);
+        return taskId;
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      assert.equal(await takeOverTaskSpace("7"), undefined);
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["claimTaskSpace", 7, "other"],
+    ["useTaskSpace", 7],
+    ["takeOverTaskSpace"],
   ]);
 });
 
@@ -881,6 +1688,67 @@ test("useOrCreateTaskSpace creates missing spaces", async () => {
     ["listTaskSpaces"],
     ["createTaskSpace", "checkout-flow"],
     ["useTaskSpace", 7],
+  ]);
+});
+
+test("useOrCreateTaskSpace restores pages from an idle-closed replacement space", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return { taskSpaces: [] };
+      },
+      async createTaskSpace(name) {
+        calls.push(["createTaskSpace", name]);
+        return {
+          taskId: name,
+          id: 7,
+          name,
+          ownership: "agent",
+          previously: {
+            urls: [
+              "about:blank",
+              "https://app.foxglove.dev/example",
+              "chrome://version",
+              "https://app.foxglove.dev/example",
+            ],
+          },
+        };
+      },
+      useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+      },
+      async listTabs() {
+        calls.push(["listTabs"]);
+        return {
+          tabs: [
+            {
+              targetId: "anchor",
+              title: "Ego Lite agent space",
+              url: "about:blank",
+              active: true,
+            },
+          ],
+        };
+      },
+      async createTab(url) {
+        calls.push(["createTab", url]);
+        return { targetId: "anchor" };
+      },
+    },
+    async () => {
+      const task = await useOrCreateTaskSpace("agv foxglove live");
+      assert.deepEqual(task.restoredUrls, ["https://app.foxglove.dev/example"]);
+      assert.equal(task.previously.restored, true);
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["createTaskSpace", "agv foxglove live"],
+    ["useTaskSpace", 7],
+    ["listTabs"],
+    ["createTab", "https://app.foxglove.dev/example"],
   ]);
 });
 
@@ -1333,6 +2201,116 @@ test("handOffTaskSpace reports a handoff the user cannot see", async () => {
   );
 });
 
+test("requestUserActionTaskSpace hands off an agent-owned visible space", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return id;
+      },
+      async handOffTaskSpace() {
+        calls.push(["handOffTaskSpace"]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      assert.deepEqual(await requestUserActionTaskSpace("checkout-flow"), {
+        done: true,
+        visible: true,
+        presentation: "hand-off",
+      });
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
+    ["handOffTaskSpace"],
+  ]);
+});
+
+test("requestUserActionTaskSpace raises a user-owned space without claiming it", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async presentTaskSpace(id) {
+        calls.push(["presentTaskSpace", id]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      assert.deepEqual(await requestUserActionTaskSpace("checkout-flow"), {
+        done: true,
+        visible: true,
+        presentation: "bring-to-front",
+      });
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["listTaskSpaces"],
+    ["presentTaskSpace", 7],
+  ]);
+});
+
+test("requestUserActionTaskSpace rejects a page that is not visible", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "agent",
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        return id;
+      },
+      async handOffTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        requestUserActionTaskSpace("checkout-flow"),
+        /page is not visible \(headless\); do not ask the user to act/,
+      );
+    },
+  );
+});
+
 test("useOrCreateTaskSpace rejects unknown ownership", async () => {
   await withEgo(
     {
@@ -1393,13 +2371,68 @@ test("waitForAgentControl retries while snapshot reports user control", async ()
         return { content: "" };
       }),
       async () => {
-        await waitForAgentControl("t", { interval: 0, timeout: 5 });
+        await waitForAgentControl("t", { interval: 0.001, timeout: 5 });
       },
     );
   } finally {
     restore();
   }
   assert.equal(calls, 3);
+});
+
+test("waitForAgentControl waits for user-owned spaces without claiming them", async () => {
+  const restore = helperExports.__testing.setOverrides({
+    sleep: () => Promise.resolve(),
+  });
+  const calls = [];
+  let listCalls = 0;
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          listCalls += 1;
+          calls.push(["listTaskSpaces", listCalls]);
+          return {
+            taskSpaces: [
+              {
+                taskId: "checkout-flow",
+                id: 7,
+                name: "checkout-flow",
+                ownership: listCalls < 3 ? "user" : "agent",
+              },
+            ],
+          };
+        },
+        async claimTaskSpace(id, name) {
+          calls.push(["claimTaskSpace", id, name]);
+          return { taskId: name, id, name, ownership: "agent" };
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return id;
+        },
+        async snapshot() {
+          calls.push(["snapshot"]);
+          return { content: "" };
+        },
+      },
+      async () => {
+        await waitForAgentControl("checkout-flow", {
+          interval: 0.001,
+          timeout: 5,
+        });
+      },
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, [
+    ["listTaskSpaces", 1],
+    ["listTaskSpaces", 2],
+    ["listTaskSpaces", 3],
+    ["useTaskSpace", 7],
+    ["snapshot"],
+  ]);
 });
 
 test("waitForAgentControl propagates non-user-control snapshot errors", async () => {
@@ -1411,8 +2444,34 @@ test("waitForAgentControl propagates non-user-control snapshot errors", async ()
     }),
     async () => {
       await assert.rejects(
-        () => waitForAgentControl("t", { interval: 0, timeout: 5 }),
+        () => waitForAgentControl("t", { interval: 0.001, timeout: 5 }),
         /snapshot failed/,
+      );
+    },
+  );
+});
+
+test("waitForAgentControl rejects invalid polling options", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [{ taskId: "t", id: 1, name: "t", ownership: "user" }],
+        };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => waitForAgentControl("t", { interval: 0, timeout: 5 }),
+        /interval must be a positive number/,
+      );
+      await assert.rejects(
+        () =>
+          waitForAgentControl("t", {
+            interval: 1,
+            timeout: Number.NaN,
+          }),
+        /timeout must be a non-negative number/,
       );
     },
   );

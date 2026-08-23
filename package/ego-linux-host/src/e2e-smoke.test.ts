@@ -14,10 +14,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const enabled = process.env.EGO_LINUX_E2E === "1";
+const focusEnabled = process.env.EGO_LINUX_FOCUS_E2E === "1";
 
 /** package root: dist/e2e-smoke.test.js → ../ */
 const packageRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const smokeScript = join(packageRoot, "scripts", "smoke.sh");
+const focusScript = join(packageRoot, "scripts", "focus-smoke.mjs");
 
 function runSmoke(
   script: string,
@@ -56,4 +58,31 @@ test("e2e smoke example.com", { skip: !enabled }, async () => {
       .join("\n"),
   );
   assert.match(result.stdout, /title/i, "expected smoke JSON with title");
+});
+
+test("headed focus contract", { skip: !focusEnabled }, async () => {
+  assert.ok(existsSync(focusScript), `focus smoke missing: ${focusScript}`);
+  const result = await new Promise<{
+    code: number | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, [focusScript], {
+      cwd: packageRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => (stdout += String(chunk)));
+    child.stderr?.on("data", (chunk) => (stderr += String(chunk)));
+    child.on("error", reject);
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(
+    result.code,
+    0,
+    `focus smoke failed\n${result.stdout}\n${result.stderr}`,
+  );
+  assert.match(result.stdout, /"ok":true/);
 });

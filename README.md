@@ -345,11 +345,12 @@ cd package/ego-linux && npm test        # the port, headless, against a local fi
 cd package/ego-browser && npm run e2e   # upstream's real-browser suite, needs ego-browser on PATH
 ```
 
-Upstream's suite is the real measure: 45 cases, ~520 assertions, driving this CLI
-exactly as it drives the macOS app. **43 of 45 pass** on an unloaded machine. The
-two failures are not port defects — one asserts `process.platform === "darwin"`,
-the other asserts that `Browser.grantPermissions` with `clipboardReadWrite` is
-*rejected*, which is an ego lite limitation that stock Chromium does not share.
+Upstream's real-browser suite is the integration measure: it drives this CLI
+exactly as it drives the macOS app. Two cases encode expected platform
+differences rather than port defects — one asserts
+`process.platform === "darwin"`, while the other expects
+`Browser.grantPermissions` with `clipboardReadWrite` to be rejected, an ego lite
+limitation that stock Chromium does not share.
 
 > **Known flake: canvas drawing under load.** The three canvas cases
 > intermittently count one stroke too many. This is a timing race in the

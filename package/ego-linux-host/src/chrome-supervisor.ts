@@ -190,6 +190,10 @@ export function buildChromeArgs(config: HostConfig): string[] {
     "--remote-debugging-address=127.0.0.1",
     "--no-first-run",
     "--no-default-browser-check",
+    // Give the managed browser a distinct desktop identity. This changes the
+    // window grouping/icon where the compositor honours WM_CLASS; it does not
+    // turn stock Chrome/Chromium into a native Ego Lite application shell.
+    "--class=ego-lite-linux",
   ];
   if (config.headless) {
     args.push("--headless=new");

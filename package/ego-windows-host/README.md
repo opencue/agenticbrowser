@@ -33,9 +33,10 @@ cd package/ego-browser; npm ci; npm run build
 cd ../ego-windows-host; npm ci; npm run build
 
 node bin/ego-windows-host.mjs -e "
-const task = await taskSpaces.useOrCreate('demo')
-await browser.openOrReuseTab('https://example.com', { wait: true })
-console.log(await page.snapshot())
+await taskSpaces.run('demo', async () => {
+  await browser.openOrReuseTab('https://example.com', { wait: true })
+  console.log(await page.snapshot())
+})
 "
 ```
 

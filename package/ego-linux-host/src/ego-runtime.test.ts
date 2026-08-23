@@ -7,6 +7,7 @@ import { SpaceManager } from "./space-manager.js";
 type FakeCdp = CdpBridge & {
   targets: CdpPageTarget[];
   rawSent: object[];
+  calls: Array<{ method: string; params?: object; sessionId?: string }>;
   closedTargets: string[];
   messageHandlers: Set<(msg: any) => void>;
   eventHandlers: Set<(msg: any) => void>;
@@ -18,6 +19,7 @@ function makeFakeCdp(initial: CdpPageTarget[] = []): FakeCdp {
   const fake: FakeCdp = {
     targets: [...initial],
     rawSent: [],
+    calls: [],
     closedTargets: [],
     messageHandlers: new Set(),
     eventHandlers: new Set(),
@@ -27,13 +29,18 @@ function makeFakeCdp(initial: CdpPageTarget[] = []): FakeCdp {
         for (const h of fake.eventHandlers) h(msg);
       }
     },
-    async send(method: string, params?: object) {
+    async send(method: string, params?: object, sessionId?: string) {
+      fake.calls.push({ method, params, sessionId });
       if (method === "Target.closeTarget") {
         const tid = (params as { targetId?: string })?.targetId;
         if (tid) fake.closedTargets.push(tid);
         return { success: true };
       }
       if (method === "Accessibility.enable") return {};
+      if (method === "Browser.getWindowForTarget") return { windowId: 7 };
+      if (method === "Browser.getWindowBounds") {
+        return { bounds: { windowState: "minimized" } };
+      }
       if (method === "Accessibility.getFullAXTree") {
         return {
           nodes: [
@@ -79,7 +86,7 @@ function makeFakeCdp(initial: CdpPageTarget[] = []): FakeCdp {
   return fake;
 }
 
-function setup(opts?: { targets?: CdpPageTarget[] }) {
+function setup(opts?: { targets?: CdpPageTarget[]; headless?: boolean }) {
   const sm = new SpaceManager();
   const fakeCdp = makeFakeCdp(opts?.targets);
   const ensureSession = async () => "sess-1";
@@ -87,6 +94,7 @@ function setup(opts?: { targets?: CdpPageTarget[] }) {
     spaceManager: sm,
     getCdp: () => fakeCdp,
     ensureSession,
+    headless: opts?.headless ?? false,
   });
   return { sm, fakeCdp, runtime, ensureSession };
 }
@@ -138,6 +146,23 @@ test("listTabs filters to selected space only", async () => {
   assert.equal(result.tabs[0].targetId, "agent-tab");
   assert.equal(result.tabs[0].url, "https://a.example");
   void fakeCdp;
+});
+
+test("listTabs reports the space's tracked active target instead of array order", async () => {
+  const { sm, runtime } = setup({
+    targets: [
+      { targetId: "first", title: "First", url: "https://first.example", type: "page" },
+      { targetId: "second", title: "Second", url: "https://second.example", type: "page" },
+    ],
+  });
+  const space = sm.createAgentSpace("active-tab");
+  sm.use(space.id);
+  sm.assignTarget("first");
+  sm.assignTarget("second");
+  sm.setActiveTarget("first");
+
+  const { tabs } = await runtime.handle("listTabs", {});
+  assert.equal(tabs.find((tab: any) => tab.active)?.targetId, "first");
 });
 
 test("listTabs returns empty for agent space with no tabs (not user tabs)", async () => {
@@ -216,6 +241,80 @@ test("task space create / use / claim / handOff / takeOver", async () => {
   assert.equal(claimed.name, "claimed-user");
 });
 
+test("createTaskSpace reuses an existing agent goal by name", async () => {
+  const { runtime } = setup();
+  const first = await runtime.handle("createTaskSpace", { name: "same goal" });
+  const second = await runtime.handle("createTaskSpace", { name: "same goal" });
+  assert.equal(first.id, second.id);
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+});
+
+test("presentTaskSpace raises the selected live tab and restores its window", async () => {
+  const { sm, fakeCdp, runtime } = setup({
+    targets: [
+      {
+        targetId: "present-me",
+        title: "Settings",
+        url: "https://business.example/settings",
+        type: "page",
+      },
+    ],
+  });
+  const space = sm.createAgentSpace("handoff");
+  sm.use(space.id);
+  sm.assignTarget("present-me");
+
+  const result = await runtime.handle("ego.presentTaskSpace", {});
+
+  assert.deepEqual(result, { done: true, visible: true });
+  assert.deepEqual(
+    fakeCdp.calls.map(({ method }) => method),
+    [
+      "Target.activateTarget",
+      "Browser.getWindowForTarget",
+      "Browser.getWindowBounds",
+      "Browser.setWindowBounds",
+      "Page.bringToFront",
+      "Target.detachFromTarget",
+    ],
+  );
+  assert.equal(
+    fakeCdp.calls.find(({ method }) => method === "Page.bringToFront")
+      ?.sessionId,
+    "session-present-me",
+  );
+});
+
+test("presentTaskSpace reports headless mode without claiming visibility", async () => {
+  const { sm, fakeCdp, runtime } = setup({
+    headless: true,
+    targets: [
+      {
+        targetId: "headless-tab",
+        title: "",
+        url: "https://example.com",
+        type: "page",
+      },
+    ],
+  });
+  const space = sm.createAgentSpace("headless");
+  sm.use(space.id);
+  sm.assignTarget("headless-tab");
+
+  const result = await runtime.handle("presentTaskSpace", {});
+
+  assert.deepEqual(result, {
+    done: true,
+    visible: false,
+    reason: "headless",
+  });
+  assert.equal(
+    fakeCdp.calls.some(({ method }) => method === "Page.bringToFront"),
+    false,
+  );
+});
+
 test("useTaskSpace missing returns error object", async () => {
   const { runtime } = setup();
   const result = await runtime.handle("useTaskSpace", { id: 999 });
@@ -224,7 +323,16 @@ test("useTaskSpace missing returns error object", async () => {
 });
 
 test("completeTaskSpace keeps tabs under user ownership", async () => {
-  const { sm, runtime } = setup();
+  const { sm, runtime } = setup({
+    targets: [
+      {
+        targetId: "t-keep",
+        title: "Result",
+        url: "https://example.com/result",
+        type: "page",
+      },
+    ],
+  });
   const a = sm.createAgentSpace("done");
   sm.use(a.id);
   sm.assignTarget("t-keep");

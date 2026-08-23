@@ -270,7 +270,10 @@ function wrapSessionAsBridge(
         }));
     },
     async createTarget(url: string) {
-      const result = await session.send("Target.createTarget", { url });
+      const result = await session.send("Target.createTarget", {
+        url,
+        background: true,
+      });
       if (!result?.targetId) {
         throw makeEgoError(
           "EGO_CDP_SEND_FAILED",

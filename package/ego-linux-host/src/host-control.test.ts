@@ -35,6 +35,8 @@ function testConfig(dir: string): HostConfig {
     runtimeDir: join(dir, "run"),
     seedFromChrome: false,
     noSandbox: false,
+    spaceAbandonedSeconds: 0,
+    spaceIdleMinutes: 0,
   };
 }
 
