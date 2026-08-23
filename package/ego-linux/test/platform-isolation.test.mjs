@@ -113,7 +113,10 @@ function codeLines(source) {
 describe("platform isolation", () => {
   it("keeps every platform-specific call inside platform.mjs", async () => {
     const files = await sourceFiles();
-    assert.ok(files.length > 5, `expected a source tree, found ${files.length}`);
+    assert.ok(
+      files.length > 5,
+      `expected a source tree, found ${files.length}`,
+    );
 
     const violations = [];
     for (const file of files) {
@@ -184,10 +187,7 @@ describe("platform isolation", () => {
     for (const line of allowed) {
       const isComment = codeLines(line).length === 0;
       const flagged = RULES.some((rule) => rule.pattern.test(line));
-      assert.ok(
-        isComment || !flagged,
-        `false positive on: ${line}`,
-      );
+      assert.ok(isComment || !flagged, `false positive on: ${line}`);
     }
   });
 });

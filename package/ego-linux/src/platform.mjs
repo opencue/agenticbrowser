@@ -253,8 +253,7 @@ export function createPlatform({
    */
   function startMenuProgramsDir() {
     if (!isWindows) return null;
-    const roaming =
-      env.APPDATA || conventions.join(HOME, "AppData", "Roaming");
+    const roaming = env.APPDATA || conventions.join(HOME, "AppData", "Roaming");
     return conventions.join(
       roaming,
       "Microsoft",
@@ -303,7 +302,10 @@ export function createPlatform({
       return [
         configured,
         conventions.join(app(programFiles, "Google", "Chrome"), "chrome.exe"),
-        conventions.join(app(programFilesX86, "Google", "Chrome"), "chrome.exe"),
+        conventions.join(
+          app(programFilesX86, "Google", "Chrome"),
+          "chrome.exe",
+        ),
         conventions.join(app(local, "Google", "Chrome"), "chrome.exe"),
         conventions.join(app(local, "Chromium"), "chrome.exe"),
         conventions.join(

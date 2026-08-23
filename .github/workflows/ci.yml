@@ -81,6 +81,14 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package/ego-browser/package-lock.json
+      # package/ego-browser's `prepare` script is a POSIX shell one-liner, and npm
+      # runs package scripts through cmd.exe on Windows, which fails on it with
+      # `"$CI" was unexpected at this time`. The runner ships Git Bash — that is
+      # what `shell: bash` uses — so pointing npm at it makes the existing script
+      # work rather than rewriting a script this port does not own.
+      - name: Let npm run POSIX package scripts
+        run: npm config set script-shell bash
+
       - name: Build the harness the port runs
         working-directory: package/ego-browser
         run: npm ci && npm run build
@@ -111,6 +119,14 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package/ego-browser/package-lock.json
+      # package/ego-browser's `prepare` script is a POSIX shell one-liner, and npm
+      # runs package scripts through cmd.exe on Windows, which fails on it with
+      # `"$CI" was unexpected at this time`. The runner ships Git Bash — that is
+      # what `shell: bash` uses — so pointing npm at it makes the existing script
+      # work rather than rewriting a script this port does not own.
+      - name: Let npm run POSIX package scripts
+        run: npm config set script-shell bash
+
       - name: Build the harness the installer ships
         working-directory: package/ego-browser
         run: npm ci && npm run build

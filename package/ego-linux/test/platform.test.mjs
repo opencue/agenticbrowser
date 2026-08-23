@@ -126,13 +126,15 @@ describe("platform: finding a browser", () => {
 
   it("honours EGO_LINUX_CHROME first on both platforms", () => {
     assert.equal(
-      windows({ EGO_LINUX_CHROME: "D:\\portable\\chrome.exe" })
-        .browserBinaryCandidates()[0],
+      windows({
+        EGO_LINUX_CHROME: "D:\\portable\\chrome.exe",
+      }).browserBinaryCandidates()[0],
       "D:\\portable\\chrome.exe",
     );
     assert.equal(
-      linux({ EGO_LINUX_CHROME: "/opt/chrome/chrome" })
-        .browserBinaryCandidates()[0],
+      linux({
+        EGO_LINUX_CHROME: "/opt/chrome/chrome",
+      }).browserBinaryCandidates()[0],
       "/opt/chrome/chrome",
     );
   });
@@ -174,7 +176,9 @@ describe("platform: finding a browser", () => {
   it("points at the Windows profile directories logins can be imported from", () => {
     const dirs = windows().stockBrowserProfileDirs();
     assert.ok(
-      dirs.includes("C:\\Users\\dev\\AppData\\Local\\Google\\Chrome\\User Data"),
+      dirs.includes(
+        "C:\\Users\\dev\\AppData\\Local\\Google\\Chrome\\User Data",
+      ),
       // The importer copies `<dir>/Default`, which only exists under
       // `User Data` — pointing one level off would silently import nothing.
       `Chrome's Windows profile root; got ${JSON.stringify(dirs)}`,
@@ -257,21 +261,25 @@ describe("platform: process control", () => {
 });
 
 describe("platform: the profile's single-instance guard", () => {
-  it("reads the owner out of the POSIX SingletonLock symlink", {
-    // Creating a symlink on Windows needs Developer Mode or an elevated shell,
-    // and this case is about the branch Windows never takes anyway.
-    skip:
-      process.platform === "win32" &&
-      "POSIX-only: Windows Chrome guards the profile with a mutex, not a link",
-  }, async () => {
-    const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));
-    await symlink("somehost-4242", join(sandbox, "SingletonLock"));
-    try {
-      assert.equal(await linux().readSingletonOwner(sandbox), 4242);
-    } finally {
-      await rm(sandbox, { recursive: true, force: true });
-    }
-  });
+  it(
+    "reads the owner out of the POSIX SingletonLock symlink",
+    {
+      // Creating a symlink on Windows needs Developer Mode or an elevated shell,
+      // and this case is about the branch Windows never takes anyway.
+      skip:
+        process.platform === "win32" &&
+        "POSIX-only: Windows Chrome guards the profile with a mutex, not a link",
+    },
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));
+      await symlink("somehost-4242", join(sandbox, "SingletonLock"));
+      try {
+        assert.equal(await linux().readSingletonOwner(sandbox), 4242);
+      } finally {
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("reports no owner when there is no lock", async () => {
     const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));

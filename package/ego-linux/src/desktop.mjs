@@ -127,7 +127,8 @@ async function installStartMenuShortcut() {
       },
     },
   );
-  if (!ok) throw new Error(`could not create the Start Menu shortcut at ${entryPath}`);
+  if (!ok)
+    throw new Error(`could not create the Start Menu shortcut at ${entryPath}`);
 
   return { entryPath, iconPath };
 }
