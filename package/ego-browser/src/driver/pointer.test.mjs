@@ -132,6 +132,51 @@ test("click scrolls a selector into view before resolving its click point", asyn
   assert.ok(scrollIndex < dispatchIndex, "scrolls before mouse dispatch");
 });
 
+test("click awaits an optional integration activity acknowledgement", async () => {
+  const originalEgo = globalThis.ego;
+  const recorded = [];
+  globalThis.ego = {
+    async recordAgentClick(x, y) {
+      recorded.push([x, y]);
+    },
+  };
+  const restore = setOverrides({
+    cdpOverride() {
+      return {};
+    },
+  });
+  try {
+    await click([23, 45]);
+  } finally {
+    restore();
+    if (originalEgo === undefined) delete globalThis.ego;
+    else globalThis.ego = originalEgo;
+  }
+
+  assert.deepEqual(recorded, [[23, 45]]);
+});
+
+test("click ignores an integration activity acknowledgement failure", async () => {
+  const originalEgo = globalThis.ego;
+  globalThis.ego = {
+    async recordAgentClick() {
+      throw new Error("cosmetic overlay unavailable");
+    },
+  };
+  const restore = setOverrides({
+    cdpOverride() {
+      return {};
+    },
+  });
+  try {
+    await click([23, 45]);
+  } finally {
+    restore();
+    if (originalEgo === undefined) delete globalThis.ego;
+    else globalThis.ego = originalEgo;
+  }
+});
+
 test("wheel defaults to scrolling down (positive deltaY) via CDP when visible and focused", async () => {
   // CDP negates wheel deltas internally, so the DOM convention (positive = down)
   // applies end to end — matching Playwright's mouse.wheel(deltaX, deltaY).

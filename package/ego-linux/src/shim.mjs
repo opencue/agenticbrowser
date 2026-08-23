@@ -18,7 +18,21 @@ export async function createEgoShim({ headless = false } = {}) {
   const { wsUrl, port } = await ensureBrowser({ headless });
   const cdp = await connectCdp(wsUrl);
 
-  const taskSpaces = createTaskSpacesApi(cdp);
+  // Agent selection is private to this CDP connection. A person may be working
+  // in any other task-space tab while several agents navigate, click, type and
+  // capture their own pages in the background. Explicit Open / handoff still
+  // raises the requested task through presentSpace().
+  function shouldAutoFocusAgentTab() {
+    return false;
+  }
+
+  // browser.switchTab() uses Target.activateTarget. Acknowledge that as a
+  // logical per-agent selection; real activation is reserved for presentation.
+  cdp.setBackgroundAgentTabs(true);
+
+  const taskSpaces = createTaskSpacesApi(cdp, {
+    shouldAutoFocus: shouldAutoFocusAgentTab,
+  });
   cdp.setPageControlGuard(() => taskSpaces.pageControlErrorSync());
   // Downloads are armed per browser context, and a space owns one — so the
   // harness's context-less setDownloadBehavior has to be aimed at the space the
@@ -27,6 +41,7 @@ export async function createEgoShim({ headless = false } = {}) {
   const tabs = createTabsApi(cdp, {
     port,
     getScope: () => taskSpaces.selectedScope(),
+    shouldAutoFocus: shouldAutoFocusAgentTab,
   });
   const snapshot = createSnapshotApi(cdp, {
     listTabs: tabs.listTabs,
@@ -60,14 +75,10 @@ export async function createEgoShim({ headless = false } = {}) {
     void windowFit.follow(metrics, cdp.attachedHint()).catch(() => {});
   });
 
-  cdp.watchNavigation((_url, targetId) => {
+  cdp.watchNavigation(() => {
     // Shared-profile task spaces start as unfocused blank anchors, which avoids
-    // the "agent opened a blank browser" flash. Once the agent navigates the
-    // anchor to a real page, focus it before the next click/keystroke; CDP input
-    // into a background tab can time out and fall back to synthetic events.
-    if (targetId) {
-      void cdp.call("Target.activateTarget", { targetId }).catch(() => {});
-    }
+    // the "agent opened a blank browser" flash. Navigation and subsequent
+    // observation/input stay bound to the attached background target.
     void taskSpaces.noteContent().catch(() => {});
     // A navigation destroys the overlay with the document it lives in. This is
     // the earliest point the shim hears about one, and arming here is what lets
@@ -122,6 +133,7 @@ export async function createEgoShim({ headless = false } = {}) {
       cursor.hide();
       return result;
     },
+    presentTaskSpace: taskSpaces.presentTaskSpace,
     async takeOverTaskSpace(id) {
       const result = await taskSpaces.takeOverTaskSpace(id);
       cursor.show();
@@ -133,6 +145,7 @@ export async function createEgoShim({ headless = false } = {}) {
     // --- The agent's cursor -------------------------------------------------
     animationHighlightMouseToPosition: (x, y) => cursor.moveTo(x, y),
     setAgentTaskState: (taskState) => cursor.setTaskState(taskState),
+    recordAgentClick: (x, y) => cursor.recordClick(x, y),
 
     // Not upstream surface: a Linux-port extension an agent calls directly to
     // show a human what it is talking about. `ego` is a global in the heredoc,

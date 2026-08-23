@@ -213,6 +213,19 @@ export function createCursorApi(cdp, { listTabs }) {
     }
   }
 
+  async function recordClick(x, y) {
+    if (!enabled) return { done: false, reason: "cursor disabled" };
+    endRead();
+    placeAt(x, y);
+    pendingPulse = true;
+    schedule();
+    const deadline = Date.now() + 500;
+    while ((dirty || inFlight) && Date.now() < deadline) {
+      await wait(5);
+    }
+    return { done: true };
+  }
+
   return {
     /**
      * Arm the load watcher ahead of a navigation the overlay has to survive.
@@ -370,6 +383,9 @@ export function createCursorApi(cdp, { listTabs }) {
       // A heredoc is a short-lived process; never hold it open for a flourish.
       releaseTimer.unref?.();
     },
+
+    /** Persist a verified click in the Spaces trail before a CLI run exits. */
+    recordClick,
 
     /**
      * A key went to the page. Typing has no coordinates, so this is a state

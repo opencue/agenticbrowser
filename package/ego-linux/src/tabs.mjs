@@ -12,7 +12,10 @@
  * also tracks tabs the user switches to by hand.
  */
 
-export function createTabsApi(cdp, { port, getScope }) {
+export function createTabsApi(
+  cdp,
+  { port, getScope, shouldAutoFocus = async () => true },
+) {
   async function mruOrder() {
     if (!port) return null;
     try {
@@ -97,15 +100,23 @@ export function createTabsApi(cdp, { port, getScope }) {
     // browserContextId places the tab in an opt-in isolated task space; without
     // one the tab lands in the default profile, sharing live login/storage state.
     async createTab(url = "about:blank", browserContextId = undefined) {
+      const autoFocus = await shouldAutoFocus();
       const { targetId } = await cdp.call("Target.createTarget", {
         url,
         ...(browserContextId ? { browserContextId } : {}),
+        ...(!autoFocus ? { background: true, focus: false } : {}),
       });
       if (!targetId)
         throw new Error("Target.createTarget returned no targetId");
-      // Make it the active tab, matching the native behaviour where a freshly
-      // created tab is the one the agent goes on to act on.
-      await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      // Selection and visibility are separate. The agent must attach to the tab
+      // it just opened even when a person's unrelated tab keeps the foreground.
+      cdp.selectTarget?.(targetId);
+      // Native integrations may still opt into visible activation. The Linux
+      // shim keeps this false during agent work and presents only on Open /
+      // handoff, so background tabs never steal an unrelated user view.
+      if (autoFocus) {
+        await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+      }
       return { targetId };
     },
   };

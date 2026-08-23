@@ -38,7 +38,10 @@ const ISOLATED_STORAGE_RE =
  */
 const REMEMBERED_CLOSURES = 20;
 
-export function createTaskSpacesApi(cdp) {
+export function createTaskSpacesApi(
+  cdp,
+  { shouldAutoFocus = async () => true } = {},
+) {
   /**
    * Which space *this process* is working in.
    *
@@ -76,8 +79,7 @@ export function createTaskSpacesApi(cdp) {
 
   function isUserControlled(space) {
     return (
-      space?.ownership === "user" ||
-      space?.ownership === "agentDelegatedToUser"
+      space?.ownership === "user" || space?.ownership === "agentDelegatedToUser"
     );
   }
 
@@ -433,24 +435,20 @@ export function createTaskSpacesApi(cdp) {
     return space;
   }
 
-  /**
-   * Bring the space's own tab to the front, so the agent lands back on it.
-   *
-   * Exception: a brand-new space is just an about:blank anchor. Focusing that is
-   * the user-visible "agent opened a blank page" flash; the harness can still
-   * attach to the scoped tab without OS focus, and the first real navigation will
-   * activate the tab when needed.
-   */
+  /** Select the space for this agent connection and optionally foreground it. */
   async function focusSpace(space) {
     const live = await livePageTargets();
     const target = space.targetIds.map((id) => live.get(id)).find(Boolean);
     if (!target) return;
+    cdp.selectTarget?.(target.targetId);
     if (!space.lastContentAt && isBlankUrl(target.url)) {
       return;
     }
-    await cdp
-      .call("Target.activateTarget", { targetId: target.targetId })
-      .catch(() => {});
+    if (await shouldAutoFocus(target.targetId)) {
+      await cdp
+        .call("Target.activateTarget", { targetId: target.targetId })
+        .catch(() => {});
+    }
   }
 
   /**
@@ -599,8 +597,7 @@ export function createTaskSpacesApi(cdp) {
     try {
       return await cdp.call("Target.createTarget", {
         ...params,
-        // Supported by the current CDP Target.createTarget contract: open the
-        // anchor without stealing focus from the user's current window.
+        background: true,
         focus: false,
       });
     } catch (error) {
@@ -837,6 +834,14 @@ export function createTaskSpacesApi(cdp) {
       return { done: true, ...presentation };
     },
 
+    async presentTaskSpace(id) {
+      const state = await readState();
+      const space = await requireSpace(state, id, "presentTaskSpace");
+      const presentation = await presentSpace(space);
+      await writeState(state);
+      return { done: true, ...presentation };
+    },
+
     async takeOverTaskSpace(id) {
       const state = await readState();
       const space = await requireSpace(state, id, "takeOverTaskSpace");
@@ -936,9 +941,11 @@ export function createTaskSpacesApi(cdp) {
           flatten: true,
         });
         await cdp.call("Page.navigate", { url }, sessionId);
-        await cdp
-          .call("Target.activateTarget", { targetId: anchor })
-          .catch(() => {});
+        if (await shouldAutoFocus(anchor)) {
+          await cdp
+            .call("Target.activateTarget", { targetId: anchor })
+            .catch(() => {});
+        }
         return { targetId: anchor };
       }
 

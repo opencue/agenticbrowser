@@ -64,6 +64,41 @@ function runScript(source, { timeout = 120000 } = {}) {
   });
 }
 
+async function visibilityState(targetId) {
+  const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
+    targetId,
+    flatten: true,
+  });
+  shim.cdp.claimSession(sessionId);
+  try {
+    const result = await shim.cdp.call(
+      "Runtime.evaluate",
+      {
+        expression: "document.visibilityState",
+        returnByValue: true,
+      },
+      sessionId,
+    );
+    return result.result?.value;
+  } finally {
+    await shim.cdp
+      .call("Target.detachFromTarget", { sessionId })
+      .catch(() => {});
+    shim.cdp.releaseSession(sessionId);
+  }
+}
+
+async function waitForSpace(name, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const { body } = await api("/api/spaces");
+    const space = body.spaces.find((candidate) => candidate.name === name);
+    if (space?.title === "ego linux port fixture") return space;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`timed out waiting for space ${name}`);
+}
+
 /**
  * Width and height from a JPEG's start-of-frame marker. Enough to tell an
  * active space's crop from a whole-page thumbnail without a decoder.
@@ -234,6 +269,81 @@ describe("Spaces overview server", () => {
     });
 
     await api(`/api/spaces/${target.id}/close`, { method: "POST" });
+  });
+
+  it("keeps an unrelated user view visible during background input and screenshots until Open", async () => {
+    const name = "background foreground e2e";
+    const { targetId: userViewId } = await shim.cdp.call(
+      "Target.createTarget",
+      {
+        url: "data:text/html,<title>User%20view</title><h1>Do%20not%20steal%20this%20view</h1>",
+      },
+    );
+    await shim.cdp.call("Target.activateTarget", { targetId: userViewId });
+
+    let space;
+    try {
+      const running = runScript(`
+        const task = await taskSpaces.useOrCreate(${JSON.stringify(name)});
+        await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
+        await page.locator("#name-input").fill("background-ok");
+        await page.locator("#click-button").click();
+        await browser.switchTab((await browser.currentTab()).targetId);
+        const shot = await page.screenshot();
+        console.log(JSON.stringify({
+          id: task.id,
+          name: await page.locator("#name-input").inputValue(),
+          count: await page.locator("#count").textContent(),
+          shot,
+        }));
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      `);
+
+      space = await waitForSpace(name);
+      const taskId = space.id;
+      const { taskSpaces } = await shim.ego.listTaskSpaces();
+      const target = taskSpaces.find((candidate) => candidate.id === taskId);
+      const agentId = target?.targetIds?.[0];
+      assert.ok(agentId, "the agent task owns a live tab");
+      assert.equal(await visibilityState(userViewId), "visible");
+      assert.equal(await visibilityState(agentId), "hidden");
+
+      const output = await running;
+      assert.match(output, /"name":"background-ok"/);
+      assert.match(output, /"count":"clicked"/);
+      const screenshotPath = output.match(/"shot":"([^"]+)"/)?.[1];
+      assert.ok(
+        screenshotPath,
+        "the background page returned a screenshot path",
+      );
+      const screenshot = await readFile(screenshotPath);
+      assert.deepEqual(
+        [...screenshot.subarray(0, 8)],
+        [137, 80, 78, 71, 13, 10, 26, 10],
+        "the hidden agent page produced a PNG",
+      );
+      assert.equal(
+        await visibilityState(userViewId),
+        "visible",
+        "typing, clicking and screenshot capture did not steal the user view",
+      );
+
+      const opened = await api(`/api/spaces/${taskId}/use`, {
+        method: "POST",
+      });
+      assert.equal(opened.status, 200);
+      assert.equal(await visibilityState(agentId), "visible");
+      assert.equal(await visibilityState(userViewId), "hidden");
+    } finally {
+      if (space?.id) {
+        await api(`/api/spaces/${space.id}/close`, { method: "POST" }).catch(
+          () => {},
+        );
+      }
+      await shim.cdp
+        .call("Target.closeTarget", { targetId: userViewId })
+        .catch(() => {});
+    }
   });
 
   it("closes a space and forgets it", async () => {

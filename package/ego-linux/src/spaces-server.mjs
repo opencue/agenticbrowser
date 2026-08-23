@@ -348,7 +348,10 @@ export async function startSpacesServer(shim) {
       const id = Number(match[1]);
       let result;
       if (match[2] === "use") {
-        result = await ego.useTaskSpace(id);
+        await ego.useTaskSpace(id);
+        result = ego.presentTaskSpace
+          ? await ego.presentTaskSpace(id)
+          : { done: true };
       } else if (match[2] === "stop") {
         result = await ego.handOffTaskSpace(id);
       } else if (match[2] === "takeover") {

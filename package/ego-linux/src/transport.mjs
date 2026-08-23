@@ -43,6 +43,7 @@ export async function connectCdp(wsUrl) {
   let viewportWatcher = null;
   let downloadContextResolver = null;
   let pageControlGuard = null;
+  let backgroundAgentTabs = false;
 
   /** Track which tab the harness last brought to the front, and which it drives. */
   function noteActivation(payload) {
@@ -223,7 +224,11 @@ export async function connectCdp(wsUrl) {
     try {
       const message = JSON.parse(payload);
       const method = typeof message?.method === "string" ? message.method : "";
-      return method && !method.startsWith("Target.") && !method.startsWith("Browser.");
+      return (
+        method &&
+        !method.startsWith("Target.") &&
+        !method.startsWith("Browser.")
+      );
     } catch {
       return false;
     }
@@ -232,6 +237,35 @@ export async function connectCdp(wsUrl) {
   function pageControlError(payload) {
     if (!pageControlGuard || !isPageDomainPayload(payload)) return null;
     return pageControlGuard();
+  }
+
+  /**
+   * Treat a harness tab switch as a logical selection without changing the tab
+   * a person is looking at.
+   *
+   * The harness follows Target.activateTarget with a fresh attachment to the
+   * selected target. It does not need Chrome to paint that target in front; it
+   * only needs the request to succeed and activeHint() to remember the target.
+   * Explicit user presentation uses the shim's internal cdp.call path instead,
+   * so Open / handoff still performs a real foreground activation.
+   */
+  function acknowledgeBackgroundActivation(payload) {
+    if (!backgroundAgentTabs || !payload.includes("Target.activateTarget")) {
+      return false;
+    }
+    try {
+      const message = JSON.parse(payload);
+      if (message.method !== "Target.activateTarget") return false;
+      const response = JSON.stringify({
+        id: message.id,
+        result: {},
+        ...(message.sessionId ? { sessionId: message.sessionId } : {}),
+      });
+      queueMicrotask(() => runtime?.onCDPMessage?.(response));
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   return {
@@ -244,7 +278,18 @@ export async function connectCdp(wsUrl) {
         return;
       }
       noteActivation(payload);
+      if (acknowledgeBackgroundActivation(payload)) return;
       socket.send(aimDownloadsAtCurrentSpace(payload));
+    },
+
+    /** Keep harness-authored tab switches logical until the user asks to see one. */
+    setBackgroundAgentTabs(enabled) {
+      backgroundAgentTabs = enabled === true;
+    },
+
+    /** Select the target for this agent connection without foregrounding it. */
+    selectTarget(targetId) {
+      activeTargetId = targetId || null;
     },
 
     /**

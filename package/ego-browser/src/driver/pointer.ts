@@ -92,6 +92,7 @@ export async function click(target: MouseTarget, options: ClickOptions = {}) {
   }
   const completed = await finishClickProbe(point, probeId, clickCount);
   if (dispatchError && !completed) throw dispatchError;
+  await recordAgentClick(point);
 }
 
 /**
@@ -592,6 +593,19 @@ function maybeHighlight(point: Point, label?: string) {
   ego.animationHighlightMouseToPosition?.(point.x, point.y);
   if (label) {
     ego.setAgentTaskState?.(label);
+  }
+}
+
+/** Let an integration persist cosmetic click state without coupling input to it. */
+async function recordAgentClick(point: Point) {
+  const ego = (globalThis as any).ego;
+  if (typeof ego?.recordAgentClick === "function") {
+    try {
+      await ego.recordAgentClick(point.x, point.y);
+    } catch {
+      // Activity UI is cosmetic. A failed acknowledgement must never turn a
+      // click that already landed into an automation failure.
+    }
   }
 }
 
