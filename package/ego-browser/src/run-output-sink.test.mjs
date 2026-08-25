@@ -41,6 +41,22 @@ function snapshotHardStopEgo(error_code) {
   };
 }
 
+function traceOnlyEgo() {
+  const calls = [];
+  return {
+    calls,
+    sendCDPMessage(payload) {
+      const parsed = JSON.parse(payload);
+      calls.push(parsed);
+      setTimeout(() => {
+        globalThis.ego?.onCDPMessage?.(
+          JSON.stringify({ id: parsed.id, result: { frameId: "frame-1" } }),
+        );
+      }, 0);
+    },
+  };
+}
+
 function captureStream() {
   const chunks = [];
   return {
@@ -115,10 +131,10 @@ test("a swallowed user-control hard stop discards all output and prints the guid
   assert.equal(result.exitCode, 0);
   // Only the owned guidance survives — none of the script's own logging.
   assert.match(result.stdout, /taken control of this task space/);
-  assert.match(result.stdout, /taskSpaces\.takeOver\(\)/);
+  assert.match(result.stdout, /taskSpaces\.takeOver\(id\)/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
   // Printed exactly once, even though every loop iteration re-reported the hard stop.
-  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(\)/g).length, 1);
+  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(id\)/g).length, 1);
   assert.ok(ego.calls >= 3, "every iteration should have hit the hard stop");
 });
 
@@ -165,10 +181,10 @@ test("a swallowed snapshot hard stop (rejected, not resolved) also collapses to 
   assert.equal(result.exitCode, 0);
   // The owned guidance survives once; the native wording and business logs are dropped.
   assert.match(result.stdout, /taken control of this task space/);
-  assert.match(result.stdout, /taskSpaces\.takeOver\(\)/);
+  assert.match(result.stdout, /taskSpaces\.takeOver\(id\)/);
   assert.doesNotMatch(result.stdout, /native wording/);
   assert.doesNotMatch(result.stdout, /visiting|failed|ok |summary/);
-  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(\)/g).length, 1);
+  assert.equal(result.stdout.match(/taskSpaces\.takeOver\(id\)/g).length, 1);
   assert.ok(
     ego.calls >= 3,
     "every iteration should have hit the snapshot hard stop",
@@ -263,8 +279,8 @@ test("an ordinary uncaught error writes a local failure artifact", async () => {
   const writes = [];
   const restore = setOverrides({
     now: () => Date.parse("2026-08-13T00:00:00.000Z"),
-    writeFile: async (path, data) => {
-      writes.push({ path, text: String(data) });
+    writeFile: async (path, data, options) => {
+      writes.push({ path, text: String(data), options });
     },
   });
   try {
@@ -291,6 +307,7 @@ test("an ordinary uncaught error writes a local failure artifact", async () => {
     );
     assert.equal(writes.length, 1);
     assert.match(writes[0].path, /^\/tmp\/ego-browser-test-artifacts\//);
+    assert.deepEqual(writes[0].options, { mode: 0o600, flag: "wx" });
 
     const artifact = JSON.parse(writes[0].text);
     assert.equal(artifact.schema, "ego-browser.failure-artifact.v1");
@@ -299,6 +316,117 @@ test("an ordinary uncaught error writes a local failure artifact", async () => {
     assert.equal(artifact.script.lines, 4);
     assert.equal(artifact.debug.events.count, 0);
     assert.equal(artifact.debug.errors.info.name, "Error");
+    assert.equal(artifact.recovery.schema, "ego-browser.recovery.v1");
+    assert.deepEqual(
+      artifact.recovery.readThisFirst.map((step) => step.id),
+      ["error", "debug-errors"],
+    );
+    assert.equal(artifact.recovery.signals.traceItems, 0);
+    assert.deepEqual(artifact.recovery.signals.debugErrors, [
+      "info",
+      "tabs",
+      "currentTab",
+      "snapshot",
+      "screenshot",
+    ]);
+  } finally {
+    restore();
+  }
+});
+
+test("a failure artifact links locator diagnostics and trace into recovery steps", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    now: () => Date.parse("2026-08-13T00:00:00.000Z"),
+    writeFile: async (path, data) => {
+      writes.push({ path, text: String(data) });
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        await cdp("Page.navigate", { url: "https://example.com/path?token=secret" }, "sess-1", 5000);
+        throw new Error('Locator css:.missing matched 0 elements\\nLocator diagnostics:\\n  1. button role=button name="Save"; try \`loc=role:button[name="Save"]\`');
+      `,
+      traceOnlyEgo(),
+      {
+        env: {
+          EGO_BROWSER_FAILURE_ARTIFACT: "1",
+          EGO_BROWSER_FAILURE_ARTIFACT_DIR: "/tmp/ego-browser-test-artifacts",
+        },
+      },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.match(result.stderr, /failure artifact written/);
+    assert.equal(writes.length, 1);
+
+    const artifact = JSON.parse(writes[0].text);
+    assert.match(artifact.error.message, /Locator diagnostics:/);
+    assert.equal(artifact.debug.trace.schema, "ego-browser.trace.v1");
+    assert.equal(artifact.debug.trace.count, 2);
+    assert.deepEqual(
+      artifact.recovery.readThisFirst.map((step) => step.id),
+      ["error", "locator-diagnostics", "trace", "debug-errors"],
+    );
+    assert.equal(artifact.recovery.signals.locatorDiagnostics, true);
+    assert.equal(artifact.recovery.signals.locatorFailure, true);
+    assert.equal(artifact.recovery.signals.traceItems, 2);
+    assert.match(
+      artifact.recovery.readThisFirst[1].instruction,
+      /Copy a suggested loc=/,
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("a failure artifact prioritizes empty task-space recovery over ready-page locators", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    now: () => Date.parse("2026-08-13T00:00:00.000Z"),
+    writeFile: async (path, data) => {
+      writes.push({ path, text: String(data) });
+    },
+  });
+  try {
+    const result = await runScript(
+      `
+        await cdp("Page.navigate", { url: "https://example.com/path?token=secret" }, "sess-1", 5000);
+        throw new Error('Locator testid:settings__nodeHeaderToggle__topics-/scan_front_filtered_foxglove matched 0 elements\\nLocator diagnostics:\\n  1. h1 role=heading name="Ego Lite agent space is ready"; try \`loc=role:heading[name="Ego Lite agent space is ready"]\`');
+      `,
+      traceOnlyEgo(),
+      {
+        env: {
+          EGO_BROWSER_FAILURE_ARTIFACT: "1",
+          EGO_BROWSER_FAILURE_ARTIFACT_DIR: "/tmp/ego-browser-test-artifacts",
+        },
+      },
+    );
+
+    assert.ok(result.error, "expected runMain to reject");
+    assert.equal(writes.length, 1);
+
+    const artifact = JSON.parse(writes[0].text);
+    assert.deepEqual(
+      artifact.recovery.readThisFirst.map((step) => step.id),
+      [
+        "error",
+        "empty-task-space",
+        "locator-diagnostics",
+        "trace",
+        "debug-errors",
+      ],
+    );
+    assert.equal(artifact.recovery.signals.emptyTaskSpaceAnchor, true);
+    assert.match(
+      artifact.recovery.readThisFirst[1].instruction,
+      /empty task-space anchor/,
+    );
+    assert.doesNotMatch(
+      artifact.recovery.readThisFirst[2].instruction,
+      /Copy a suggested loc=/,
+    );
   } finally {
     restore();
   }
@@ -335,6 +463,8 @@ test("a failure artifact records debugError when debug hits a hard stop", async 
     assert.equal(artifact.error.message, "boom");
     assert.equal(artifact.debug, undefined);
     assert.equal(artifact.debugError.code, "EGO_TASK_SPACE_USER_IN_CONTROL");
+    assert.equal(artifact.recovery.signals.debugError, true);
+    assert.equal(artifact.recovery.readThisFirst.at(-1).id, "debug-error");
     assert.match(
       artifact.debugError.message,
       /taken control of this task space/,

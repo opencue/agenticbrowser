@@ -35,18 +35,17 @@ const LAUNCHER = new URL("../bin/ego-browser.mjs", import.meta.url);
  * running this installer — re-run --install-desktop-entry after switching node
  * versions.
  */
-function desktopEntry(execPath) {
+export function desktopEntry(execPath) {
   return `[Desktop Entry]
 Type=Application
-Name=ego lite (Linux port)
-GenericName=Agent Browser
-Comment=The browser you and your AI agents share
-Exec=${process.execPath} ${execPath} --open
+Name=ego lite Spaces (Chromium port)
+GenericName=Managed Agent Chromium
+Comment=Task-space overview for the Chrome/Chromium browser managed by ego-browser
+Exec=${process.execPath} ${execPath} --spaces
 Icon=${APP_ID}
 Terminal=false
-# Ties the browser window (launched with --class=ego-lite-linux) to this entry,
-# so the desktop shows it as its own running app under this icon instead of
-# folding it into the ordinary Chrome window group.
+# Best-effort desktop grouping for the managed Chrome/Chromium process. This
+# does not create the native Ego Lite application shell available on macOS.
 StartupWMClass=${WM_CLASS}
 Categories=Network;WebBrowser;
 Keywords=agent;automation;browser;ego;
@@ -120,7 +119,7 @@ async function installStartMenuShortcut() {
         // installer, because the shell will not resolve `node` from your shell's
         // PATH when you click the shortcut.
         EGO_LNK_TARGET: process.execPath,
-        EGO_LNK_ARGS: `"${fileURLToPath(LAUNCHER)}" --open`,
+        EGO_LNK_ARGS: `"${fileURLToPath(LAUNCHER)}" --spaces`,
         EGO_LNK_CWD: homedir(),
         EGO_LNK_DESC: "The browser you and your AI agents share",
         EGO_LNK_ICON: iconPath,

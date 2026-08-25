@@ -106,10 +106,17 @@ export function agentIdentity(cwd = process.cwd()) {
     return { profile: null, session: null };
   }
   const profile = profileFromEnvironment() || profileFromPinFile(cwd) || null;
-  const session = process.env.CLAUDE_CODE_SESSION_ID || null;
+  const session =
+    process.env.EGO_BROWSER_SESSION_ID ||
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CODEX_SESSION_ID ||
+    process.env.CODEX_THREAD_ID ||
+    process.env.OMX_SESSION_ID ||
+    null;
   return {
     profile,
-    // Enough to tell two concurrent sessions apart without being a wall of hex.
-    session: session ? session.slice(0, 8) : null,
+    // Keep the full value for collision-free ownership and name matching. The
+    // overview counts sessions but does not render this raw identifier.
+    session,
   };
 }

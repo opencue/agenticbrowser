@@ -16,6 +16,17 @@ test("loadConfig honors EGO_HEADLESS and EGO_CDP_PORT", async () => {
   assert.equal(cfg.userDataDir, "/tmp/ego-cfg-test/profile");
 });
 
+test("loadConfig exposes task-space cleanup windows", async () => {
+  const cfg = await loadConfig({
+    EGO_DATA_DIR: "/tmp/ego-cleanup-config",
+    EGO_CONFIG_DIR: "/tmp/ego-cleanup-config-missing",
+    EGO_SPACE_ABANDONED_SEC: "45",
+    EGO_SPACE_IDLE_MIN: "12",
+  });
+  assert.equal(cfg.spaceAbandonedSeconds, 45);
+  assert.equal(cfg.spaceIdleMinutes, 12);
+});
+
 test("loadConfig separates runtime state and enables explicit sandbox fallback", async () => {
   const cfg = await loadConfig({
     EGO_DATA_DIR: "/data/ego-lite",
@@ -40,6 +51,8 @@ test("loadConfig defaults are headed, cdp 9222, null chromePath", async () => {
   assert.equal(cfg.hostSocket, "/tmp/ego-cfg-defaults/host.sock");
   assert.equal(cfg.seedFromChrome, false);
   assert.equal(cfg.noSandbox, false);
+  assert.equal(cfg.spaceAbandonedSeconds, 120);
+  assert.equal(cfg.spaceIdleMinutes, 30);
 });
 
 test("loadConfig env wins over config.json", async () => {

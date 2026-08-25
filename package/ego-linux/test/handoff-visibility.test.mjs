@@ -29,6 +29,7 @@ function fakeCdp({
   userAgent = VISIBLE_UA,
   windowState = "normal",
   failBringToFront = false,
+  targetInfos = [{ type: "page", targetId: "t-a", url: "https://a.example" }],
 } = {}) {
   const calls = [];
   return {
@@ -43,11 +44,7 @@ function fakeCdp({
       calls.push({ method, params });
       switch (method) {
         case "Target.getTargets":
-          return {
-            targetInfos: [
-              { type: "page", targetId: "t-a", url: "https://a.example" },
-            ],
-          };
+          return { targetInfos };
         case "Browser.getVersion":
           return { product: "Chrome/148.0.7778.167", userAgent };
         case "Browser.getWindowForTarget":
@@ -68,7 +65,7 @@ function fakeCdp({
   };
 }
 
-async function seed() {
+async function seed(targetIds = ["t-a"]) {
   const at = Date.now();
   await mkdir(STATE_DIR, { recursive: true });
   await writeFile(
@@ -83,7 +80,7 @@ async function seed() {
           touchedAt: at,
           lastContentAt: at,
           ownership: "agent",
-          targetIds: ["t-a"],
+          targetIds,
         },
       ],
       selectedId: 1,
@@ -135,6 +132,35 @@ describe("handing a space to the user puts it where they can see it", () => {
       methods.includes("Page.bringToFront"),
       "and the window itself is raised — selecting a tab in a buried window shows nobody anything",
     );
+  });
+
+  it("raises real content instead of a stranded ready-page anchor", async () => {
+    await seed(["t-ready", "t-content"]);
+    const cdp = fakeCdp({
+      targetInfos: [
+        { type: "page", targetId: "t-ready", url: "about:blank" },
+        {
+          type: "page",
+          targetId: "t-content",
+          url: "https://business.example/settings",
+        },
+      ],
+    });
+
+    await createTaskSpacesApi(cdp).handOffTaskSpace(1);
+
+    const activation = cdp.calls.find(
+      (call) => call.method === "Target.activateTarget",
+    );
+    assert.equal(
+      activation?.params.targetId,
+      "t-content",
+      "the user should see the task's real page, not its initial ready page",
+    );
+    const attachment = cdp.calls.find(
+      (call) => call.method === "Target.attachToTarget",
+    );
+    assert.equal(attachment?.params.targetId, "t-content");
   });
 
   it("restores a minimized window", async () => {

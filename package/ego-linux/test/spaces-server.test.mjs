@@ -90,12 +90,38 @@ async function visibilityState(targetId) {
   }
 }
 
+/**
+ * Wait for a space, or for the agent script to die trying.
+ *
+ * Racing the two matters more than it looks. The script runs in another
+ * process, and when it fails the space simply never appears -- so waiting alone
+ * reports "timed out waiting for space", which says nothing about why, and the
+ * child's own error is never read because the timeout throws first. On Windows
+ * that cost a full CI round: the real error was in the child, and the log had
+ * only the timeout.
+ */
+async function waitForSpaceOrFailure(name, running, timeoutMs) {
+  const died = running.then(
+    (output) => {
+      throw new Error(
+        `the agent script exited before the space appeared:\n${output}`,
+      );
+    },
+    (error) => {
+      throw error;
+    },
+  );
+  // The race may settle on the space instead, leaving this rejection unclaimed.
+  died.catch(() => {});
+  return Promise.race([waitForSpace(name, timeoutMs), died]);
+}
+
 async function waitForSpace(name, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const { taskSpaces = [] } = await shim.ego.listTaskSpaces();
-    const space = taskSpaces.find((candidate) => candidate.name === name);
-    if (space?.targetIds?.length) return space;
+    const { body } = await api("/api/spaces");
+    const space = body.spaces.find((candidate) => candidate.name === name);
+    if (space?.title === "ego linux port fixture") return space;
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`timed out waiting for space ${name}`);
@@ -216,6 +242,11 @@ describe("Spaces overview server", () => {
     // connections; this only works because the overlay leaves its state in the
     // page, where the server reads it back.
     assert.equal(space.activity?.name, "Testbot");
+    assert.equal(
+      space.agent,
+      "Testbot",
+      "the card keeps its concise agent label",
+    );
     assert.equal(space.activity?.label, "counting clicks");
     assert.ok(space.activity.ageMs >= 0 && space.activity.ageMs < 30000);
 
@@ -257,6 +288,87 @@ describe("Spaces overview server", () => {
     assert.equal(status, 403);
   });
 
+  it("refuses a different loopback origin", async () => {
+    const { status } = await api("/api/spaces", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        origin: "http://127.0.0.1:1",
+      },
+      body: JSON.stringify({ name: "wrong local origin" }),
+    });
+    assert.equal(status, 403);
+  });
+
+  it("rejects malformed JSON instead of creating a default space", async () => {
+    const { status, body } = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{",
+    });
+    assert.equal(status, 400);
+    assert.deepEqual(body, { error: "invalid JSON body" });
+  });
+
+  it("rejects a non-object body and a non-string space name", async () => {
+    const nonObject = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "[]",
+    });
+    assert.equal(nonObject.status, 400);
+    assert.deepEqual(nonObject.body, { error: "body must be a JSON object" });
+
+    const invalidName = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: 42 }),
+    });
+    assert.equal(invalidName.status, 400);
+    assert.deepEqual(invalidName.body, {
+      error: "space name must be a string",
+    });
+  });
+
+  it("rejects an oversized request body", async () => {
+    const { status, body } = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "x".repeat(65 * 1024) }),
+    });
+    assert.equal(status, 413);
+    assert.deepEqual(body, { error: "request body too large" });
+  });
+
+  it("returns a structured 500 when a browser operation fails", async () => {
+    const failingServer = await startSpacesServer({
+      ...shim,
+      ego: {
+        ...shim.ego,
+        async createTaskSpace() {
+          throw new Error("internal browser detail");
+        },
+      },
+    });
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${failingServer.port}/api/spaces`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "will fail" }),
+          signal: AbortSignal.timeout(1000),
+        },
+      );
+      assert.equal(response.status, 500);
+      assert.deepEqual(await response.json(), {
+        error: "internal server error",
+      });
+    } finally {
+      failingServer.close();
+    }
+  });
+
   it("passes handoff visibility through to the panel", async () => {
     const { body: created } = await api("/api/spaces", {
       method: "POST",
@@ -270,6 +382,27 @@ describe("Spaces overview server", () => {
     });
     assert.equal(stopped.status, 200);
     assert.deepEqual(stopped.body, {
+      done: true,
+      visible: false,
+      reason: "headless",
+    });
+
+    await api(`/api/spaces/${target.id}/close`, { method: "POST" });
+  });
+
+  it("explicitly presents a space when Open is used", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "open visibility space" }),
+    });
+    const target = created.space;
+
+    const opened = await api(`/api/spaces/${target.id}/use`, {
+      method: "POST",
+    });
+    assert.equal(opened.status, 200);
+    assert.deepEqual(opened.body, {
       done: true,
       visible: false,
       reason: "headless",
@@ -306,7 +439,7 @@ describe("Spaces overview server", () => {
         await new Promise((resolve) => setTimeout(resolve, 1200));
       `);
 
-      space = await waitForSpace(name);
+      space = await waitForSpaceOrFailure(name, running);
       const taskId = space.id;
       const { taskSpaces } = await shim.ego.listTaskSpaces();
       const target = taskSpaces.find((candidate) => candidate.id === taskId);

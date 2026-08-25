@@ -4,6 +4,7 @@ import { constants } from "node:fs";
 import { join } from "node:path";
 
 import { BROWSER_STATE_FILE, PROFILE_DIR, STATE_DIR } from "./paths.mjs";
+import { acquireDirectoryLock } from "./launch-lock.mjs";
 import {
   clearSingletonArtifacts,
   detachedSpawnOptions,
@@ -17,6 +18,7 @@ import {
 
 // Chrome writes the negotiated port here once the DevTools endpoint is live.
 const PORT_FILE = "DevToolsActivePort";
+const BROWSER_LAUNCH_LOCK = join(STATE_DIR, "browser-launch.lock");
 
 // Shared by the launch args and the orphan reaper that reads them back out of
 // the process table — if the two spellings drifted, the reaper would match
@@ -350,12 +352,29 @@ export async function ensureBrowser({ headless = false } = {}) {
     return { wsUrl: process.env.EGO_LINUX_CDP_URL, launched: false };
   }
 
-  const state = await readBrowserState();
-  if (state?.port) {
+  async function runningBrowser() {
+    const state = await readBrowserState();
+    if (!state?.port) return null;
     const wsUrl = await probe(state.port);
-    if (wsUrl) return { port: state.port, wsUrl, launched: false };
+    return wsUrl ? { port: state.port, wsUrl, launched: false } : null;
   }
-  return launch({ headless });
+
+  const existing = await runningBrowser();
+  if (existing) return existing;
+
+  // Several agents commonly start together. Without serializing this gap, each
+  // process observes no published state and invokes Chrome; ProcessSingleton
+  // folds those invocations into one profile but still opens their about:blank
+  // requests as extra windows/tabs. Re-check after acquiring the kernel-owned
+  // lock so only its owner launches and every waiter reuses the published CDP.
+  const release = await acquireDirectoryLock(BROWSER_LAUNCH_LOCK);
+  try {
+    const winner = await runningBrowser();
+    if (winner) return winner;
+    return await launch({ headless });
+  } finally {
+    await release();
+  }
 }
 
 /**

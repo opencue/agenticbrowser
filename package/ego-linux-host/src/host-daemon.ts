@@ -16,6 +16,10 @@ import {
   type ChromeHandle,
 } from "./chrome-supervisor.js";
 import { loadConfig, type HostConfig } from "./config.js";
+import {
+  startControlCenter,
+  type ControlCenter,
+} from "./control-center.js";
 import { createEgoRuntime, type EgoRuntime } from "./ego-runtime.js";
 import { makeEgoError } from "./errors.js";
 import {
@@ -227,8 +231,11 @@ export async function startDaemon(
     const bridge = getCdp();
     const allowed = new Set(spaceManager.targetsForSelected());
     const pages = await bridge.listPageTargets();
+    spaceManager.reconcileTargets(pages);
     const inSpace = pages.filter((p) => allowed.has(p.targetId));
-    const active = inSpace[inSpace.length - 1];
+    const activeId = spaceManager.activeTargetForSelected();
+    const active =
+      inSpace.find((page) => page.targetId === activeId) ?? inSpace.at(-1);
     if (!active) {
       throw makeEgoError(
         "EGO_WEB_CONTENTS_UNAVAILABLE",
@@ -242,6 +249,7 @@ export async function startDaemon(
     spaceManager,
     getCdp,
     ensureSession,
+    headless: config.headless,
     version: HOST_VERSION,
   });
 
@@ -302,6 +310,64 @@ export async function startDaemon(
   }
 
   const clients = new Set<Socket>();
+  let lastCleanupAt = 0;
+  let controlCenter: ControlCenter | null = null;
+
+  async function cleanupStaleSpaces(force = false): Promise<void> {
+    const now = Date.now();
+    if (!force && now - lastCleanupAt < 5_000) return;
+    lastCleanupAt = now;
+    const bridge = getCdp();
+    const live = await bridge.listPageTargets();
+    spaceManager.reconcileTargets(live);
+    const pruned = spaceManager.prune({
+      abandonedAfterMs: config.spaceAbandonedSeconds * 1_000,
+      idleAfterMs: config.spaceIdleMinutes * 60_000,
+    });
+    for (const space of pruned) {
+      for (const targetId of space.targetIds) {
+        await bridge.send("Target.closeTarget", { targetId }).catch(() => {});
+      }
+    }
+    if (pruned.length > 0) await spaceManager.save();
+  }
+
+  async function ensureControlCenter(): Promise<ControlCenter> {
+    if (controlCenter) return controlCenter;
+    controlCenter = await startControlCenter({
+      async snapshot() {
+        await ensureBrowserReady();
+        await cleanupStaleSpaces(true);
+        return spaceManager.controlSnapshot();
+      },
+      async select(id) {
+        const result = spaceManager.use(id);
+        if (result.ok === false) {
+          throw makeEgoError(result.error_code, result.error);
+        }
+        await spaceManager.save();
+        return { done: true };
+      },
+      async present(id) {
+        await ensureBrowserReady();
+        const result = await runtime.handle("presentTaskSpace", { id });
+        await spaceManager.save();
+        return result;
+      },
+      async close(id) {
+        await ensureBrowserReady();
+        const targetIds = spaceManager.close(id);
+        for (const targetId of targetIds) {
+          await getCdp()
+            .send("Target.closeTarget", { targetId })
+            .catch(() => {});
+        }
+        await spaceManager.save();
+        return { done: true };
+      },
+    });
+    return controlCenter;
+  }
 
   async function handleRequest(
     method: string,
@@ -311,7 +377,13 @@ export async function startDaemon(
       return { ok: true, version: HOST_VERSION };
     }
     if (method === "doctor") {
-      return buildDoctor(config, chrome, spaceManager, socketPath);
+      return {
+        ...(await buildDoctor(config, chrome, spaceManager, socketPath)),
+        controlCenterUrl: controlCenter?.url ?? null,
+      };
+    }
+    if (method === "controlCenter") {
+      return { url: (await ensureControlCenter()).url };
     }
     if (method === "reload") {
       // Drop CDP and reconnect; respawn Chrome if CDP is down.
@@ -358,6 +430,7 @@ export async function startDaemon(
     }
     if (method.startsWith("ego.")) {
       await ensureBrowserReady();
+      await cleanupStaleSpaces();
       const result = await runtime.handle(method, params ?? {});
       // Persist space mutations (best-effort)
       try {
@@ -456,6 +529,10 @@ export async function startDaemon(
       detachForward();
       detachForward = undefined;
     }
+    if (controlCenter) {
+      await controlCenter.close().catch(() => {});
+      controlCenter = null;
+    }
     await closeChromeWithFallback(cdp, chrome);
     cdp = null;
     chrome = null;
@@ -469,6 +546,10 @@ export async function startDaemon(
     if (detachForward) {
       detachForward();
       detachForward = undefined;
+    }
+    if (controlCenter) {
+      await controlCenter.close().catch(() => {});
+      controlCenter = null;
     }
     for (const s of clients) {
       try {
@@ -542,6 +623,10 @@ async function buildDoctor(
     socketPath,
     daemonPid: process.pid,
     spaceCount: spaceManager.list().length,
+    spaceCleanup: {
+      abandonedSeconds: config.spaceAbandonedSeconds,
+      idleMinutes: config.spaceIdleMinutes,
+    },
     selectedSpace: selected
       ? {
           id: selected.id,

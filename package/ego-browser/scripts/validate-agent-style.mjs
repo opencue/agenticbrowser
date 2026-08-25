@@ -6,10 +6,58 @@ const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = dirname(dirname(packageRoot));
 
 const paths = [
+  join(repoRoot, "AGENTS.md"),
+  join(repoRoot, "README.md"),
   join(packageRoot, "README.md"),
+  join(repoRoot, "package/ego-linux/README.md"),
+  join(repoRoot, "package/ego-windows-host/README.md"),
   join(repoRoot, "skills/ego-browser/SKILL.md"),
+  join(repoRoot, "skills/ego-browser/references/install.md"),
+  join(repoRoot, "skills/ego-browser/references/task-spaces.md"),
   ...listFiles(join(repoRoot, "skills/ego-browser/learnings"), ".md"),
   ...listFiles(join(packageRoot, "scripts/real-browser-e2e/cases"), ".mjs"),
+];
+
+const legacyOneRoundTaskSpacePatterns = [
+  {
+    pattern:
+      /const task = await taskSpaces\.useOrCreate\('inspect example page'\)/,
+    message: "quick start should use taskSpaces.run(...) for one-round tasks",
+  },
+  {
+    pattern: /const task = await taskSpaces\.useOrCreate\('research task'\)/,
+    message: "one-round task example should use taskSpaces.run(...)",
+  },
+  {
+    pattern: /await taskSpaces\.useOrCreate\('demo'\)/,
+    message: "demo quick start should use taskSpaces.run(...)",
+  },
+  {
+    pattern: /start from `taskSpaces\.useOrCreate\(name\)`/,
+    message: "install docs should prefer taskSpaces.run(...) after setup",
+  },
+  {
+    pattern:
+      /Reuse or create a task space: `const task = await taskSpaces\.useOrCreate\(name\)`/,
+    message:
+      "semantic workflow should mention taskSpaces.run(...) for one-round tasks",
+  },
+  {
+    pattern:
+      /Always call `taskSpaces\.complete\(name, \{ keep \}\)` when the task is done — do not leave the space hanging\./,
+    message:
+      "cleanup guidance should mention taskSpaces.run(...) automatic completion",
+  },
+];
+
+const legacyFlatHelperCalls = [
+  { name: "load", replacement: "page.goto(...)" },
+  { name: "snapshot", replacement: "page.snapshot()" },
+  { name: "goto", replacement: "page.goto(...)" },
+  { name: "navigate", replacement: "page.goto(...)" },
+  { name: "waitForLoad", replacement: "page.waitForLoadState(...)" },
+  { name: "currentUrl", replacement: "page.url()" },
+  { name: "js", replacement: "page.evaluate(...)" },
 ];
 
 const failures = [];
@@ -19,6 +67,15 @@ for (const file of paths) {
   const content = readFileSync(file, "utf8");
   const rel = relative(repoRoot, file);
   const lines = content.split(/\r?\n/);
+
+  if (
+    rel === "skills/ego-browser/SKILL.md" &&
+    !content.includes("await taskSpaces.run('inspect example page'")
+  ) {
+    failures.push(
+      `${rel}: quick start must teach taskSpaces.run(...) as the one-round default`,
+    );
+  }
 
   for (const [index, line] of lines.entries()) {
     const lineNo = index + 1;
@@ -43,6 +100,28 @@ for (const file of paths) {
       failures.push(
         `${rel}:${lineNo} prefer page.getByText(...) over page.locator("text=...")`,
       );
+    }
+
+    for (const { name, replacement } of legacyFlatHelperCalls) {
+      const call = `${name}\\(`;
+      const directCall = new RegExp(`^\\s*(?:await\\s+)?${call}`);
+      const assignedCall = new RegExp(
+        `^\\s*(?:(?:const|let|var)\\s+\\w+\\s*=\\s*)?(?:await\\s+)?${call}`,
+      );
+      if (
+        (directCall.test(line) || assignedCall.test(line)) &&
+        !/agent-style-ok|removed/i.test(line)
+      ) {
+        failures.push(
+          `${rel}:${lineNo} use ${replacement} instead of removed flat ${name}(...)`,
+        );
+      }
+    }
+
+    for (const { pattern, message } of legacyOneRoundTaskSpacePatterns) {
+      if (pattern.test(line)) {
+        failures.push(`${rel}:${lineNo} ${message}`);
+      }
     }
   }
 

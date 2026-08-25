@@ -23,6 +23,10 @@ function withEnv(overrides, run) {
       delete process.env[key];
   }
   delete process.env.CLAUDE_CODE_SESSION_ID;
+  delete process.env.CODEX_SESSION_ID;
+  delete process.env.CODEX_THREAD_ID;
+  delete process.env.OMX_SESSION_ID;
+  delete process.env.EGO_BROWSER_SESSION_ID;
   delete process.env.EGO_LINUX_PANEL;
   delete process.env.EGO_LINUX_CURSOR_NAME;
   Object.assign(process.env, overrides);
@@ -86,12 +90,20 @@ describe("agent identity", () => {
     assert.deepEqual(identity, { profile: null, session: null });
   });
 
-  it("shortens the session id to something a card can show", () => {
+  it("keeps the full session id for collision-free ownership", () => {
     const identity = withEnv(
       { CLAUDE_CODE_SESSION_ID: "dae81a3c-1f45-417f-9f27-759398198057" },
       () => agentIdentity("/tmp"),
     );
-    assert.equal(identity.session, "dae81a3c");
+    assert.equal(identity.session, "dae81a3c-1f45-417f-9f27-759398198057");
+  });
+
+  it("recognizes a Codex session instead of grouping every Codex agent together", () => {
+    const identity = withEnv(
+      { CODEX_SESSION_ID: "01a01e09-7f65-7b51-8fa3-0e765501e39b" },
+      () => agentIdentity("/tmp"),
+    );
+    assert.equal(identity.session, "01a01e09-7f65-7b51-8fa3-0e765501e39b");
   });
 
   it("reports nothing rather than guessing", async () => {

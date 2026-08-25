@@ -290,7 +290,10 @@ test("createCdpBridge createTarget returns targetId", async () => {
   const t = mockTransport();
   t.autoReply((msg) => {
     assert.equal(msg.method, "Target.createTarget");
-    assert.deepEqual(msg.params, { url: "https://ego.test/" });
+    assert.deepEqual(msg.params, {
+      url: "https://ego.test/",
+      background: true,
+    });
     return { id: msg.id, result: { targetId: "new-tab-1" } };
   });
   const bridge = createCdpBridge(t);

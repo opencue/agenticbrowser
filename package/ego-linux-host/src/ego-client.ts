@@ -190,6 +190,7 @@ type EgoClient = {
   completeTaskSpace: () => Promise<any>;
   closeTaskSpace: () => Promise<any>;
   handOffTaskSpace: () => Promise<any>;
+  presentTaskSpace: (id?: number) => Promise<any>;
   takeOverTaskSpace: () => Promise<any>;
   snapshot: (options?: any) => Promise<any>;
   sendCDPMessage: (payload: string) => void | Promise<any>;
@@ -224,6 +225,11 @@ export function installEgoClient(conn: HostConnection): void {
     completeTaskSpace: () => conn.request("ego.completeTaskSpace", {}),
     closeTaskSpace: () => conn.request("ego.closeTaskSpace", {}),
     handOffTaskSpace: () => conn.request("ego.handOffTaskSpace", {}),
+    presentTaskSpace: (id?: number) =>
+      conn.request(
+        "ego.presentTaskSpace",
+        id === undefined ? {} : { id },
+      ),
     takeOverTaskSpace: () => conn.request("ego.takeOverTaskSpace", {}),
     snapshot: (options: any = {}) =>
       conn.request("ego.snapshot", options ?? {}),

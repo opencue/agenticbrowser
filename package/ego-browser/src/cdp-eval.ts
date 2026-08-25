@@ -112,7 +112,7 @@ export function runtimeValue(response, expression) {
   if (details || result.subtype === "error") {
     const desc = jsExceptionDescription(result, details);
     throw new Error(
-      `JavaScript evaluation failed${jsExceptionLocation(expression, details)}: ${desc}; expression: ${jsSnippet(expression)}`,
+      `JavaScript evaluation failed${jsExceptionLocation(expression, details)}: ${desc}${jsExceptionHint(desc)}; expression: ${jsSnippet(expression)}`,
     );
   }
   if (Object.hasOwn(result, "value")) {
@@ -161,6 +161,17 @@ function jsExceptionDescription(result, details) {
     }
   }
   return desc || details?.text || "JavaScript evaluation failed";
+}
+
+function jsExceptionHint(description) {
+  if (
+    /Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'/i.test(
+      description,
+    )
+  ) {
+    return " Hint: getComputedStyle() received a non-Element; if it came from a DOM query, verify the selector exists in the current page state before using it.";
+  }
+  return "";
 }
 
 export function decodeUnserializableJsValue(value) {

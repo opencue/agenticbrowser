@@ -234,13 +234,19 @@ async function writeFailureArtifact(
     artifact.debug = await helpers.debug({
       maxSnapshotChars: 4000,
       eventLimit: 50,
+      traceLimit: 80,
     });
   } catch (debugError) {
     artifact.debugError = summarizeError(debugError);
   }
 
-  await mkdir(dir, { recursive: true });
-  await state.writeFile(path, `${JSON.stringify(artifact, null, 2)}\n`);
+  artifact.recovery = buildFailureRecovery(artifact);
+
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  await state.writeFile(path, `${JSON.stringify(artifact, null, 2)}\n`, {
+    mode: 0o600,
+    flag: "wx",
+  });
   return path;
 }
 
@@ -268,6 +274,148 @@ function summarizeError(error: unknown) {
     return out;
   }
   return { name: "Error", message: formatErrorMessage(error) };
+}
+
+function buildFailureRecovery(artifact: Record<string, unknown>) {
+  const error = objectValue(artifact.error);
+  const debug = objectValue(artifact.debug);
+  const debugError = objectValue(artifact.debugError);
+  const message = stringValue(error.message);
+  const trace = objectValue(debug.trace);
+  const traceItems = Array.isArray(trace.items) ? trace.items.length : 0;
+  const snapshot = objectValue(debug.snapshot);
+  const screenshot = objectValue(debug.screenshot);
+  const debugErrors = Object.keys(objectValue(debug.errors));
+  const snapshotExcerpt = stringValue(snapshot.excerpt);
+  const locatorDiagnostics = /\bLocator diagnostics:/i.test(message);
+  const locatorFailure =
+    locatorDiagnostics ||
+    /\bLocator .+ matched \d+ elements\b/i.test(message) ||
+    /\bElement not found:/i.test(message) ||
+    /\bCould not locate element\b/i.test(message);
+  const emptyTaskSpaceAnchor =
+    /\bCurrent tab is a new empty Ego Lite task-space anchor\b/i.test(
+      message,
+    ) ||
+    /\bEgo Lite agent space is ready\b/i.test(message) ||
+    /\bEgo Lite agent space is ready\b/i.test(snapshotExcerpt);
+
+  const steps = [
+    recoveryStep(
+      "error",
+      "Read error.message first. Do not retry until you understand the thrown error.",
+      "error.message",
+    ),
+  ];
+
+  if (locatorDiagnostics) {
+    if (emptyTaskSpaceAnchor) {
+      steps.push(
+        recoveryStep(
+          "empty-task-space",
+          "The active tab is Ego Lite's empty task-space anchor, not the app. Do not copy ready-page locators; reopen or navigate to the target URL before retrying app selectors.",
+          snapshotExcerpt ? "debug.snapshot.excerpt" : "error.message",
+        ),
+      );
+    }
+    steps.push(
+      recoveryStep(
+        "locator-diagnostics",
+        emptyTaskSpaceAnchor
+          ? "Locator diagnostics came from the empty ready page; use them only to confirm the wrong page, not as selectors for the app."
+          : "The error already contains Locator diagnostics. Copy a suggested loc=... selector or refine with filter(); use nth() only for confirmed duplicates.",
+        "error.message",
+      ),
+    );
+  } else if (locatorFailure) {
+    steps.push(
+      recoveryStep(
+        "locator-reobserve",
+        "This looks like a locator failure but no Locator diagnostics were captured. Re-observe the page before changing selectors.",
+        "debug.snapshot.excerpt",
+      ),
+    );
+  }
+
+  if (traceItems > 0) {
+    steps.push(
+      recoveryStep(
+        "trace",
+        "Read debug.trace.items from bottom to top for the last navigation, network failure, input event, wait, or JavaScript exception before retrying.",
+        "debug.trace.items",
+      ),
+    );
+  }
+
+  if (snapshot.excerpt) {
+    steps.push(
+      recoveryStep(
+        "snapshot",
+        "Compare the visible semantic snapshot with the selector you planned to use.",
+        "debug.snapshot.excerpt",
+      ),
+    );
+  }
+
+  if (screenshot.path) {
+    steps.push(
+      recoveryStep(
+        "screenshot",
+        "Open the screenshot if the DOM or trace does not explain the failure.",
+        "debug.screenshot.path",
+      ),
+    );
+  }
+
+  if (debugErrors.length) {
+    steps.push(
+      recoveryStep(
+        "debug-errors",
+        "Some debug sections failed. Read debug.errors before assuming page state is complete.",
+        "debug.errors",
+      ),
+    );
+  }
+
+  if (debugError.message) {
+    steps.push(
+      recoveryStep(
+        "debug-error",
+        "Debug capture failed. Treat debugError as the reason page state may be missing.",
+        "debugError",
+      ),
+    );
+  }
+
+  return {
+    schema: "ego-browser.recovery.v1",
+    readThisFirst: steps.map((step, index) => ({ order: index + 1, ...step })),
+    signals: {
+      locatorDiagnostics,
+      locatorFailure,
+      emptyTaskSpaceAnchor,
+      traceItems,
+      hasSnapshot: Boolean(snapshot.excerpt),
+      screenshotPath:
+        typeof screenshot.path === "string" ? screenshot.path : undefined,
+      debugErrors,
+      debugError: Boolean(debugError.message),
+    },
+  };
+}
+
+function recoveryStep(id: string, instruction: string, path: string) {
+  return { id, instruction, path };
+}
+
+function objectValue(value: unknown): Record<string, any> {
+  return value && typeof value === "object"
+    ? (value as Record<string, any>)
+    : {};
+}
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
 }
 
 function formatErrorMessage(error: unknown) {

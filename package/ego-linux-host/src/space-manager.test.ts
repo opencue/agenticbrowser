@@ -100,6 +100,85 @@ test("assignTarget moves tab between spaces", () => {
   assert.equal(sm.list().find((s) => s.id === a.id)?.targetIds.includes("shared"), false);
 });
 
+test("useOrCreateAgentSpace reuses the same goal instead of multiplying spaces", () => {
+  let now = 1_000;
+  const sm = new SpaceManager(undefined, { now: () => now });
+  const first = sm.useOrCreateAgentSpace("same goal");
+  now = 2_000;
+  const second = sm.useOrCreateAgentSpace("same goal");
+
+  assert.equal(first.reused, false);
+  assert.equal(second.reused, true);
+  assert.equal(second.space.id, first.space.id);
+  assert.equal(
+    sm.list().filter((space) => space.name === "same goal").length,
+    1,
+  );
+  assert.equal(second.space.touchedAt, now);
+});
+
+test("tracks the active target independently for each space", () => {
+  const sm = new SpaceManager();
+  const space = sm.createAgentSpace("tabs");
+  sm.use(space.id);
+  sm.assignTarget("first");
+  sm.assignTarget("second");
+  sm.setActiveTarget("first");
+
+  assert.equal(sm.activeTargetForSelected(), "first");
+  assert.equal(sm.list().find((item) => item.id === space.id)?.activeTargetId, "first");
+});
+
+test("prunes abandoned and idle agent spaces but protects selected and user spaces", () => {
+  let now = 0;
+  const sm = new SpaceManager(undefined, { now: () => now });
+  const abandoned = sm.createAgentSpace("abandoned");
+  const idle = sm.createAgentSpace("idle");
+  sm.assignTarget("idle-tab", idle.id);
+  sm.reconcileTargets([
+    { targetId: "idle-tab", title: "Worked", url: "https://example.com" },
+  ]);
+  const selected = sm.createAgentSpace("selected");
+  sm.use(selected.id);
+
+  now = 31 * 60_000;
+  const removed = sm.prune({
+    abandonedAfterMs: 2 * 60_000,
+    idleAfterMs: 30 * 60_000,
+  });
+
+  assert.deepEqual(
+    removed.map(({ id, reason }) => [id, reason]),
+    [
+      [abandoned.id, "abandoned"],
+      [idle.id, "idle"],
+    ],
+  );
+  assert.ok(sm.list().some((space) => space.id === selected.id));
+  assert.ok(sm.list().some((space) => space.id === 1));
+  assert.ok(sm.listEvents().some((event) => event.type === "space.pruned.abandoned"));
+});
+
+test("reconcileTargets records first content and falls back when the active tab closes", () => {
+  let now = 5_000;
+  const sm = new SpaceManager(undefined, { now: () => now });
+  const space = sm.createAgentSpace("reconcile");
+  sm.use(space.id);
+  sm.assignTarget("blank");
+  sm.assignTarget("content");
+  sm.setActiveTarget("blank");
+
+  sm.reconcileTargets([
+    { targetId: "content", title: "Dashboard", url: "https://example.com" },
+  ]);
+
+  const current = sm.selected();
+  assert.deepEqual(current?.targetIds, ["content"]);
+  assert.equal(current?.activeTargetId, "content");
+  assert.equal(current?.lastContentAt, now);
+  assert.deepEqual(current?.recentTabTitles, ["Dashboard"]);
+});
+
 test("adoptOrphanTargets puts unknowns on user space", () => {
   const sm = new SpaceManager();
   const a = sm.createAgentSpace("known");

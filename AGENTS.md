@@ -30,6 +30,7 @@ Agent scripts reach them through the injected `taskSpaces` facade
 one from a heredoc raises `ReferenceError: … is not defined`.
 - `taskSpaces.useOrCreate(nameOrId)` reuses an agent-owned space or creates a new one; it no longer auto-claims user-owned spaces. Use `taskSpaces.claim(nameOrId)` to take ownership of a user-owned space. Ids are numeric; prefer `task.id` over names across rounds.
 - `taskSpaces.switch(nameOrId)` requires agent ownership; `taskSpaces.new(name)` creates; `taskSpaces.complete(nameOrId, { keep })` finishes (`keep` is mandatory); `taskSpaces.list()` enumerates.
+- `taskSpaces.run(nameOrId, fn, options?)` is the default for one-round browser tasks: it uses/creates the space, runs the callback, and completes the space on success.
 - Control handoff: `taskSpaces.handOff` / `taskSpaces.takeOver` / `taskSpaces.waitForAgentControl`.
 
 ## Key Directories

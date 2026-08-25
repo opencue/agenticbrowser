@@ -58,14 +58,14 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "payload\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-; --open is what the Linux desktop entry runs: it brings up the shared agent
-; browser window, which is what clicking an app icon should do.
+; --spaces is what the Linux desktop entry runs: it opens the Spaces panel,
+; which is what clicking the app icon should do on either platform.
 ;
 ; runminimized, not hidden: the target is a console command that returns within
 ; seconds. Minimized keeps it off the user's screen without a VBScript wrapper,
 ; which antivirus heuristics dislike.
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--open"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Comment: "The browser you and your AI agents share"; Flags: runminimized
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--open"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Flags: runminimized; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Comment: "The browser you and your AI agents share"; Flags: runminimized
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; IconFilename: "{app}\{#IconPath}"; Flags: runminimized; Tasks: desktopicon
 
 [Registry]
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: NeedsAddPath(ExpandConstant('{app}'))
@@ -74,7 +74,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 ; The conventional "launch it now" checkbox, running exactly what the Start
 ; Menu shortcut runs. (--doctor, which installers often use here, does not exist
 ; in this package -- test/installer.test.mjs checks that against the real CLI.)
-Filename: "{app}\{#AppExeName}"; Parameters: "--open"; WorkingDir: "{app}"; Description: "Open {#AppName}"; Flags: postinstall nowait skipifsilent runminimized
+Filename: "{app}\{#AppExeName}"; Parameters: "--spaces"; WorkingDir: "{app}"; Description: "Open {#AppName}"; Flags: postinstall nowait skipifsilent runminimized
 
 [Code]
 // Whether the install directory is missing from the user's PATH.

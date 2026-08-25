@@ -7,6 +7,8 @@ test("formatCliLogValue renders documented function properties in object output"
   const formatted = formatCliLogValue({
     helpers: {
       page: {
+        locator() {},
+        getByTestId() {},
         waitForRequest() {},
         waitForResponse() {},
       },
@@ -36,6 +38,13 @@ test("formatCliLogValue renders documented function properties in object output"
     parsed.helpers.page.waitForResponse.signature,
     "page.waitForResponse(urlOrPredicate, options?) => Promise<Response>",
   );
+  assert.match(
+    parsed.helpers.page.locator.description,
+    /data-testid="foo" exactly/,
+  );
+  assert.match(parsed.helpers.page.locator.example, /loc=testid:/);
+  assert.match(parsed.helpers.page.getByTestId.description, /exactly/);
+  assert.match(parsed.helpers.page.getByTestId.example, /settings__/);
   assert.equal(parsed.helpers.site.runTool.name, "runTool");
   assert.equal(
     parsed.helpers.taskSpaces.run.signature,

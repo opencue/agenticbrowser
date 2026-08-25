@@ -19,19 +19,24 @@ export async function createEgoShim({ headless = false } = {}) {
   const cdp = await connectCdp(wsUrl);
 
   // Agent selection is private to this CDP connection. A person may be working
-  // in any other task-space tab while several agents navigate, click, type and
-  // capture their own pages in the background. Explicit Open / handoff still
-  // raises the requested task through presentSpace().
+  // in any other task-space tab — not only the Spaces overview — while several
+  // agents navigate, click, type and capture their own pages in the background.
+  // Explicit presentation (Open / handoff) uses the shim's internal CDP path
+  // and still raises the requested task through presentSpace().
   function shouldAutoFocusAgentTab() {
     return false;
   }
 
-  // browser.switchTab() uses Target.activateTarget. Acknowledge that as a
-  // logical per-agent selection; real activation is reserved for presentation.
+  // browser.switchTab() is implemented by the harness with
+  // Target.activateTarget. Acknowledge that as a logical per-agent selection;
+  // real foreground activation is reserved for presentSpace().
   cdp.setBackgroundAgentTabs(true);
 
   const taskSpaces = createTaskSpacesApi(cdp, {
     shouldAutoFocus: shouldAutoFocusAgentTab,
+  });
+  cdp.watchActiveTarget((targetId) => {
+    if (targetId) void taskSpaces.noteActiveTarget(targetId).catch(() => {});
   });
   cdp.setPageControlGuard(() => taskSpaces.pageControlErrorSync());
   // Downloads are armed per browser context, and a space owns one — so the
@@ -43,10 +48,7 @@ export async function createEgoShim({ headless = false } = {}) {
     getScope: () => taskSpaces.selectedScope(),
     shouldAutoFocus: shouldAutoFocusAgentTab,
   });
-  const snapshot = createSnapshotApi(cdp, {
-    listTabs: tabs.listTabs,
-    assertAgentControl: taskSpaces.assertAgentControl,
-  });
+  const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples
@@ -78,7 +80,8 @@ export async function createEgoShim({ headless = false } = {}) {
   cdp.watchNavigation(() => {
     // Shared-profile task spaces start as unfocused blank anchors, which avoids
     // the "agent opened a blank browser" flash. Navigation and subsequent
-    // observation/input stay bound to the attached background target.
+    // observation/input stay bound to the attached background target; there is
+    // no reason to replace the tab a person is using.
     void taskSpaces.noteContent().catch(() => {});
     // A navigation destroys the overlay with the document it lives in. This is
     // the earliest point the shim hears about one, and arming here is what lets
@@ -122,7 +125,9 @@ export async function createEgoShim({ headless = false } = {}) {
     },
     async useTaskSpace(id) {
       const result = await taskSpaces.useTaskSpace(id);
-      void cursor.watchPage().catch(() => {});
+      if (result?.readOnly !== true) {
+        void cursor.watchPage().catch(() => {});
+      }
       return result;
     },
     claimTaskSpace: taskSpaces.claimTaskSpace,

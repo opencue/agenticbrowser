@@ -17,6 +17,8 @@ import {
   stripNodejsSubcommand,
   resolveHarnessPath,
   parseCliFlags,
+  unsupportedWindowCommand,
+  isControlCenterCommand,
   CLI_HELP,
   unlinkStaleSocket,
   ensureHost,
@@ -154,6 +156,7 @@ test("installEgoClient snapshot and space lifecycle methods", async () => {
   await ego.completeTaskSpace();
   await ego.closeTaskSpace();
   await ego.handOffTaskSpace();
+  await ego.presentTaskSpace();
   await ego.takeOverTaskSpace();
   assert.deepEqual(
     conn.calls.map((c) => c[0]),
@@ -163,6 +166,7 @@ test("installEgoClient snapshot and space lifecycle methods", async () => {
       "ego.completeTaskSpace",
       "ego.closeTaskSpace",
       "ego.handOffTaskSpace",
+      "ego.presentTaskSpace",
       "ego.takeOverTaskSpace",
     ],
   );
@@ -213,6 +217,17 @@ test("CLI_HELP mentions doctor and reload", () => {
   assert.match(CLI_HELP, /--doctor/);
   assert.match(CLI_HELP, /--reload/);
   assert.match(CLI_HELP, /ego-browser/);
+  assert.match(CLI_HELP, /managed Chrome\/Chromium window/);
+  assert.match(CLI_HELP, /no separate native Ego Lite app shell/);
+});
+
+test("other-port window commands fail instead of using the wrong profile", () => {
+  for (const command of ["--open", "--spaces", "--status"]) {
+    assert.equal(unsupportedWindowCommand([command]), command);
+  }
+  assert.equal(unsupportedWindowCommand(["nodejs"]), null);
+  assert.equal(isControlCenterCommand(["--control-center"]), true);
+  assert.equal(isControlCenterCommand(["nodejs", "--control-center"]), true);
 });
 
 test("resolveHarnessPath prefers EGO_HARNESS_PATH", () => {
@@ -240,6 +255,8 @@ test("connectHost ping + installEgoClient against daemon", async () => {
       runtimeDir: dir,
       seedFromChrome: false,
       noSandbox: false,
+      spaceAbandonedSeconds: 0,
+      spaceIdleMinutes: 0,
     };
     assert.equal(await pingSocket(config.hostSocket), false);
     const daemon = await startDaemon({
@@ -311,6 +328,8 @@ test("ensureHost unlinks stale socket before failing on missing daemon", async (
       runtimeDir: dir,
       seedFromChrome: false,
       noSandbox: false,
+      spaceAbandonedSeconds: 0,
+      spaceIdleMinutes: 0,
     };
 
     await assert.rejects(
@@ -345,6 +364,8 @@ test("ensureHost never unlinks a socket owned by a live starting daemon", async 
     runtimeDir: dir,
     seedFromChrome: false,
     noSandbox: false,
+    spaceAbandonedSeconds: 0,
+    spaceIdleMinutes: 0,
   };
   const lock = await acquireHostLock(config);
   try {

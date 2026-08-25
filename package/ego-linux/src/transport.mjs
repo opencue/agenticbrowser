@@ -41,6 +41,7 @@ export async function connectCdp(wsUrl) {
   let keyWatcher = null;
   let navWatcher = null;
   let viewportWatcher = null;
+  let activeTargetWatcher = null;
   let downloadContextResolver = null;
   let pageControlGuard = null;
   let backgroundAgentTabs = false;
@@ -81,6 +82,11 @@ export async function connectCdp(wsUrl) {
         message.params?.targetId
       ) {
         activeTargetId = message.params.targetId;
+        try {
+          activeTargetWatcher?.(activeTargetId);
+        } catch {
+          // Selection tracking must never block the CDP request itself.
+        }
       } else if (
         message.method === "Target.attachToTarget" &&
         message.params?.targetId
@@ -234,8 +240,25 @@ export async function connectCdp(wsUrl) {
     }
   }
 
+  // Passive pixels are safe to read while the user owns the page. Keep this
+  // allowlist exact: Page.*, Runtime.*, DOM.*, and Input.* also contain methods
+  // that can navigate, execute code, or mutate the document.
+  function isUserControlObservationPayload(payload) {
+    try {
+      return JSON.parse(payload)?.method === "Page.captureScreenshot";
+    } catch {
+      return false;
+    }
+  }
+
   function pageControlError(payload) {
-    if (!pageControlGuard || !isPageDomainPayload(payload)) return null;
+    if (
+      !pageControlGuard ||
+      !isPageDomainPayload(payload) ||
+      isUserControlObservationPayload(payload)
+    ) {
+      return null;
+    }
     return pageControlGuard();
   }
 
@@ -290,6 +313,16 @@ export async function connectCdp(wsUrl) {
     /** Select the target for this agent connection without foregrounding it. */
     selectTarget(targetId) {
       activeTargetId = targetId || null;
+      try {
+        activeTargetWatcher?.(activeTargetId);
+      } catch {
+        // Selection tracking is best-effort at this transport boundary.
+      }
+    },
+
+    /** Persist logical tab selection outside this short-lived connection. */
+    watchActiveTarget(watcher) {
+      activeTargetWatcher = typeof watcher === "function" ? watcher : null;
     },
 
     /**

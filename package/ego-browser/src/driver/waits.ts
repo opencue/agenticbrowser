@@ -2,6 +2,7 @@ import { state } from "../state.js";
 import { cdp, runtimeValue } from "../cdp-eval.js";
 import { resolveHandle, releaseHandle } from "./element-ops.js";
 import { ElementResolutionError } from "../element-resolver.js";
+import { parseRef } from "../ref-map.js";
 import { waitForDocumentLoad } from "./load.js";
 import { drainEvents } from "./observe.js";
 import { waitForBrowserEvent } from "../browser-runtime.js";
@@ -9,6 +10,7 @@ import { waitForBrowserEvent } from "../browser-runtime.js";
 type WaitForSelectorOptions = {
   timeout?: number;
   state?: "visible" | "attached";
+  strict?: boolean;
 };
 
 type WaitForFunctionOptions = {
@@ -501,7 +503,7 @@ function acquireNetworkEvents() {
 /**
  * Wait until an element exists, optionally requiring visibility.
  * @param {string} selector CSS selector / @ref / loc= / xpath= to poll.
- * @param {{timeout?: number, state?: "visible"|"attached"}} [options] timeout in milliseconds; state defaults to "attached".
+ * @param {{timeout?: number, state?: "visible"|"attached", strict?: boolean}} [options] timeout in milliseconds; state defaults to "attached". Multiple matches are accepted by default; set strict to true to require exactly one.
  * @returns {Promise<boolean>} True when found before timeout.
  */
 export async function waitForSelector(
@@ -510,6 +512,7 @@ export async function waitForSelector(
 ) {
   const timeout = options.timeout ?? state.defaultTimeout;
   const requireVisible = options.state === "visible";
+  const target = waitSelectorTarget(selector, options.strict === true);
   const deadline = state.now() + timeout;
   const visibilityFn =
     "function(){if(typeof this.checkVisibility==='function')return this.checkVisibility({checkOpacity:true,checkVisibilityCSS:true});const s=getComputedStyle(this);return s.display!=='none'&&s.visibility!=='hidden'&&s.opacity!=='0';}";
@@ -517,7 +520,7 @@ export async function waitForSelector(
   while (state.now() < deadline) {
     let handle;
     try {
-      handle = await resolveHandle(selector);
+      handle = await resolveHandle(target);
     } catch (err) {
       if (err instanceof ElementResolutionError && err.kind === "transient") {
         await state.sleep(rampedDelay(SELECTOR_POLL_MS, attempt++, deadline));
@@ -546,6 +549,19 @@ export async function waitForSelector(
     await state.sleep(rampedDelay(SELECTOR_POLL_MS, attempt++, deadline));
   }
   return false;
+}
+
+function waitSelectorTarget(selector: string, strict: boolean) {
+  const value = String(selector || "").trim();
+  if (
+    strict ||
+    parseRef(value) ||
+    /^internal:nth=\d+;/.test(value) ||
+    value.startsWith("internal:last;")
+  ) {
+    return value;
+  }
+  return `internal:nth=0;${value}`;
 }
 
 /**

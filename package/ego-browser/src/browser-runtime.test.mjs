@@ -30,6 +30,11 @@ function installAutoEgo(listTabsResult) {
     async listTabs() {
       return tabs;
     },
+    async createTab(url) {
+      const target = { targetId: "auto-created-tab", url, active: true };
+      tabs.tabs.push(target);
+      return { targetId: target.targetId };
+    },
     sendCDPMessage(payload) {
       const parsed = JSON.parse(payload);
       calls.push(parsed);
@@ -753,10 +758,14 @@ test("ensureSession falls back to the last tab when no active tab is found", asy
   }
 });
 
-test("ensureSession throws when no tabs are available", async () => {
-  installAutoEgo({ tabs: [] });
+test("ensureSession lazily creates the first background target when a space is empty", async () => {
+  const calls = installAutoEgo({ tabs: [] });
   try {
-    await assert.rejects(() => ensureSession(), /no active tab/);
+    await ensureSession();
+    const attach = calls.find(
+      (call) => call.method === "Target.attachToTarget",
+    );
+    assert.equal(attach?.params.targetId, "auto-created-tab");
   } finally {
     cleanup();
   }
@@ -805,6 +814,52 @@ test("browserCdp does NOT retry SESSION_LOST for browser-level methods", async (
       JSON.stringify({ id: calls[0].id, error: { message: "Target closed" } }),
     );
     await assert.rejects(promise, /Target closed/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("Browser.getWindowForTarget without targetId uses the active page session", async () => {
+  const calls = installAutoEgo({
+    tabs: [{ targetId: "tab-active", active: true }],
+  });
+  try {
+    await browserCdp("Browser.getWindowForTarget", {}, undefined, 5000);
+
+    const attach = calls.find(
+      (call) => call.method === "Target.attachToTarget",
+    );
+    assert.ok(attach, "attaches to the active tab");
+    assert.equal(attach.params.targetId, "tab-active");
+
+    const lookup = calls.find(
+      (call) => call.method === "Browser.getWindowForTarget",
+    );
+    assert.ok(lookup, "sends the window lookup");
+    assert.equal(lookup.sessionId, `auto-sess-${attach.id}`);
+    assert.deepEqual(lookup.params, {});
+  } finally {
+    cleanup();
+  }
+});
+
+test("Browser.getWindowForTarget with targetId stays browser-level", async () => {
+  const calls = installAutoEgo();
+  try {
+    await browserCdp(
+      "Browser.getWindowForTarget",
+      { targetId: "tab-explicit" },
+      undefined,
+      5000,
+    );
+
+    assert.deepEqual(calls, [
+      {
+        id: calls[0].id,
+        method: "Browser.getWindowForTarget",
+        params: { targetId: "tab-explicit" },
+      },
+    ]);
   } finally {
     cleanup();
   }

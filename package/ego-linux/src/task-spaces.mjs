@@ -1,8 +1,10 @@
 import { readFileSync } from "node:fs";
 import { mkdir, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { agentIdentity } from "./agent-identity.mjs";
 import { replaceFile } from "./atomic-write.mjs";
+import { acquireDirectoryLock } from "./launch-lock.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 
 /**
@@ -25,9 +27,10 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * Each heredoc is a fresh Node process, so state lives in a file, not memory.
  */
 
-const EMPTY = { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
 const USER_CONTROL_ERROR = "The task is under user control";
 const USER_CONTROL_CODE = "EGO_TASK_SPACE_USER_IN_CONTROL";
+const STATE_UNAVAILABLE_CODE = "EGO_TASK_SPACE_STATE_UNAVAILABLE";
+const TASK_SPACE_LOCK = join(STATE_DIR, "task-spaces.lock");
 const ISOLATED_STORAGE_RE =
   /^(1|true|yes|on|isolated|context|browser-context|cookie-copy)$/i;
 
@@ -38,6 +41,48 @@ const ISOLATED_STORAGE_RE =
  * enough that the state file cannot grow without bound.
  */
 const REMEMBERED_CLOSURES = 20;
+
+/**
+ * Record what a swept space held, so the next agent to ask for the name learns
+ * it is not the one it left behind.
+ *
+ * Both sweeps write here. An agent coming back to a space that is simply gone
+ * has the same problem whichever rule removed it, and a sweep that closes
+ * windows without leaving a line behind is indistinguishable from a browser
+ * losing them — which is what it looked like from the outside.
+ */
+function rememberClosures(state, doomed, entryFor) {
+  const closures = state.closedSpaces || [];
+  for (const space of doomed) closures.unshift(entryFor(space));
+  state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+}
+
+/**
+ * Say what happened to a space someone is asking for again, in the terms of the
+ * rule that closed it.
+ *
+ * The two sweeps describe different failures and the fix differs with them: an
+ * idle space was working and stopped being returned to, an abandoned one never
+ * got anywhere at all. Telling an agent its space "went idle" when its own
+ * previous run never navigated sends it looking for the wrong problem.
+ */
+function closureNote(name, previous) {
+  const label = `a task space named ${JSON.stringify(name)}`;
+  if (previous.reason === "abandoned") {
+    return (
+      `${label} was closed ${previous.unusedSeconds} seconds after it was ` +
+      `created, having never loaded a page; this is a new, empty one. The run ` +
+      `that opened it stopped before navigating anywhere.`
+    );
+  }
+  return (
+    `${label} was closed after ${previous.idleMinutes} minutes idle; this is ` +
+    `a new, empty one. ` +
+    (previous.urls?.length
+      ? `It had these pages open: ${previous.urls.join(", ")}`
+      : "It had no pages open.")
+  );
+}
 
 export function createTaskSpacesApi(
   cdp,
@@ -61,6 +106,41 @@ export function createTaskSpacesApi(
    * process acts on.
    */
   let pinnedSpaceId = null;
+
+  function emptyState() {
+    return { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
+  }
+
+  function stateUnavailable(error) {
+    const reason =
+      error instanceof SyntaxError
+        ? "contains invalid JSON"
+        : `could not be read${error?.code ? ` (${error.code})` : ""}`;
+    return Object.assign(
+      new Error(
+        `Task-space state ${reason}; refusing to overwrite ${TASK_SPACE_FILE}`,
+        { cause: error },
+      ),
+      { error_code: STATE_UNAVAILABLE_CODE },
+    );
+  }
+
+  function parseState(contents) {
+    const parsed = JSON.parse(contents);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new SyntaxError("task-space state must be a JSON object");
+    }
+    if (parsed.spaces !== undefined && !Array.isArray(parsed.spaces)) {
+      throw new SyntaxError("task-space state spaces must be an array");
+    }
+    if (
+      parsed.closedSpaces !== undefined &&
+      !Array.isArray(parsed.closedSpaces)
+    ) {
+      throw new SyntaxError("task-space state closedSpaces must be an array");
+    }
+    return { ...emptyState(), ...parsed };
+  }
 
   function useIsolatedStorage() {
     return ISOLATED_STORAGE_RE.test(
@@ -113,34 +193,47 @@ export function createTaskSpacesApi(
 
   async function readState() {
     try {
-      const parsed = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
-      return { ...EMPTY, ...parsed };
-    } catch {
-      return { ...EMPTY };
+      return parseState(await readFile(TASK_SPACE_FILE, "utf8"));
+    } catch (error) {
+      if (error?.code === "ENOENT") return emptyState();
+      throw stateUnavailable(error);
     }
   }
 
-  /**
-   * Every heredoc is its own process and the panel is another, so this file has
-   * overlapping writers. Writing in place lets a reader see a fragment, and
-   * readState() cannot tell a fragment from an absent file -- both reach its
-   * catch, which answers "no spaces at all". See replaceFile.
-   */
   async function writeState(state) {
     await mkdir(STATE_DIR, { recursive: true });
+    // Same temp-and-rename this used inline, moved into one place so the
+    // Windows half comes with it: there, a rename over a file another process
+    // is reading fails with EPERM until that reader lets go, so replaceFile
+    // retries rather than surfacing a moment as an error.
     await replaceFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2));
+  }
+
+  /** Hold every read-modify-write cycle across processes, not merely its write. */
+  async function withStateLock(operation) {
+    await mkdir(STATE_DIR, { recursive: true });
+    const release = await acquireDirectoryLock(TASK_SPACE_LOCK, {
+      pollMs: 5,
+    });
+    try {
+      return await operation(await readState());
+    } finally {
+      await release();
+    }
   }
 
   function pageControlErrorSync() {
     try {
-      const parsed = JSON.parse(readFileSync(TASK_SPACE_FILE, "utf8"));
-      return pageControlErrorForState({
-        ...EMPTY,
-        ...parsed,
-        spaces: parsed.spaces ?? [],
-      });
-    } catch {
-      return null;
+      return pageControlErrorForState(
+        parseState(readFileSync(TASK_SPACE_FILE, "utf8")),
+      );
+    } catch (error) {
+      if (error?.code === "ENOENT") return null;
+      const unavailable = stateUnavailable(error);
+      return {
+        error: unavailable.message,
+        error_code: unavailable.error_code,
+      };
     }
   }
 
@@ -198,6 +291,7 @@ export function createTaskSpacesApi(
       if (matches.length === 0) continue;
       for (const target of matches) claimed.add(target.targetId);
       space.targetIds = matches.map((target) => target.targetId);
+      space.activeTargetId = space.targetIds[0];
       // Browser contexts do not outlive the browser. The restored pages are in
       // the default jar, so the space is no longer isolated and must not keep
       // claiming a context id that now refers to nothing.
@@ -207,6 +301,22 @@ export function createTaskSpacesApi(
     }
     return changed;
   }
+
+  /**
+   * How long an unused space is given before it counts as abandoned.
+   *
+   * Tunable for the reason the idle window is: a run that opens a space and
+   * then thinks for a while is doing nothing wrong, and only the person
+   * watching the desktop knows how long that is worth waiting for.
+   * EGO_LINUX_SPACE_ABANDONED_SEC=0 turns this sweep off entirely.
+   */
+  const ABANDONED_SECONDS = Number(
+    process.env.EGO_LINUX_SPACE_ABANDONED_SEC ?? 120,
+  );
+  const ABANDONED_AFTER_MS =
+    Number.isFinite(ABANDONED_SECONDS) && ABANDONED_SECONDS > 0
+      ? ABANDONED_SECONDS * 1000
+      : 0;
 
   /**
    * Close spaces that were opened and never used.
@@ -222,15 +332,20 @@ export function createTaskSpacesApi(
    * one is swept. "Never held a page" is the load-bearing condition: a tab is
    * momentarily about:blank on every navigation, so judging by the current url
    * alone would delete a working space mid-goto.
+   *
+   * What it closes it records, the same as the idle sweep: a window that opens
+   * on the ready anchor and disappears two minutes later is the one thing about
+   * task spaces people ask about, and the answer has to be readable from the
+   * closure list rather than inferred from an empty desktop.
    */
-  const ABANDONED_AFTER_MS = 120000;
-
   async function pruneAbandoned(state, live) {
+    if (!ABANDONED_AFTER_MS) return false;
+    const now = Date.now();
     const doomed = state.spaces.filter((space) => {
       if (space.id === effectiveSelectedId(state)) return false;
       // Ever held a real page => not abandoned, only between pages.
       if (space.lastContentAt) return false;
-      if (!space.createdAt || Date.now() - space.createdAt < ABANDONED_AFTER_MS)
+      if (!space.createdAt || now - space.createdAt < ABANDONED_AFTER_MS)
         return false;
       const tabs = (space.targetIds || [])
         .map((id) => live.get(id))
@@ -246,6 +361,19 @@ export function createTaskSpacesApi(
       }
       if (space.browserContextId) await disposeContext(space.browserContextId);
     }
+
+    // An abandoned space never held a page, so there is nothing to hand back —
+    // but the name still has to be accounted for. Without this the window an
+    // agent opened simply vanished, and the only way to find out why was to
+    // read this file.
+    rememberClosures(state, doomed, (space) => ({
+      name: space.name,
+      urls: [],
+      closedAt: now,
+      reason: "abandoned",
+      unusedSeconds: Math.round((now - space.createdAt) / 1000),
+    }));
+
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
     return true;
@@ -331,16 +459,13 @@ export function createTaskSpacesApi(
     // carries on believing it resumed — the tabs it had open are simply gone and
     // nothing says so. A closed space that names itself and lists what it held
     // turns that into something the agent can put back.
-    const closures = state.closedSpaces || [];
-    for (const space of doomed) {
-      closures.unshift({
-        name: space.name,
-        urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
-        closedAt: now,
-        idleMinutes: Math.round((now - space.touchedAt) / 60000),
-      });
-    }
-    state.closedSpaces = closures.slice(0, REMEMBERED_CLOSURES);
+    rememberClosures(state, doomed, (space) => ({
+      name: space.name,
+      urls: (space.urls || []).filter((url) => url && url !== "about:blank"),
+      closedAt: now,
+      reason: "idle",
+      idleMinutes: Math.round((now - space.touchedAt) / 60000),
+    }));
 
     const gone = new Set(doomed.map((space) => space.id));
     state.spaces = state.spaces.filter((space) => !gone.has(space.id));
@@ -357,6 +482,13 @@ export function createTaskSpacesApi(
       if (kept.length !== (space.targetIds || []).length) {
         space.targetIds = kept;
         changed = true;
+      }
+      if (!kept.includes(space.activeTargetId)) {
+        const replacement = kept[0];
+        if (space.activeTargetId !== replacement) {
+          space.activeTargetId = replacement;
+          changed = true;
+        }
       }
       // Remembered while the pages are alive, so a restart has something to
       // match them back by.
@@ -442,16 +574,28 @@ export function createTaskSpacesApi(
     return space;
   }
 
-  /** Select the space for this agent connection and optionally foreground it. */
-  async function focusSpace(space) {
+  /**
+   * Select the space for this agent connection and optionally foreground it.
+   *
+   * Linux agent work uses logical selection only. Integrations that opt into
+   * auto-focus still avoid flashing a brand-new about:blank anchor.
+   */
+  async function focusSpace(space, { allowActivation = true } = {}) {
     const live = await livePageTargets();
-    const target = space.targetIds.map((id) => live.get(id)).find(Boolean);
+    const preferredIds = [
+      space.activeTargetId,
+      ...(space.targetIds || []).filter((id) => id !== space.activeTargetId),
+    ].filter(Boolean);
+    const target = preferredIds.map((id) => live.get(id)).find(Boolean);
     if (!target) return;
+    // This is the agent connection's current target even when another tab stays
+    // visible to the user. listTabs() consumes the hint and ensureSession()
+    // attaches directly to it, so observation/input do not need foreground UI.
     cdp.selectTarget?.(target.targetId);
     if (!space.lastContentAt && isBlankUrl(target.url)) {
       return;
     }
-    if (await shouldAutoFocus(target.targetId)) {
+    if (allowActivation && (await shouldAutoFocus(target.targetId))) {
       await cdp
         .call("Target.activateTarget", { targetId: target.targetId })
         .catch(() => {});
@@ -496,7 +640,17 @@ export function createTaskSpacesApi(
    */
   async function presentSpace(space) {
     const live = await livePageTargets().catch(() => new Map());
-    const targetId = (space.targetIds || []).find((id) => live.has(id));
+    const liveIds = (space.targetIds || []).filter((id) => live.has(id));
+    const hintedIds = [
+      cdp.activeHint?.(),
+      cdp.attachedHint?.(),
+      space.activeTargetId,
+    ].filter((id) => id && liveIds.includes(id));
+    const targetId =
+      hintedIds.find((id) => !isBlankUrl(live.get(id)?.url)) ||
+      liveIds.find((id) => !isBlankUrl(live.get(id)?.url)) ||
+      hintedIds[0] ||
+      liveIds[0];
     if (!targetId) return { visible: false, reason: "no-live-tab" };
     await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
     if (!(await hasWindow())) return { visible: false, reason: "headless" };
@@ -604,6 +758,8 @@ export function createTaskSpacesApi(
     try {
       return await cdp.call("Target.createTarget", {
         ...params,
+        // background keeps the tab behind the current Spaces overview; focus
+        // keeps the browser window itself from jumping over another app.
         background: true,
         focus: false,
       });
@@ -721,176 +877,187 @@ export function createTaskSpacesApi(
      * "never used" apart from "between pages". Recorded once, never cleared.
      */
     async noteContent() {
-      const state = await readState();
-      const space = state.spaces.find(
-        (candidate) => candidate.id === effectiveSelectedId(state),
-      );
-      if (!space || space.lastContentAt) return;
-      space.lastContentAt = Date.now();
-      await writeState(state);
+      return withStateLock(async (state) => {
+        const space = state.spaces.find(
+          (candidate) => candidate.id === effectiveSelectedId(state),
+        );
+        if (!space || space.lastContentAt) return;
+        space.lastContentAt = Date.now();
+        await writeState(state);
+      });
     },
 
     async listTaskSpaces() {
-      const { state, live } = await reconcile(await readState());
-      return { taskSpaces: state.spaces.map((space) => decorate(space, live)) };
+      return withStateLock(async (state) => {
+        const reconciled = await reconcile(state);
+        return {
+          taskSpaces: reconciled.state.spaces.map((space) =>
+            decorate(space, reconciled.live),
+          ),
+        };
+      });
     },
 
     async createTaskSpace(name) {
-      const state = await readState();
-      const browserContextId = useIsolatedStorage()
-        ? await createSeededContext()
-        : null;
-      let targetId;
-      try {
-        ({ targetId } = await createBlankAnchor(browserContextId));
-      } catch (err) {
-        // Nothing will ever reference this context if the space fails to open.
-        if (browserContextId) await disposeContext(browserContextId);
-        throw err;
-      }
-      await paintBlankAnchor(targetId);
+      return withStateLock(async (state) => {
+        const identity = agentIdentity();
+        const wantedName = String(name ?? `task ${state.nextId}`);
+        const browserContextId = useIsolatedStorage()
+          ? await createSeededContext()
+          : null;
+        let targetId;
+        try {
+          ({ targetId } = await createBlankAnchor(browserContextId));
+        } catch (err) {
+          // Nothing will ever reference this context if space fails to open.
+          if (browserContextId) await disposeContext(browserContextId);
+          throw err;
+        }
+        await paintBlankAnchor(targetId);
 
-      const space = {
-        id: state.nextId,
-        taskId: state.nextId,
-        name: String(name ?? `task ${state.nextId}`),
-        createdAt: Date.now(),
-        touchedAt: Date.now(),
-        ownership: "agent",
-        createdBy: "agent",
-        // Which agent profile opened it — the overview's right-hand label.
-        ...agentIdentity(),
-        browserContextId,
-        targetIds: [targetId],
-      };
-      state.spaces.push(space);
-      state.nextId += 1;
-      state.selectedId = space.id;
-      pinnedSpaceId = space.id;
-
-      // useOrCreate lands here whenever it cannot find the name it was given —
-      // including when the idle sweep closed that very space while its agent was
-      // away. Handing back what the old one held is the difference between
-      // "resumed" and "started over without noticing". Consumed on use, so it is
-      // reported once rather than on every later run of the same name.
-      const closures = state.closedSpaces || [];
-      const index = closures.findIndex((entry) => entry.name === space.name);
-      if (index !== -1) {
-        const [previous] = closures.splice(index, 1);
-        state.closedSpaces = closures;
-        space.previously = {
-          closedAt: previous.closedAt,
-          idleMinutes: previous.idleMinutes,
-          urls: previous.urls,
-          note:
-            `a task space named ${JSON.stringify(space.name)} was closed after ` +
-            `${previous.idleMinutes} minutes idle; this is a new, empty one. ` +
-            (previous.urls.length
-              ? `It had these pages open: ${previous.urls.join(", ")}`
-              : "It had no pages open."),
+        const space = {
+          id: state.nextId,
+          taskId: state.nextId,
+          name: wantedName,
+          createdAt: Date.now(),
+          touchedAt: Date.now(),
+          ownership: "agent",
+          createdBy: "agent",
+          // Which agent profile opened it — the overview's right-hand label.
+          ...identity,
+          browserContextId,
+          targetIds: [targetId],
+          activeTargetId: targetId,
         };
-      }
+        state.spaces.push(space);
+        state.nextId += 1;
+        state.selectedId = space.id;
+        pinnedSpaceId = space.id;
 
-      await writeState(state);
-      return space;
+        // useOrCreate lands here whenever it cannot find the name it was given —
+        // including when a sweep closed that very space while its agent was
+        // away. Handing back what the old one held is the difference between
+        // "resumed" and "started over without noticing". Consumed on use, so it
+        // is reported once rather than on every later run of the same name.
+        const closures = state.closedSpaces || [];
+        const index = closures.findIndex((entry) => entry.name === space.name);
+        if (index !== -1) {
+          const [previous] = closures.splice(index, 1);
+          state.closedSpaces = closures;
+          // Entries written before closures carried a reason can only be idle
+          // ones: that was the only sweep that left any.
+          const reason = previous.reason || "idle";
+          space.previously = {
+            closedAt: previous.closedAt,
+            reason,
+            ...(reason === "abandoned"
+              ? { unusedSeconds: previous.unusedSeconds }
+              : { idleMinutes: previous.idleMinutes }),
+            urls: previous.urls,
+            note: closureNote(space.name, { ...previous, reason }),
+          };
+        }
+
+        await writeState(state);
+        return space;
+      });
     },
 
     async useTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "useTaskSpace");
-      if (!isPanelProcess() && space.ownership === "user") {
-        return userControlResult();
-      }
-      state.selectedId = space.id;
-      pinnedSpaceId = space.id;
-      // Selected first, so the space this session came back for is the one the
-      // sweep protects rather than the one it closes.
-      await pruneIdle(state);
-      await writeState(state);
-      await focusSpace(space);
-      return { done: true };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "useTaskSpace");
+        const readOnly = !isPanelProcess() && isUserControlled(space);
+        state.selectedId = space.id;
+        pinnedSpaceId = space.id;
+        // Selected first, so this session's space is protected by the sweep.
+        // A read-only observer must not perform cleanup as a side effect of
+        // attaching to a space that is still in the user's hands.
+        if (!readOnly) await pruneIdle(state);
+        await writeState(state);
+        await focusSpace(space, { allowActivation: !readOnly });
+        return { done: true, ...(readOnly ? { readOnly: true } : {}) };
+      });
     },
 
     async claimTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "claimTaskSpace");
-      space.ownership = "agent";
-      state.selectedId = space.id;
-      pinnedSpaceId = space.id;
-      await writeState(state);
-      await focusSpace(space);
-      return space;
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "claimTaskSpace");
+        space.ownership = "agent";
+        state.selectedId = space.id;
+        pinnedSpaceId = space.id;
+        await writeState(state);
+        await focusSpace(space);
+        return space;
+      });
     },
 
     async handOffTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "handOffTaskSpace");
-      // Raised before ownership moves: past this line the agent stops driving,
-      // so it is the last moment anything can put the page in front of the
-      // person who is about to be asked to act on it.
-      const presentation = await presentSpace(space);
-      space.ownership = "agentDelegatedToUser";
-      await writeState(state);
-      if (!presentation.visible) {
-        // Not an error. Headless is a supported way to run and CI hands off
-        // with nobody watching; the handoff itself is still valid. It only
-        // becomes a lie when the agent goes on to say "click the button in the
-        // browser", so this says otherwise on the channel the agent reads.
-        process.stderr.write(handoffWarning(space, presentation.reason));
-      }
-      return { done: true, ...presentation };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "handOffTaskSpace");
+        // Raised before ownership moves: past this line the agent stops driving.
+        const presentation = await presentSpace(space);
+        space.ownership = "agentDelegatedToUser";
+        await writeState(state);
+        if (!presentation.visible) {
+          // Headless handoff is valid, but the caller must not claim it is seen.
+          process.stderr.write(handoffWarning(space, presentation.reason));
+        }
+        return { done: true, ...presentation };
+      });
     },
 
     async presentTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "presentTaskSpace");
-      const presentation = await presentSpace(space);
-      await writeState(state);
-      return { done: true, ...presentation };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "presentTaskSpace");
+        const presentation = await presentSpace(space);
+        await writeState(state);
+        return { done: true, ...presentation };
+      });
     },
 
     async takeOverTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "takeOverTaskSpace");
-      space.ownership = "agent";
-      state.selectedId = space.id;
-      pinnedSpaceId = space.id;
-      await writeState(state);
-      await focusSpace(space);
-      return { done: true };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "takeOverTaskSpace");
+        space.ownership = "agent";
+        state.selectedId = space.id;
+        pinnedSpaceId = space.id;
+        await writeState(state);
+        await focusSpace(space);
+        return { done: true };
+      });
     },
 
     // Only the `keep: true` path reaches here; the harness routes `keep: false`
     // to closeTaskSpace instead (helpers.ts:299-315).
     async completeTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "completeTaskSpace");
-      // `keep: true` exists to leave a page for the user to look at, so the same
-      // rule as handoff applies: raise it, and report whether there was
-      // anything to raise.
-      const presentation = await presentSpace(space);
-      space.ownership = "user";
-      await writeState(state);
-      return { done: true, ...presentation };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "completeTaskSpace");
+        // `keep: true` leaves a page for the user, so raise it like handoff.
+        const presentation = await presentSpace(space);
+        space.ownership = "user";
+        await writeState(state);
+        return { done: true, ...presentation };
+      });
     },
 
     async closeTaskSpace(id) {
-      const state = await readState();
-      const space = await requireSpace(state, id, "closeTaskSpace");
-      for (const targetId of space.targetIds) {
-        await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
-      }
-      if (space.browserContextId) {
-        // Also drops an opt-in isolated space's private cookie/storage jar.
-        await disposeContext(space.browserContextId);
-      }
-      state.spaces = state.spaces.filter(
-        (candidate) => candidate.id !== space.id,
-      );
-      if (state.selectedId === space.id) state.selectedId = null;
-      if (pinnedSpaceId === space.id) pinnedSpaceId = null;
-      await writeState(state);
-      return { done: true };
+      return withStateLock(async (state) => {
+        const space = await requireSpace(state, id, "closeTaskSpace");
+        for (const targetId of space.targetIds) {
+          await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+        }
+        if (space.browserContextId) {
+          // Also drops an opt-in isolated space's private cookie/storage jar.
+          await disposeContext(space.browserContextId);
+        }
+        state.spaces = state.spaces.filter(
+          (candidate) => candidate.id !== space.id,
+        );
+        if (state.selectedId === space.id) state.selectedId = null;
+        if (pinnedSpaceId === space.id) pinnedSpaceId = null;
+        await writeState(state);
+        return { done: true };
+      });
     },
 
     /**
@@ -923,67 +1090,84 @@ export function createTaskSpacesApi(
     },
 
     async createTabInSelectedSpace(tabs, url) {
-      const state = await readState();
-      const space = state.spaces.find(
-        (candidate) => candidate.id === effectiveSelectedId(state),
-      );
-      if (!isPanelProcess() && isUserControlled(space)) {
-        return userControlResult();
-      }
-      // A space is anchored by a tab — one with none is reaped as soon as it is
-      // reconciled — so it opens on about:blank before it has anywhere to go.
-      // Creating a second tab for the first navigation strands that anchor, and
-      // the window then shows a blank tab beside the real page for the rest of
-      // the session. Navigating the anchor is what it was opened for.
-      //
-      // Guarded on lastContentAt rather than on the tab's current url: a tab is
-      // about:blank for a moment during every navigation, so matching on the url
-      // alone would hijack a tab that is already carrying work. "Never held a
-      // page" is only true of a space that has not started yet.
-      const anchor =
-        space && !space.lastContentAt ? await blankAnchor(space) : null;
-      if (anchor && url && url !== "about:blank") {
-        const { sessionId } = await cdp.call("Target.attachToTarget", {
-          targetId: anchor,
-          flatten: true,
-        });
-        await cdp.call("Page.navigate", { url }, sessionId);
-        if (await shouldAutoFocus(anchor)) {
-          await cdp
-            .call("Target.activateTarget", { targetId: anchor })
-            .catch(() => {});
+      return withStateLock(async (state) => {
+        const space = state.spaces.find(
+          (candidate) => candidate.id === effectiveSelectedId(state),
+        );
+        if (!isPanelProcess() && isUserControlled(space)) {
+          return userControlResult();
         }
-        return { targetId: anchor };
-      }
+        // A space is anchored by a tab — one with none is reaped as soon as it
+        // is reconciled — so its first navigation reuses about:blank.
+        const anchor =
+          space && !space.lastContentAt ? await blankAnchor(space) : null;
+        if (anchor && url && url !== "about:blank") {
+          let sessionId;
+          try {
+            ({ sessionId } = await cdp.call("Target.attachToTarget", {
+              targetId: anchor,
+              flatten: true,
+            }));
+            cdp.claimSession?.(sessionId);
+            await cdp.call("Page.navigate", { url }, sessionId);
+            space.activeTargetId = anchor;
+            cdp.selectTarget?.(anchor);
+            await writeState(state);
+            if (await shouldAutoFocus(anchor)) {
+              await cdp
+                .call("Target.activateTarget", { targetId: anchor })
+                .catch(() => {});
+            }
+            return { targetId: anchor };
+          } finally {
+            if (sessionId) {
+              await cdp
+                .call("Target.detachFromTarget", { sessionId })
+                .catch(() => {});
+              cdp.releaseSession?.(sessionId);
+            }
+          }
+        }
 
-      // Open it inside the space's context when opt-in isolated storage is
-      // enabled; otherwise omit browserContextId so the tab shares the live
-      // agent profile and its non-cookie storage.
-      let result;
-      try {
-        result = await tabs.createTab(url, space?.browserContextId);
-      } catch (error) {
-        // Browser contexts die with the browser, but the selected space's id
-        // outlives it in the state file. Chrome then rejects the create with
-        // "Failed to find browser context", which used to leave the port unable
-        // to open any tab at all after a restart. Fall back to the default jar
-        // and forget the dead id — the space falls back to the shared live
-        // profile rather than stopping working.
-        if (
-          !space?.browserContextId ||
-          !/browser context/i.test(String(error?.message))
-        ) {
-          throw error;
+        // Open in the selected context when isolation is explicitly enabled.
+        let result;
+        try {
+          result = await tabs.createTab(url, space?.browserContextId);
+        } catch (error) {
+          // A context can disappear on browser restart. Fall back to shared
+          // storage and persist that recovery in the same transaction.
+          if (
+            !space?.browserContextId ||
+            !/browser context/i.test(String(error?.message))
+          ) {
+            throw error;
+          }
+          space.browserContextId = null;
+          space.restored = true;
+          result = await tabs.createTab(url);
         }
-        space.browserContextId = null;
-        space.restored = true;
-        result = await tabs.createTab(url);
-      }
-      if (space && result.targetId) {
-        space.targetIds.push(result.targetId);
+        if (space && result.targetId) {
+          space.targetIds.push(result.targetId);
+          space.activeTargetId = result.targetId;
+          await writeState(state);
+        }
+        return result;
+      });
+    },
+
+    /** Remember the logical active tab so the next heredoc resumes it. */
+    async noteActiveTarget(targetId) {
+      if (!targetId) return;
+      return withStateLock(async (state) => {
+        const space = state.spaces.find(
+          (candidate) => candidate.id === effectiveSelectedId(state),
+        );
+        if (!space?.targetIds?.includes(targetId)) return;
+        if (space.activeTargetId === targetId) return;
+        space.activeTargetId = targetId;
+        space.touchedAt = Date.now();
         await writeState(state);
-      }
-      return result;
+      });
     },
 
     pageControlErrorSync,

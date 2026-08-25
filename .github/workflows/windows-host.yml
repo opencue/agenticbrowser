@@ -29,9 +29,18 @@ jobs:
         with:
           node-version: 22
 
+      # ego-browser's prepare script is a POSIX shell one-liner, and npm runs
+      # package scripts through cmd.exe on Windows, which fails on it with
+      # `"$CI" was unexpected at this time`. --ignore-scripts alone does not
+      # cover it: npm still prepares a file: dependency. The runner ships the
+      # Git Bash that `shell: bash` uses, so npm is pointed at it -- which makes
+      # the existing script work rather than rewriting one this workflow does
+      # not own. (Was #148; the same fix is in ci.yml's Windows jobs.)
+      - name: Let npm run POSIX package scripts
+        run: npm config set script-shell bash
+
       # --ignore-scripts: installing the file:../ego-browser dependency would
-      # otherwise run ego-browser's prepare script (lefthook install), which is
-      # unnecessary in CI and not yet Windows-safe (see #148).
+      # otherwise run lefthook install, which is unnecessary in CI.
       - name: Install dependencies
         working-directory: package/ego-windows-host
         run: npm ci --ignore-scripts

@@ -38,6 +38,12 @@ function fakeCdp() {
           ],
         };
       }
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "session-a" };
+      }
+      if (method === "DOMSnapshot.captureSnapshot") {
+        return { strings: [], documents: [] };
+      }
       return {};
     },
   };
@@ -126,10 +132,10 @@ class FakeWebSocket {
 }
 
 describe("Linux user-control boundary", () => {
-  it("agent useTaskSpace refuses a user-owned space with the stable hard-stop code", async () => {
+  it("agent useTaskSpace selects a user-owned space for read-only observation", async () => {
     await seed("user");
     const result = await createTaskSpacesApi(fakeCdp()).useTaskSpace(1);
-    assert.deepEqual(result, USER_CONTROL);
+    assert.deepEqual(result, { done: true, readOnly: true });
   });
 
   it("the Spaces panel can still switch to user-owned spaces", async () => {
@@ -145,17 +151,23 @@ describe("Linux user-control boundary", () => {
     }
   });
 
-  it("snapshot rejects while a handed-off space is under user control", async () => {
+  it("snapshot remains available while a handed-off space is under user control", async () => {
     await seed("agentDelegatedToUser");
-    const taskSpaces = createTaskSpacesApi(fakeCdp());
-    const snapshot = createSnapshotApi(fakeCdp(), {
-      listTabs: async () => ({ tabs: [] }),
+    const cdp = fakeCdp();
+    const taskSpaces = createTaskSpacesApi(cdp);
+    const snapshot = createSnapshotApi(cdp, {
+      listTabs: async () => ({
+        tabs: [{ targetId: "t-a", active: true }],
+      }),
+      // Kept as a regression sentinel: snapshot must not invoke the ownership
+      // assertion now that passive observation is explicitly supported.
       assertAgentControl: taskSpaces.assertAgentControl,
     });
 
-    await assert.rejects(
-      () => snapshot.snapshot(),
-      (error) => error.error_code === "EGO_TASK_SPACE_USER_IN_CONTROL",
+    const result = await snapshot.snapshot();
+    assert.deepEqual(result, { content: "", refs: [] });
+    assert.ok(
+      cdp.calls.some((call) => call.method === "DOMSnapshot.captureSnapshot"),
     );
   });
 
@@ -174,7 +186,7 @@ describe("Linux user-control boundary", () => {
     );
   });
 
-  it("page-domain CDP is rejected before it reaches Chrome, but Browser/Target stay available", async () => {
+  it("mutating page CDP is rejected, while screenshot and Browser/Target stay available", async () => {
     const original = globalThis.WebSocket;
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
@@ -195,15 +207,27 @@ describe("Linux user-control boundary", () => {
       ]);
       assert.deepEqual(socket.sent, [], "blocked page command was not sent");
 
-      cdp.sendRaw(JSON.stringify({ id: 2, method: "Browser.getVersion" }));
+      cdp.sendRaw(JSON.stringify({ id: 2, method: "Page.navigate" }));
+      assert.equal(errors.length, 2);
+      assert.deepEqual(socket.sent, [], "navigation was not sent");
+
+      cdp.sendRaw(JSON.stringify({ id: 3, method: "Page.captureScreenshot" }));
+      cdp.sendRaw(JSON.stringify({ id: 4, method: "Browser.getVersion" }));
       cdp.sendRaw(
         JSON.stringify({
-          id: 3,
+          id: 5,
           method: "Target.attachToTarget",
           params: { targetId: "t-a", flatten: true },
         }),
       );
-      assert.equal(socket.sent.length, 2);
+      assert.deepEqual(
+        socket.sent.map((payload) => JSON.parse(payload).method),
+        [
+          "Page.captureScreenshot",
+          "Browser.getVersion",
+          "Target.attachToTarget",
+        ],
+      );
     } finally {
       globalThis.WebSocket = original;
     }

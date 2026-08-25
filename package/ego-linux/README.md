@@ -109,6 +109,12 @@ Commands this port adds (upstream's app has no equivalent):
 
 ### The Spaces panel
 
+This port is not a native Ego Lite application. On stock Chrome/Chromium the
+Spaces overview is a browser surface, and task pages shown to the user retain
+the browser's normal tabs and address bar. The desktop class/icon can distinguish
+the managed process in the launcher; it cannot turn the window into the Citro
+application shell. Never describe that window as “not Chrome”.
+
 `ego-browser --spaces` opens an overview of every task space: one card each, with
 a live screenshot of the space's page, its name, its owner, and its tab count.
 Clicking a card switches to that space, `×` closes it, `+` creates one.
@@ -129,9 +135,9 @@ overview and the agent can never disagree about which spaces exist.
 
 ### App launcher entry
 
-The macOS build installs as an app you click to open. `--install-desktop-entry`
-gives this port the same affordance — an XDG desktop entry on Linux, a Start
-Menu shortcut on Windows:
+The macOS build installs as a native app. `--install-desktop-entry` gives this
+port only a launcher shortcut — an XDG desktop entry on Linux, a Start Menu
+shortcut on Windows:
 
 ```bash
 ego-browser --install-desktop-entry
@@ -144,7 +150,7 @@ the desktop and icon caches. On Windows it writes
 shell's own COM object, which is the only supported way to produce a valid
 `.lnk` without a native dependency, and points it at `assets/ego-lite.ico`.
 
-Launching either runs `--open`, which brings up the shared agent browser window.
+Launching either runs `--spaces`, which opens the Spaces overview panel.
 The icon is upstream's mark with a badge, so a port window is never mistaken for
 an upstream build.
 
@@ -414,7 +420,8 @@ seeding a real 2038-cookie profile costs ~105 ms, once per isolated space.
 A space also owns a tracked set of tabs plus its ownership state (`agent` /
 `agentDelegatedToUser` / `user`), with working `switch` / `claim` / `handOff` /
 `takeOver` / `complete` semantics; switching to a space puts the agent back on
-that space's page. When the user owns control, the agent bridge rejects page
+that space's last active tab, including across separate heredoc processes. When
+the user owns control, the agent bridge rejects page
 operations with `EGO_TASK_SPACE_USER_IN_CONTROL`; the Spaces panel can still
 switch cards because that is the user, not the agent.
 
@@ -432,10 +439,13 @@ the tracked target ids the shim opened.
 other. Use `EGO_LINUX_TASK_SPACE_STORAGE=isolated` when that privacy boundary is
 more important than live login parity.
 
-The user-control boundary is enforced at the bridge: selecting a user-owned
-space returns `EGO_TASK_SPACE_USER_IN_CONTROL`, and page-domain CDP / snapshot /
-new-tab operations are blocked while a space is handed off. Browser/Target CDP
-remains available for attach, inspection and takeover plumbing.
+The user-control boundary is enforced at the bridge: selecting a user-controlled
+space returns `{ done: true, readOnly: true }` without claiming it. Semantic
+snapshot and screenshot capture remain available for passive verification;
+navigation, input, Runtime evaluation, new-tab operations, and all other
+page-domain CDP stay blocked with `EGO_TASK_SPACE_USER_IN_CONTROL` while the
+space is handed off. Browser/Target CDP remains available for attach, inspection,
+and takeover plumbing.
 
 ## Verification
 

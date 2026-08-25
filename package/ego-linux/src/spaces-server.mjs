@@ -211,12 +211,14 @@ function createCastPool(cdp) {
 async function captureCard(cdp, targetId, pool) {
   try {
     const cast = await pool.frameFor(targetId);
-    if (!cast) return { thumbnail: null, activity: null, trail: [] };
+    if (!cast)
+      return { thumbnail: null, agent: null, activity: null, trail: [] };
 
     const cursor = await readCursor(cdp, cast.sessionId);
     const active = Boolean(cursor) && cursor.ageMs < ACTIVE_WINDOW_MS;
     return {
       thumbnail: cast.frame ? `data:image/jpeg;base64,${cast.frame}` : null,
+      agent: cursor?.name || null,
       activity: active
         ? {
             name: cursor.name,
@@ -231,7 +233,7 @@ async function captureCard(cdp, targetId, pool) {
       trail: cursor?.trail?.slice(-3).reverse() ?? [],
     };
   } catch {
-    return { thumbnail: null, activity: null, trail: [] };
+    return { thumbnail: null, agent: null, activity: null, trail: [] };
   }
 }
 
@@ -245,14 +247,26 @@ function json(response, status, body) {
   response.end(payload);
 }
 
+const MAX_REQUEST_BODY_BYTES = 64 * 1024;
+
 async function readBody(request) {
   const chunks = [];
-  for await (const chunk of request) chunks.push(chunk);
-  if (chunks.length === 0) return {};
+  let size = 0;
+  for await (const chunk of request) {
+    size += chunk.length;
+    if (size > MAX_REQUEST_BODY_BYTES) {
+      return { ok: false, status: 413, error: "request body too large" };
+    }
+    chunks.push(chunk);
+  }
+  if (chunks.length === 0) return { ok: true, body: {} };
   try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    return {
+      ok: true,
+      body: JSON.parse(Buffer.concat(chunks).toString("utf8")),
+    };
   } catch {
-    return {};
+    return { ok: false, status: 400, error: "invalid JSON body" };
   }
 }
 
@@ -265,11 +279,17 @@ export async function startSpacesServer(shim) {
   const { ego, cdp } = shim;
   const pool = createCastPool(cdp);
 
-  const server = createServer(async (request, response) => {
+  let server;
+  const handleRequest = async (request, response) => {
     // Bound to loopback, but a page in the agent's own browser can still reach
     // it, so only same-origin callers get to act.
     const origin = request.headers.origin;
-    if (origin && !origin.startsWith("http://127.0.0.1:")) {
+    const address = server.address();
+    const expectedOrigin =
+      address && typeof address !== "string"
+        ? `http://127.0.0.1:${address.port}`
+        : null;
+    if (origin && origin !== expectedOrigin) {
       json(response, 403, { error: "cross-origin request refused" });
       return;
     }
@@ -311,7 +331,7 @@ export async function startSpacesServer(shim) {
           const lead = live[0];
           const card = lead
             ? await captureCard(cdp, lead, pool)
-            : { thumbnail: null, activity: null, trail: [] };
+            : { thumbnail: null, agent: null, activity: null, trail: [] };
           return {
             id: space.id,
             name: space.name,
@@ -322,6 +342,7 @@ export async function startSpacesServer(shim) {
             title: lead ? byTarget.get(lead).title : "",
             url: lead ? byTarget.get(lead).url : "",
             thumbnail: card.thumbnail,
+            agent: card.agent,
             activity: card.activity,
             trail: card.trail,
           };
@@ -332,7 +353,24 @@ export async function startSpacesServer(shim) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/spaces") {
-      const { name } = await readBody(request);
+      const parsed = await readBody(request);
+      if (!parsed.ok) {
+        json(response, parsed.status, { error: parsed.error });
+        return;
+      }
+      if (
+        !parsed.body ||
+        typeof parsed.body !== "object" ||
+        Array.isArray(parsed.body)
+      ) {
+        json(response, 400, { error: "body must be a JSON object" });
+        return;
+      }
+      const { name } = parsed.body;
+      if (name !== undefined && typeof name !== "string") {
+        json(response, 400, { error: "space name must be a string" });
+        return;
+      }
       const space = await ego.createTaskSpace(name || "new space");
       json(response, 200, { space });
       return;
@@ -364,6 +402,16 @@ export async function startSpacesServer(shim) {
     }
 
     json(response, 404, { error: "not found" });
+  };
+
+  server = createServer((request, response) => {
+    void handleRequest(request, response).catch(() => {
+      if (response.headersSent) {
+        response.destroy();
+        return;
+      }
+      json(response, 500, { error: "internal server error" });
+    });
   });
 
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -105,7 +105,7 @@ export function queryAllExpression(selector, rootExpression = "document") {
     return attributeElementsExpression(
       "[data-testid]",
       "data-testid",
-      parseTextLocator(normalized.slice(7)),
+      parseTestIdLocator(normalized.slice(7)),
       rootExpression,
     );
   }
@@ -235,6 +235,11 @@ function parseTextLocator(raw) {
     return { text: parseLocatorString(raw.slice(6)), exact: true };
   }
   return { text: parseLocatorString(raw), exact: false };
+}
+
+function parseTestIdLocator(raw) {
+  const parsed = parseTextLocator(raw);
+  return parsed.exact ? parsed : { ...parsed, exact: true };
 }
 
 function parseLocatorString(raw) {

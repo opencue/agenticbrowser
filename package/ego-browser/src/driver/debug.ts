@@ -33,7 +33,9 @@ const URL_REDACTED = "REDACTED";
  * The dump is JSON-serializable and intentionally compact: page info, tabs,
  * viewport snapshot excerpt, screenshot path, recent CDP event summaries, and
  * helper/session state. Section failures are reported under `errors` so agents
- * can still see partial state. Task-space hard stops are rethrown.
+ * can still see partial state. In a user-controlled space the dump stays
+ * passive: page info is skipped while snapshot and screenshot remain enabled.
+ * Other task-space hard stops are rethrown.
  *
  * @param {{includeEvents?: boolean, includeTrace?: boolean, includeScreenshot?: boolean, includeSnapshot?: boolean, snapshotScope?: "only_within_viewport"|"full_page", maxSnapshotChars?: number, eventLimit?: number, traceLimit?: number, redact?: boolean}} [options]
  * @returns {Promise<object>}
@@ -51,10 +53,14 @@ export async function debug(options: DebugOptions = {}) {
       preferredTargetId: state.preferredTargetId || null,
       defaultTimeout: state.defaultTimeout,
       networkDomainEnabled: state.networkDomainEnabled,
+      taskSpaceId: state.selectedTaskSpaceId,
+      readOnly: state.taskSpaceReadOnly,
     },
   };
 
-  const info = await safeSection("info", errors, () => nav.pageInfo());
+  const info = state.taskSpaceReadOnly
+    ? undefined
+    : await safeSection("info", errors, () => nav.pageInfo());
   if (info) {
     dump.info = redactPageInfo(info, redact);
   }

@@ -426,14 +426,52 @@ async function locatorResolutionError(
 
 async function locatorDiagnosticMessage(cdp, sessionId, locator, message) {
   const candidates = await locatorDiagnosticCandidates(cdp, sessionId, locator);
+  const emptyTaskSpaceHint = await currentEmptyTaskSpaceHint(cdp, sessionId);
   if (!candidates.length) {
-    return message;
+    return [message, emptyTaskSpaceHint].filter(Boolean).join("\n");
   }
   return [
     message,
+    emptyTaskSpaceHint,
     "Locator diagnostics:",
     ...candidates.map(formatLocatorDiagnosticCandidate),
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+async function currentEmptyTaskSpaceHint(cdp, sessionId) {
+  try {
+    const result = await send(
+      cdp,
+      "Runtime.evaluate",
+      {
+        expression: `(() => ({
+          url: location.href,
+          title: document.title,
+          bodyText: document.body?.innerText?.slice(0, 240) || ""
+        }))()`,
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    const value = result.result?.value;
+    const bodyText = String(value?.bodyText || "");
+    if (
+      String(value?.url || "").startsWith("about:") &&
+      String(value?.title || "") === "Ego Lite agent space" &&
+      bodyText.includes("Ego Lite agent space is ready")
+    ) {
+      return (
+        "Current tab is a new empty Ego Lite task-space anchor, not the target page. " +
+        "Navigate or reopen the page before resolving app selectors. If taskSpaces.useOrCreate(...) returned task.previously.urls, call browser.openOrReuseTab(task.previously.urls[0]) or rerun with this build, which restores those URLs automatically."
+      );
+    }
+  } catch {
+    // Diagnostic hints must never replace the original locator error.
+  }
+  return "";
 }
 
 async function locatorDiagnosticCandidates(cdp, sessionId, locator) {
@@ -1064,7 +1102,7 @@ function parseLocator(input) {
   if (value.startsWith("testid:")) {
     return {
       kind: "testid",
-      ...parseTextLocator(value.slice(7)),
+      ...parseTestIdLocator(value.slice(7)),
       raw: value,
       nth,
     };
@@ -1119,6 +1157,14 @@ function parseTextLocator(raw) {
     return { text: parseLocatorName(raw.slice(6)), exact: true };
   }
   return { text: parseLocatorName(raw), exact: false };
+}
+
+function parseTestIdLocator(raw) {
+  const parsed = parseTextLocator(raw);
+  if (parsed.exact || typeof parsed.text !== "string") {
+    return parsed;
+  }
+  return { ...parsed, exact: true };
 }
 
 function boxModelCenter(model: any = {}) {

@@ -106,15 +106,19 @@ export async function elementCenter(selectorOrRef) {
   );
 }
 
-// Sequence number for default screenshot file names. Combined with the pid it
-// keeps concurrent agent processes (parallel task spaces) from overwriting each
-// other's shots in the shared tmpdir, and successive shots in one run distinct.
+// Sequence number for default screenshot file names. Combined with pid + time it
+// keeps parallel processes and later PID reuse from colliding in the shared
+// tmpdir; `wx` below then turns any remaining collision into a safe failure.
 let screenshotSeq = 0;
 
 export async function screenshot(options: ScreenshotOptions = {}) {
+  const generatedPath = options.path === undefined;
   const path =
     options.path ??
-    join(tmpdir(), `ego-browser-shot-${process.pid}-${++screenshotSeq}.png`);
+    join(
+      tmpdir(),
+      `ego-browser-shot-${process.pid}-${Date.now()}-${++screenshotSeq}.png`,
+    );
   const full = options.fullPage ?? false;
   const raw = options.raw ?? false;
   const params: any = {
@@ -129,7 +133,10 @@ export async function screenshot(options: ScreenshotOptions = {}) {
     if (isBrowserRuntime()) {
       await ensureSession();
     }
-    if (!pendingDialog()) {
+    // A user-controlled task space is deliberately observable but immutable.
+    // Skip the Runtime.evaluate/pageInfo sizing probes in that mode and use the
+    // exact Page.captureScreenshot allowlisted by the Linux transport.
+    if (!state.taskSpaceReadOnly && !pendingDialog()) {
       const dpr = Number(await evaluate("window.devicePixelRatio")) || 1;
       const cssScale = 1 / dpr;
       if (options.clip) {
@@ -156,6 +163,9 @@ export async function screenshot(options: ScreenshotOptions = {}) {
     SCREENSHOT_TIMEOUT_MS,
   );
   await mkdir(dirname(path), { recursive: true });
-  await state.writeFile(path, Buffer.from(result.data, "base64"));
+  await state.writeFile(path, Buffer.from(result.data, "base64"), {
+    mode: 0o600,
+    ...(generatedPath ? { flag: "wx" } : {}),
+  });
   return path;
 }
