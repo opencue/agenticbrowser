@@ -54,14 +54,19 @@ actually staged.
 ## Install from a checkout
 
 Requires Node >= 22 and any Chrome/Chromium/Brave/Edge build. Headed Linux also
-uses `xdotool` for the explicit human-action focus gate. Linux resolves the
-browser and `xdotool` from `PATH`; Windows also looks in the standard browser
-install locations, so a normal Chrome or Edge install needs no configuration.
+uses `xdotool` for the explicit human-action focus gate. GNOME Wayland focus
+recovery additionally uses `ydotool` with `ydotoold` running, because X11 cannot
+name or reactivate the previous native Wayland window. Linux resolves these
+tools from `PATH`; Windows also looks in the standard browser install locations,
+so a normal Chrome or Edge install needs no configuration.
 
 On a Wayland desktop, headed agent Chrome defaults to XWayland. It starts with
 `--no-startup-window`; the first task target is then created with
 `background:true, focus:false`, so even a cold browser launch stays behind the
-application the user is typing in. A `requestUserAction()` call focuses only
+application the user is typing in. If Chromium still raises itself, an
+operation-scoped focus guard restores the exact prior X11 window or returns once
+through the Wayland compositor history, then records the verified result in the
+private `focus-audit.jsonl` state file. A `requestUserAction()` call focuses only
 when it carries a concrete non-empty instruction, and can activate the exact
 managed-browser PID without opening a second window. Its Done/Cancel state lives
 in a named isolated CDP world behind a closed shadow root, so page JavaScript can

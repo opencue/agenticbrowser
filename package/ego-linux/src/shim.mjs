@@ -1,6 +1,11 @@
 import { ensureBrowser, WM_CLASS } from "./chrome.mjs";
-import { activateWindowByClass } from "./platform.mjs";
+import {
+  activateWindowByClass,
+  captureDesktopFocus,
+  restoreDesktopFocus,
+} from "./platform.mjs";
 import { connectCdp } from "./transport.mjs";
+import { createDesktopFocusGuard } from "./focus-guard.mjs";
 import { createTabsApi } from "./tabs.mjs";
 import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
@@ -20,7 +25,16 @@ import {
  * per-method fidelity table.
  */
 export async function createEgoShim({ headless = false } = {}) {
-  const { wsUrl, port, pid } = await ensureBrowser({ headless });
+  const startupFocus = headless ? null : await captureDesktopFocus();
+  const { wsUrl, port, pid, launched } = await ensureBrowser({ headless });
+  const desktopFocus = createDesktopFocusGuard({
+    browserPid: pid,
+    getActiveWindow: headless ? async () => null : () => captureDesktopFocus(),
+    restoreFocus: (focus) => restoreDesktopFocus(focus),
+  });
+  if (launched) {
+    await desktopFocus.restoreAfter("launch-browser", startupFocus);
+  }
   const cdp = await connectCdp(wsUrl);
 
   // Agent selection is private to this CDP connection. A person may be working
@@ -40,6 +54,7 @@ export async function createEgoShim({ headless = false } = {}) {
   const taskSpaces = createTaskSpacesApi(cdp, {
     shouldAutoFocus: shouldAutoFocusAgentTab,
     activateWindow: () => activateWindowByClass({ wmClass: WM_CLASS, pid }),
+    guardBackground: desktopFocus.run,
   });
   cdp.watchActiveTarget((targetId) => {
     if (targetId) void taskSpaces.noteActiveTarget(targetId).catch(() => {});
@@ -53,6 +68,7 @@ export async function createEgoShim({ headless = false } = {}) {
     port,
     getScope: () => taskSpaces.selectedScope(),
     shouldAutoFocus: shouldAutoFocusAgentTab,
+    guardBackground: desktopFocus.run,
   });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });

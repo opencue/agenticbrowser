@@ -63,6 +63,9 @@ This install builds the harness and symlinks the Linux port's CLI shim:
 - For headed mode: a display (`DISPLAY` set) — prefer **WSLg** on Windows
 - For headed human-action focus on Linux: `xdotool` (the browser uses XWayland
   on Wayland desktops so only the explicit focus gate can activate it)
+- For headed background-focus recovery from a native Wayland application:
+  `ydotool` with `ydotoold` running (`xdotool` cannot target the previous native
+  Wayland window on GNOME)
 - For headless: `EGO_LINUX_HEADLESS=1` (opt-in; no GUI required)
 
 ### Run the installer
