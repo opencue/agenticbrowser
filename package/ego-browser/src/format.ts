@@ -839,7 +839,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     signature:
       "taskSpaces.requestUserAction(nameOrId, options?) => Promise<object>",
     description:
-      "Hand off for a manual browser action. Bare calls never focus; a concrete instruction shows a one-shot Done/Cancel panel, highlights the target, and waits by default.",
+      "Hand off for a manual browser action. Bare calls never focus; a concrete instruction shows a one-shot Done/Cancel panel, persists it in the Linux Spaces Needs You Inbox, highlights the target, and waits by default.",
     params: [
       {
         name: "nameOrId",

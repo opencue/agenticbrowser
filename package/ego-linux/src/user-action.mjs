@@ -41,6 +41,12 @@ function normalizeAction(action) {
   if (!key) throw new Error("showUserAction requires a non-empty key");
   return {
     key,
+    taskSpaceId: Number.isInteger(Number(action.taskSpaceId))
+      ? Number(action.taskSpaceId)
+      : null,
+    taskSpaceName: compactText(action.taskSpaceName, 160),
+    agentProfile: compactText(action.agentProfile, 160),
+    agentSession: compactText(action.agentSession, 160),
     instruction,
     target: normalizeTarget(action.target),
     doneLabel: compactText(action.doneLabel, 40) || "Done",
@@ -58,7 +64,10 @@ function normalizeAction(action) {
  * in the DOM, but its JavaScript world cannot read the private expandos that hold
  * the controls, action, or result.
  */
-export function createUserActionApi(cdp, { listTabs }) {
+export function createUserActionApi(
+  cdp,
+  { listTabs, collaborationStore = null },
+) {
   const sessionForActiveTab = createSessionResolver(cdp, {
     listTabs,
     op: "user action",
@@ -126,10 +135,39 @@ export function createUserActionApi(cdp, { listTabs }) {
 
   return {
     async show(action) {
-      const normalized = normalizeAction(action);
+      let normalized = normalizeAction(action);
+      let request = null;
+      if (collaborationStore) {
+        request = await collaborationStore.create({
+          actionKey: normalized.key,
+          taskSpaceId: normalized.taskSpaceId,
+          taskSpaceName: normalized.taskSpaceName,
+          agentProfile: normalized.agentProfile,
+          agentSession: normalized.agentSession,
+          instruction: normalized.instruction,
+          target: normalized.target,
+          doneLabel: normalized.doneLabel,
+          cancelLabel: normalized.cancelLabel,
+        });
+        normalized = {
+          ...normalized,
+          requestId: request.id,
+          requestVersion: request.version,
+        };
+      }
       const existing = await probe().catch(() => null);
+      const existingMatches = Boolean(
+        existing?.key === normalized.key &&
+          (!normalized.requestId || existing.requestId === normalized.requestId),
+      );
+      if (request && existingMatches && existing?.result) {
+        request = await collaborationStore.respond(request.id, {
+          requestVersion: request.version,
+          result: existing.result,
+        });
+      }
       const alreadyVisible = Boolean(
-        existing?.visible && existing.key === normalized.key,
+        existing?.visible && existingMatches,
       );
       activeAction = normalized;
       const rendered = await render(normalized);
@@ -137,7 +175,7 @@ export function createUserActionApi(cdp, { listTabs }) {
         done: true,
         alreadyVisible,
         targetFound: rendered?.targetFound === true,
-        ...(existing?.key === normalized.key && existing?.result
+        ...(existingMatches && existing?.result
           ? { result: existing.result }
           : {}),
       };
@@ -154,8 +192,46 @@ export function createUserActionApi(cdp, { listTabs }) {
       }
       const deadline = Date.now() + timeoutMs;
       while (true) {
+        if (collaborationStore && activeAction?.requestId) {
+          const persisted = await collaborationStore.get(
+            activeAction.requestId,
+          );
+          if (persisted?.status !== "pending" && persisted?.response?.result) {
+            return {
+              done: true,
+              result: persisted.response.result,
+            };
+          }
+        }
         const current = await probe().catch(() => null);
         if (current?.key === wanted && current.result) {
+          if (collaborationStore && activeAction?.requestId) {
+            const persisted = await collaborationStore.get(
+              activeAction.requestId,
+            );
+            if (persisted?.status === "pending") {
+              let answered;
+              try {
+                answered = await collaborationStore.respond(persisted.id, {
+                  requestVersion: persisted.version,
+                  result: current.result,
+                });
+              } catch (error) {
+                if (!error?.request?.response?.result) throw error;
+                answered = error.request;
+              }
+              return {
+                done: true,
+                result: answered.response.result,
+              };
+            }
+            if (persisted?.response?.result === current.result) {
+              return {
+                done: true,
+                result: persisted.response.result,
+              };
+            }
+          }
           return { done: true, result: current.result };
         }
         if (
@@ -178,6 +254,21 @@ export function createUserActionApi(cdp, { listTabs }) {
         `(${__egoUserActionClear.toString()})(${JSON.stringify(HOST_ID)},${JSON.stringify(wanted)})`,
       ).catch(() => {});
       return { done: true };
+    },
+
+    async markResumed() {
+      if (!collaborationStore || !activeAction?.requestId) {
+        return { done: true, updated: false };
+      }
+      const request = await collaborationStore.get(activeAction.requestId);
+      if (request?.response?.result !== "done") {
+        return { done: true, updated: false };
+      }
+      await collaborationStore.markResume(request.id, {
+        resumed: true,
+        expectedResult: "done",
+      });
+      return { done: true, updated: true };
     },
   };
 }
@@ -217,6 +308,7 @@ function __egoUserActionProbe(hostId) {
   const result = host.__egoResult;
   return {
     key: action.key,
+    requestId: action.requestId || null,
     result: result?.key === action.key ? result.result : null,
     visible: host.isConnected,
     targetFound: host.__egoTargetFound === true,
@@ -307,7 +399,13 @@ function __egoUserActionRender(hostId, action) {
   }
 
   const previousKey = host.__egoAction?.key;
-  if (previousKey !== action.key) host.__egoResult = null;
+  const previousRequestId = host.__egoAction?.requestId || null;
+  if (
+    previousKey !== action.key ||
+    previousRequestId !== (action.requestId || null)
+  ) {
+    host.__egoResult = null;
+  }
   host.__egoAction = action;
   const shadow = host.__egoShadow;
   const panel = shadow.getElementById("panel");

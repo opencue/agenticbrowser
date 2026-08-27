@@ -125,6 +125,73 @@ describe("the human-action overlay", () => {
       ),
     );
   });
+
+  it("persists overlay decisions in the shared collaboration request", async () => {
+    const cdp = fakeCdp([
+      null,
+      { key: "manual-step", requestId: "request-1", result: "done" },
+    ]);
+    let request = {
+      id: "request-1",
+      version: 1,
+      status: "pending",
+      response: null,
+    };
+    const store = {
+      async create(action) {
+        assert.equal(action.taskSpaceId, 7);
+        assert.equal(action.actionKey, "manual-step");
+        return request;
+      },
+      async get(id) {
+        assert.equal(id, "request-1");
+        return request;
+      },
+      async respond(id, response) {
+        assert.equal(id, "request-1");
+        assert.deepEqual(response, { requestVersion: 1, result: "done" });
+        request = {
+          ...request,
+          version: 2,
+          status: "resolved",
+          response: { result: "done", resumed: false },
+        };
+        return request;
+      },
+      async markResume(id) {
+        request = {
+          ...request,
+          response: { ...request.response, resumed: true },
+        };
+        return request;
+      },
+    };
+    const actions = createUserActionApi(cdp, {
+      listTabs,
+      collaborationStore: store,
+    });
+
+    const shown = await actions.show({
+      key: "manual-step",
+      taskSpaceId: 7,
+      taskSpaceName: "checkout",
+      instruction: "Confirm the purchase.",
+    });
+    assert.deepEqual(shown, {
+      done: true,
+      alreadyVisible: false,
+      targetFound: true,
+    });
+    assert.deepEqual(
+      await actions.wait({ key: "manual-step", timeoutMs: 100, pollMs: 1 }),
+      { done: true, result: "done" },
+    );
+    assert.deepEqual(await actions.markResumed(), {
+      done: true,
+      updated: true,
+    });
+    assert.equal(request.response.resumed, true);
+  });
 });
 
 it("uses notify-send without a shell as the presentation fallback", () => {

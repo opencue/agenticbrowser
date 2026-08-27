@@ -101,6 +101,33 @@ export const SPACES_HTML = `<!doctype html>
     padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
     background: color-mix(in srgb, var(--card) 72%, transparent);
   }
+  .inbox { margin-bottom: 34px; }
+  .inbox[hidden] { display: none; }
+  .inbox-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-bottom: 12px;
+  }
+  .inbox-title {
+    font-size: 13px; font-weight: 750; letter-spacing: .08em;
+    text-transform: uppercase; color: #c7891f;
+  }
+  .inbox-list { display: grid; gap: 10px; }
+  .request-card {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px 20px; padding: 16px 18px;
+    border: 1px solid rgba(224, 160, 42, .38); border-radius: 15px;
+    background: color-mix(in srgb, var(--card) 92%, #e0a02a 8%);
+    box-shadow: 0 8px 28px rgba(10, 14, 25, .08);
+  }
+  .request-copy { min-width: 0; }
+  .request-title { font-size: 14px; font-weight: 680; }
+  .request-instruction {
+    margin-top: 3px; color: var(--text); overflow-wrap: anywhere;
+  }
+  .request-meta { margin-top: 7px; color: var(--muted); font-size: 11.5px; }
+  .request-actions { display: flex; align-items: center; gap: 8px; }
+  .ctl.done { color: #fff; background: var(--accent); border-color: var(--accent); }
+  .ctl.cancel:hover { color: #d3453c; border-color: #d3453c; }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
@@ -124,6 +151,19 @@ export const SPACES_HTML = `<!doctype html>
     padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
   }
   .card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  .card.compact {
+    display: grid; grid-template-columns: 64px minmax(0, 1fr) auto;
+    align-items: center; gap: 12px; padding: 8px;
+    border: 1px solid var(--line); border-radius: 14px; background: var(--card);
+  }
+  .card.compact .frame {
+    width: 64px; height: 64px; aspect-ratio: auto; border-radius: 10px;
+    box-shadow: none;
+  }
+  .card.compact .frame:hover { transform: none; box-shadow: none; }
+  .card.compact .close { opacity: 1; width: 21px; height: 21px; top: 4px; right: 4px; }
+  .card.compact .controls { padding: 0; flex-direction: column; align-items: stretch; }
+  .card.compact .trail { display: none; }
   .frame {
     position: relative;
     aspect-ratio: 16 / 10;
@@ -237,6 +277,16 @@ export const SPACES_HTML = `<!doctype html>
   .trail div span:last-child { flex: none; opacity: .72; }
   .trail div:first-child { color: var(--text); opacity: .82; }
   .empty-state { color: var(--muted); padding: 40px 0; }
+  @media (max-width: 700px) {
+    body { padding: 24px 18px 36px; }
+    header { align-items: flex-start; }
+    .sub { display: none; }
+    .request-card { grid-template-columns: 1fr; }
+    .request-actions { justify-content: flex-end; flex-wrap: wrap; }
+    .card.compact { grid-template-columns: 54px minmax(0, 1fr); }
+    .card.compact .frame { width: 54px; height: 54px; }
+    .card.compact .controls { grid-column: 1 / -1; flex-direction: row; }
+  }
 </style>
 </head>
 <body>
@@ -247,11 +297,13 @@ export const SPACES_HTML = `<!doctype html>
     </div>
     <span class="summary" id="summary"></span>
   </header>
+  <section class="inbox" id="inbox" hidden></section>
   <div class="sections" id="grid"></div>
   <p class="note" id="note"></p>
 
 <script>
 const grid = document.getElementById("grid");
+const inbox = document.getElementById("inbox");
 const note = document.getElementById("note");
 const summary = document.getElementById("summary");
 let busy = false;
@@ -280,8 +332,14 @@ async function api(path, options) {
       "x-ego-daemon-token": daemonToken,
     },
   });
-  if (!response.ok) throw new Error(await response.text());
-  return response.json();
+  const payload = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(payload?.error || "request failed");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
+  }
+  return payload;
 }
 
 /**
@@ -317,7 +375,8 @@ function pageContext(space) {
 
 function card(space) {
   const wrap = document.createElement("div");
-  wrap.className = "card";
+  wrap.className = "card compact";
+  if (space.activity) wrap.className = "card";
 
   const frame = document.createElement("div");
   frame.className =
@@ -433,6 +492,94 @@ function ago(ms) {
   return minutes < 60 ? minutes + "m ago" : Math.round(minutes / 60) + "h ago";
 }
 
+function requestAge(request) {
+  return ago(Math.max(0, Date.now() - Number(request.createdAt || Date.now())));
+}
+
+function requestCard(request, spacesById) {
+  const space = spacesById.get(request.taskSpaceId);
+  const card = document.createElement("article");
+  card.className = "request-card";
+
+  const copy = document.createElement("div");
+  copy.className = "request-copy";
+  const title = document.createElement("div");
+  title.className = "request-title";
+  title.textContent = request.taskSpaceName || space?.name || "Task space";
+  const instruction = document.createElement("div");
+  instruction.className = "request-instruction";
+  instruction.textContent = request.instruction;
+  const meta = document.createElement("div");
+  meta.className = "request-meta";
+  let host = "No page available";
+  try {
+    host = new URL(space?.url).hostname || host;
+  } catch {}
+  meta.textContent =
+    profileLabel(request.agentProfile || space?.profile || "") +
+    " \u00b7 " +
+    host +
+    " \u00b7 waiting " +
+    requestAge(request);
+  copy.append(title, instruction, meta);
+
+  const actions = document.createElement("div");
+  actions.className = "request-actions";
+  const open = document.createElement("button");
+  open.className = "ctl primary";
+  open.textContent = "Open page";
+  open.addEventListener("click", () =>
+    act("/api/collaboration/requests/" + request.id + "/open", "POST", {
+      requestVersion: request.version,
+    }),
+  );
+  const cancel = document.createElement("button");
+  cancel.className = "ctl cancel";
+  cancel.textContent = request.cancelLabel || "Cancel";
+  cancel.addEventListener("click", () =>
+    act("/api/collaboration/requests/" + request.id + "/respond", "POST", {
+      requestVersion: request.version,
+      response: { kind: "cancel" },
+    }),
+  );
+  const done = document.createElement("button");
+  done.className = "ctl done";
+  done.textContent = request.doneLabel || "Done";
+  done.addEventListener("click", () =>
+    act("/api/collaboration/requests/" + request.id + "/respond", "POST", {
+      requestVersion: request.version,
+      response: { kind: "done" },
+    }),
+  );
+  actions.append(open, cancel, done);
+  card.append(copy, actions);
+  return card;
+}
+
+function renderInbox(collaboration, spaces) {
+  const requests = collaboration?.requests || [];
+  if (collaboration?.enabled !== true || requests.length === 0) {
+    inbox.hidden = true;
+    inbox.replaceChildren();
+    return;
+  }
+  const head = document.createElement("div");
+  head.className = "inbox-head";
+  const title = document.createElement("span");
+  title.className = "inbox-title";
+  title.textContent = "Needs You";
+  const count = document.createElement("span");
+  count.className = "section-count";
+  count.textContent = requests.length + (requests.length === 1 ? " request" : " requests");
+  head.append(title, count);
+  const list = document.createElement("div");
+  list.className = "inbox-list";
+  const spacesById = new Map(spaces.map((space) => [space.id, space]));
+  list.append(...requests.map((request) => requestCard(request, spacesById)));
+  inbox.replaceChildren(head, list);
+  inbox.hidden = false;
+}
+
 /** What the space actually did, newest first. */
 function trail(entries) {
   const list = document.createElement("div");
@@ -485,7 +632,12 @@ async function act(path, method, body) {
     }
     await refresh();
   } catch (error) {
-    note.textContent = "action failed: " + error.message;
+    if (error.status === 409) {
+      note.textContent = "Already answered. Reloaded the winning response.";
+      await refresh();
+    } else {
+      note.textContent = "action failed: " + error.message;
+    }
   } finally {
     busy = false;
   }
@@ -538,12 +690,18 @@ function section(profile, spaces, withAddCard) {
 
 async function loadSpaces() {
   try {
-    const { spaces } = await api("/api/spaces");
+    const [{ spaces }, collaboration] = await Promise.all([
+      api("/api/spaces"),
+      api("/api/collaboration/requests"),
+    ]);
+    renderInbox(collaboration, spaces);
     const groups = groupByProfile(spaces);
     const liveCount = spaces.filter((space) => space.activity?.live).length;
     const profileCount = new Set(spaces.map((space) => space.profile).filter(Boolean)).size;
+    const pendingCount = collaboration?.pendingCount || 0;
     summary.textContent = spaces.length
-      ? spaces.length + " spaces · " + liveCount + " live · " + profileCount + " profiles"
+      ? spaces.length + " spaces · " + liveCount + " live · " + profileCount + " profiles" +
+        (pendingCount ? " · " + pendingCount + " need you" : "")
       : "No spaces";
 
     if (!spaces.length) {

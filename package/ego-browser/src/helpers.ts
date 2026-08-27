@@ -544,8 +544,9 @@ export async function bringToFrontTaskSpace(
  * A non-empty `instruction` is the capability that permits focus: bare legacy
  * calls remain focus-protected, so an accidental or speculative handoff cannot
  * interrupt the user's current application. With an instruction, Linux shows an
- * in-page Done/Cancel panel, highlights `target`, focuses once per action key, and
- * can wait for the decision and resume automatically.
+ * in-page Done/Cancel panel, persists the blocker in the Linux Spaces Inbox,
+ * highlights `target`, focuses once per action key, and can wait for the decision
+ * and resume automatically.
  * @param {string|number} nameOrId Task space id or name.
  * @param {RequestUserActionOptions} [options] Human instruction, target, labels, and wait settings. Supplying instruction defaults wait to true.
  * @returns {Promise<object>}
@@ -632,6 +633,10 @@ export async function requestUserActionTaskSpace(
     panel = assertNoEgoError(
       await ego.showUserAction({
         key: actionKey,
+        taskSpaceId: id,
+        taskSpaceName: match.name,
+        agentProfile: match.profile,
+        agentSession: match.session,
         instruction,
         target: options.target,
         doneLabel: options.doneLabel,
@@ -669,7 +674,13 @@ export async function requestUserActionTaskSpace(
     done: true as const,
     visible: true as const,
     presentation,
-    ...(instruction ? { actionKey, focused } : {}),
+    ...(instruction
+      ? {
+          actionKey,
+          focused,
+          ...(panel?.requestId ? { requestId: panel.requestId } : {}),
+        }
+      : {}),
   };
   if (!wait) return base;
   if (
@@ -680,18 +691,20 @@ export async function requestUserActionTaskSpace(
       "requestUserActionTaskSpace wait:true requires the user-action runtime",
     );
   }
-  const decision =
-    panel?.result ||
-    assertNoEgoError(
-      await ego.waitForUserAction({
-        key: actionKey,
-        timeoutMs: timeout * 1000,
-        pollMs: interval * 1000,
-      }),
-      "requestUserActionTaskSpace",
-    )?.result;
-  await ego.clearUserAction(actionKey);
+  const waited = panel?.result
+    ? { result: panel.result }
+    : assertNoEgoError(
+        await ego.waitForUserAction({
+          key: actionKey,
+          requestId: panel?.requestId,
+          timeoutMs: timeout * 1000,
+          pollMs: interval * 1000,
+        }),
+        "requestUserActionTaskSpace",
+      );
+  const decision = waited?.result;
   if (decision === "cancel") {
+    await ego.clearUserAction(actionKey);
     return {
       ...base,
       userResult: "cancel" as const,
@@ -699,11 +712,13 @@ export async function requestUserActionTaskSpace(
     };
   }
   if (decision !== "done") {
+    await ego.clearUserAction(actionKey);
     throw new Error(
       `requestUserActionTaskSpace received an invalid user result: ${JSON.stringify(decision)}`,
     );
   }
-  await takeOverTaskSpace(nameOrId);
+  if (waited?.resumed !== true) await takeOverTaskSpace(nameOrId);
+  await ego.clearUserAction(actionKey);
   return {
     ...base,
     userResult: "done" as const,
@@ -2022,7 +2037,7 @@ const FACADE_HELP: Record<string, string> = {
   "taskSpaces.bringToFront":
     "taskSpaces.bringToFront(nameOrId, { focus?: boolean }?) => Promise<object>: check that the task space's browser window is open without selecting it for automation, claiming it, or changing ownership. Default focus:false never raises it. Pass focus:true only when the user's latest instruction explicitly asks to show/raise the browser.",
   "taskSpaces.requestUserAction":
-    "taskSpaces.requestUserAction(nameOrId, { instruction?, target?, actionKey?, doneLabel?, cancelLabel?, wait?, timeout?, interval? }?) => Promise<object>: bare calls hand off without focusing. A non-empty instruction shows a Done/Cancel panel, highlights target, focuses once per action key, and will require visible: true before waiting by default; Done automatically resumes agent control, Cancel leaves user control in place.",
+    "taskSpaces.requestUserAction(nameOrId, { instruction?, target?, actionKey?, doneLabel?, cancelLabel?, wait?, timeout?, interval? }?) => Promise<object>: bare calls hand off without focusing. A non-empty instruction shows a Done/Cancel panel, persists the blocker in the Linux Spaces Needs You Inbox, highlights target, focuses once per action key, and will require visible: true before waiting by default; Done automatically resumes agent control, Cancel leaves user control in place.",
   "taskSpaces.loginPreflight":
     "taskSpaces.loginPreflight(nameOrId, { waitForAutofill?, interval?, submit? }?) => Promise<object>: under agent control, wait briefly for password-manager autofill and return only booleans/counts. When every visible login credential is populated, submit the unique login form (or an explicit CSS selector) without focusing or asking permission.",
   "taskSpaces.handleChallenge":

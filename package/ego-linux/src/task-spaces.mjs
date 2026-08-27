@@ -1301,6 +1301,15 @@ export function createTaskSpacesApi(
       };
     },
 
+    /** Internal metadata for Linux bridge calls that predate task-space ids. */
+    async selectedTaskSpace() {
+      const state = await readState();
+      const wanted = effectiveSelectedId(state);
+      if (!wanted) return null;
+      const space = state.spaces.find((candidate) => candidate.id === wanted);
+      return space ? { ...space } : null;
+    },
+
     async createTabInSelectedSpace(tabs, url) {
       return withStateLock(async (state) => {
         const space = state.spaces.find(

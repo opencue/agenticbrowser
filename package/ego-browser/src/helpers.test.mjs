@@ -2448,6 +2448,10 @@ test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the a
         userResult: "done",
         resumed: true,
       });
+
+      const shown = calls.find((call) => call[0] === "showUserAction");
+      assert.equal(shown[1].taskSpaceId, 7);
+      assert.equal(shown[1].taskSpaceName, "checkout-flow");
     },
   );
   assert.ok(

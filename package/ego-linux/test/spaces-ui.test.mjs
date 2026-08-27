@@ -74,6 +74,9 @@ describe("Spaces overview organization", () => {
 
   it("ships the summary and denser responsive grid in the served page", () => {
     assert.match(SPACES_HTML, /id="summary"/);
+    assert.match(SPACES_HTML, /id="inbox"/);
+    assert.match(SPACES_HTML, /className = "card compact"/);
+    assert.match(SPACES_HTML, /Needs You/);
     assert.match(SPACES_HTML, /minmax\(min\(100%, 310px\), 1fr\)/);
     assert.doesNotMatch(SPACES_HTML, /agents\.join\(" \+ "\) \|\| "Agent"/);
     const script = SPACES_HTML.match(/<script>([\s\S]*)<\/script>/)?.[1];
@@ -86,6 +89,8 @@ describe("Spaces overview organization", () => {
     assert.match(SPACES_HTML, /sessionStorage\.setItem\("ego-spaces-token"/);
     assert.match(SPACES_HTML, /history\.replaceState/);
     assert.match(SPACES_HTML, /fetch\("\/api\/events"/);
+    assert.match(SPACES_HTML, /\/api\/collaboration\/requests/);
+    assert.match(SPACES_HTML, /Already answered/);
     assert.match(SPACES_HTML, /"x-ego-daemon-token": daemonToken/);
     assert.doesNotMatch(SPACES_HTML, /new EventSource/);
     assert.match(SPACES_HTML, /FALLBACK_POLL_MS = 15000/);

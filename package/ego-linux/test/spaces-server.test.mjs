@@ -18,6 +18,7 @@ const DAEMON_TOKEN = "spaces-server-test-token";
 const SANDBOX = await mkdtemp(join(tmpdir(), "ego-spaces-test-"));
 process.env.XDG_STATE_HOME = join(SANDBOX, "state");
 process.env.EGO_LINUX_PROFILE = join(SANDBOX, "profile");
+process.env.EGO_LINUX_COLLABORATION_INBOX = "1";
 
 // Imported after that assignment on purpose: paths.mjs resolves its directories
 // at module load, so a static import would bind the real ones first.
@@ -164,7 +165,7 @@ async function waitForActiveSpace(name, label, timeoutMs = 5000) {
  */
 function jpegSize(dataUri) {
   const buffer = Buffer.from(String(dataUri).split(",")[1], "base64");
-  for (let i = 2; i < buffer.length - 9; ) {
+  for (let i = 2; i < buffer.length - 9;) {
     if (buffer[i] !== 0xff) {
       i += 1;
       continue;
@@ -219,7 +220,12 @@ after(async () => {
 
 describe("Spaces overview server", () => {
   it("refuses every API route without the daemon token", async () => {
-    for (const path of ["/api/health", "/api/spaces", "/api/events"]) {
+    for (const path of [
+      "/api/health",
+      "/api/spaces",
+      "/api/events",
+      "/api/collaboration/requests",
+    ]) {
       const response = await fetch(BASE + path);
       assert.equal(response.status, 403, path);
       assert.deepEqual(await response.json(), {
@@ -232,6 +238,211 @@ describe("Spaces overview server", () => {
     const { status, body } = await api("/api/health");
     assert.equal(status, 200);
     assert.deepEqual(body, { ok: true });
+  });
+
+  it("lists and resolves a durable manual collaboration request exactly once", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "inbox response space" }),
+    });
+    const request = await shim.collaborationStore.create({
+      actionKey: "inbox-response",
+      taskSpaceId: created.space.id,
+      taskSpaceName: created.space.name,
+      instruction: "Confirm the manual step.",
+      doneLabel: "Done",
+      cancelLabel: "Cancel",
+    });
+
+    const listed = await api("/api/collaboration/requests");
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.enabled, true);
+    assert.equal(listed.body.pendingCount, 1);
+    assert.equal(listed.body.requests[0].id, request.id);
+
+    const answered = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: request.version,
+          response: { kind: "cancel" },
+        }),
+      },
+    );
+    assert.equal(answered.status, 200);
+    assert.equal(answered.body.accepted, true);
+    assert.equal(answered.body.resumed, false);
+    assert.equal(answered.body.request.status, "cancelled");
+
+    const retry = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: request.version,
+          response: { kind: "cancel" },
+        }),
+      },
+    );
+    assert.equal(retry.status, 200);
+    assert.equal(retry.body.request.id, request.id);
+
+    const conflict = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: request.version,
+          response: { kind: "done" },
+        }),
+      },
+    );
+    assert.equal(conflict.status, 409);
+    assert.equal(conflict.body.request.id, request.id);
+  });
+
+  it("rejects unsupported responses and keeps the request pending", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "invalid inbox response space" }),
+    });
+    const request = await shim.collaborationStore.create({
+      actionKey: "invalid-inbox-response",
+      taskSpaceId: created.space.id,
+      taskSpaceName: created.space.name,
+      instruction: "This request only accepts Done or Cancel.",
+    });
+
+    const invalid = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: request.version,
+          response: { kind: "approve" },
+        }),
+      },
+    );
+    assert.equal(invalid.status, 422);
+    assert.equal(
+      (await shim.collaborationStore.get(request.id)).status,
+      "pending",
+    );
+  });
+
+  it("keeps a no-page request pending when Open cannot present it", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "inbox without a page" }),
+    });
+    const request = await shim.collaborationStore.create({
+      actionKey: "open-missing-page",
+      taskSpaceId: created.space.id,
+      taskSpaceName: created.space.name,
+      instruction: "Open a page that no longer exists.",
+    });
+
+    const opened = await api(`/api/collaboration/requests/${request.id}/open`, {
+      method: "POST",
+      body: JSON.stringify({ requestVersion: request.version }),
+    });
+    assert.equal(opened.status, 410);
+    assert.equal(opened.body.reason, "no-live-tab");
+    const stored = await shim.collaborationStore.get(request.id);
+    assert.equal(stored.status, "pending");
+    assert.equal(stored.version, request.version);
+  });
+
+  it("opens request context explicitly and resumes ownership only after Done", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "inbox done space" }),
+    });
+    await shim.ego.useTaskSpace(created.space.id);
+    await shim.ego.createTab(FIXTURE_URL);
+    await shim.ego.handOffTaskSpace(created.space.id);
+    const request = await shim.collaborationStore.create({
+      actionKey: "inbox-done",
+      taskSpaceId: created.space.id,
+      taskSpaceName: created.space.name,
+      instruction: "Complete the highlighted step.",
+      doneLabel: "Done",
+      cancelLabel: "Cancel",
+    });
+
+    const opened = await api(`/api/collaboration/requests/${request.id}/open`, {
+      method: "POST",
+      body: JSON.stringify({ requestVersion: request.version }),
+    });
+    assert.equal(opened.status, 200);
+    assert.equal(opened.body.request.status, "pending");
+    assert.equal(opened.body.request.version, 2);
+    assert.equal(opened.body.visible, false);
+    assert.equal(opened.body.reason, "headless");
+
+    const beforeDone = await api("/api/spaces");
+    assert.equal(
+      beforeDone.body.spaces.find((space) => space.id === created.space.id)
+        .ownership,
+      "agentDelegatedToUser",
+    );
+
+    const answered = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: opened.body.request.version,
+          response: { kind: "done" },
+        }),
+      },
+    );
+    assert.equal(answered.status, 200);
+    assert.equal(answered.body.resumed, true);
+    assert.equal(answered.body.request.status, "resolved");
+
+    const afterDone = await api("/api/spaces");
+    assert.equal(
+      afterDone.body.spaces.find((space) => space.id === created.space.id)
+        .ownership,
+      "agent",
+    );
+  });
+
+  it("keeps a low-level user-action request after its CLI process exits", async () => {
+    const output = await runScript(`
+      const task = await taskSpaces.useOrCreate("persisted inbox bridge");
+      await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
+      const shown = await ego.showUserAction({
+        key: "persist-after-exit",
+        instruction: "Confirm this request from Spaces.",
+        doneLabel: "Done",
+        cancelLabel: "Cancel",
+      });
+      console.log(JSON.stringify({ taskId: task.id, shown }));
+    `);
+    assert.match(output, /"alreadyVisible":false/);
+
+    const listed = await api("/api/collaboration/requests");
+    const request = listed.body.requests.find(
+      (candidate) => candidate.actionKey === "persist-after-exit",
+    );
+    assert.ok(request, "the daemon sees the request after the CLI exits");
+    assert.equal(request.taskSpaceName, "persisted inbox bridge");
+
+    const cancelled = await api(
+      `/api/collaboration/requests/${request.id}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          requestVersion: request.version,
+          response: { kind: "cancel" },
+        }),
+      },
+    );
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.request.status, "cancelled");
   });
 
   it("creates a targetless space without an empty thumbnail tab", async () => {

@@ -40,6 +40,10 @@ const HARNESS = new URL("../../ego-browser/dist/out/index.js", import.meta.url);
 const SKILL_WORKSPACE = new URL("../../../skills/ego-browser", import.meta.url);
 const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 
+// Phase 1 is the default after its persistence, API, focus, and UI checks pass.
+// Keep a local kill switch for diagnosis without maintaining a second build.
+process.env.EGO_LINUX_COLLABORATION_INBOX ??= "1";
+
 const USAGE = `ego-browser (Linux port)
 
   ego-browser <<'JS'

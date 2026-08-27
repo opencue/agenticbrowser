@@ -11,10 +11,11 @@ import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
 import { createCursorApi } from "./cursor.mjs";
 import { createWindowFit } from "./window-fit.mjs";
+import { createUserActionApi, notifyUserAction } from "./user-action.mjs";
 import {
-  createUserActionApi,
-  notifyUserAction,
-} from "./user-action.mjs";
+  collaborationInboxEnabled,
+  createCollaborationStore,
+} from "./collaboration-store.mjs";
 
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
@@ -72,7 +73,13 @@ export async function createEgoShim({ headless = false } = {}) {
   });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
-  const userActions = createUserActionApi(cdp, { listTabs: tabs.listTabs });
+  const collaborationStore = collaborationInboxEnabled()
+    ? createCollaborationStore()
+    : null;
+  const userActions = createUserActionApi(cdp, {
+    listTabs: tabs.listTabs,
+    collaborationStore,
+  });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples
   // where it landed — so a user watching the window sees the agent work.
@@ -170,12 +177,31 @@ export async function createEgoShim({ headless = false } = {}) {
       taskSpaces.presentTaskSpace(id, {
         allowFocus: options?.focus === true,
       }),
-    showUserAction: userActions.show,
+    async showUserAction(action) {
+      let enriched = action;
+      if (
+        collaborationStore &&
+        !Number.isInteger(Number(action?.taskSpaceId))
+      ) {
+        const selected = await taskSpaces.selectedTaskSpace();
+        if (selected) {
+          enriched = {
+            ...action,
+            taskSpaceId: selected.id,
+            taskSpaceName: selected.name,
+            agentProfile: selected.profile,
+            agentSession: selected.session,
+          };
+        }
+      }
+      return userActions.show(enriched);
+    },
     waitForUserAction: userActions.wait,
     clearUserAction: userActions.clear,
     notifyUserAction,
     async takeOverTaskSpace(id) {
       const result = await taskSpaces.takeOverTaskSpace(id);
+      await userActions.markResumed().catch(() => {});
       await userActions.clear().catch(() => {});
       cursor.show();
       return result;
@@ -216,6 +242,7 @@ export async function createEgoShim({ headless = false } = {}) {
     cdp,
     cleanupCreatedEmptySpaces: taskSpaces.cleanupCreatedEmptySpaces,
     dismissCursor: cursor.dismiss,
+    collaborationStore,
     presentTaskSpaceForPanel: (id) =>
       taskSpaces.presentTaskSpace(id, { allowFocus: true }),
     close: () => cdp.close(),

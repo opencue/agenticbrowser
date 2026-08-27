@@ -70,7 +70,11 @@ private `focus-audit.jsonl` state file. A `requestUserAction()` call focuses onl
 when it carries a concrete non-empty instruction, and can activate the exact
 managed-browser PID without opening a second window. Its Done/Cancel state lives
 in a named isolated CDP world behind a closed shadow root, so page JavaScript can
-remove the panel but cannot forge a human decision. Set
+remove the panel but cannot forge a human decision. The same request is persisted
+privately and appears in the Spaces **Needs You** Inbox, where Open does not answer
+it, Done resumes the agent, and Cancel leaves the page under user control. Idle and
+no-page Spaces use compact rows instead of blank screenshot cards. Set
+`EGO_LINUX_COLLABORATION_INBOX=0` only as a diagnostic kill switch. Set
 `EGO_LINUX_WINDOW_BACKEND=wayland` to force native Wayland; that opts out of
 reliable programmatic application activation, so focused presentation may
 report `raise-failed` instead.
