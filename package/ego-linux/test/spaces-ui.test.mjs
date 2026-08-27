@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 
 import {
   SPACES_HTML,
+  activityStatus,
   compareSpaceGroups,
   compareSpaces,
   profileLabel,
@@ -26,14 +27,15 @@ describe("Spaces overview organization", () => {
       space("idle"),
       space("personal", "user"),
       space("handed-off", "agentDelegatedToUser"),
-      space("live", "agent", { ageMs: 10 }),
+      space("recent", "agent", { ageMs: 45_000, live: false }),
+      space("live", "agent", { ageMs: 10, live: true }),
     ];
 
     spaces.sort(compareSpaces);
 
     assert.deepEqual(
       spaces.map(({ name }) => name),
-      ["live", "handed-off", "personal", "idle"],
+      ["live", "recent", "handed-off", "personal", "idle"],
     );
   });
 
@@ -41,7 +43,10 @@ describe("Spaces overview organization", () => {
     const groups = [
       ["", [space("personal", "user")]],
       ["python", [space("idle")]],
-      ["medusa-vite+resend", [space("live", "agent", { ageMs: 10 })]],
+      [
+        "medusa-vite+resend",
+        [space("live", "agent", { ageMs: 10, live: true })],
+      ],
     ];
 
     groups.sort(compareSpaceGroups);
@@ -51,6 +56,20 @@ describe("Spaces overview organization", () => {
       ["medusa-vite+resend", "python", ""],
     );
     assert.equal(compareSpaceGroups(groups[2], groups[2]), 0);
+  });
+
+  it("distinguishes a moving cursor from a recent one", () => {
+    assert.equal(
+      activityStatus(space("live", "agent", { ageMs: 10, live: true })),
+      "Live",
+    );
+    assert.equal(
+      activityStatus(
+        space("thinking", "agent", { ageMs: 45_000, live: false }),
+      ),
+      "Recent",
+    );
+    assert.equal(activityStatus(space("idle")), "Agent");
   });
 
   it("ships the summary and denser responsive grid in the served page", () => {

@@ -346,7 +346,7 @@ describe("Spaces overview server", () => {
     assert.deepEqual(body, { error: "request body too large" });
   });
 
-  it("isolates a stalled priming screenshot from live card state", async () => {
+  it("keeps a recent cursor visible while a stalled screenshot is isolated", async () => {
     const calls = [];
     const stalledServer = await startSpacesServer({
       ego: {
@@ -396,7 +396,7 @@ describe("Spaces overview server", () => {
                 value: {
                   name: "Testbot",
                   label: "still responsive",
-                  ageMs: 0,
+                  ageMs: 45_000,
                   x: 10,
                   y: 10,
                   viewportWidth: 100,
@@ -423,7 +423,12 @@ describe("Spaces overview server", () => {
       assert.equal(
         body.spaces[0].activity?.name,
         "Testbot",
-        "a stuck optional screenshot must not block live cursor state",
+        "a thinking agent's cursor must not vanish after only 30 seconds",
+      );
+      assert.equal(
+        body.spaces[0].activity?.live,
+        false,
+        "recent cursor presence stays visible without being called live",
       );
       assert.equal(
         calls.filter((method) => method === "Target.attachToTarget").length,

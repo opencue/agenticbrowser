@@ -15,10 +15,18 @@ export function profileLabel(profile) {
 }
 
 export function spacePriority(space) {
-  if (space.activity) return 0;
-  if (space.ownership === "agentDelegatedToUser") return 1;
-  if (space.ownership === "user") return 2;
-  return 3;
+  if (space.activity?.live) return 0;
+  if (space.activity) return 1;
+  if (space.ownership === "agentDelegatedToUser") return 2;
+  if (space.ownership === "user") return 3;
+  return 4;
+}
+
+export function activityStatus(space) {
+  if (space.ownership !== "agent") return null;
+  if (space.activity?.live) return "Live";
+  if (space.activity) return "Recent";
+  return "Agent";
 }
 
 export function compareSpaces(left, right) {
@@ -147,7 +155,8 @@ export const SPACES_HTML = `<!doctype html>
   /* A working space is cropped to where its agent is, so the frame shows the
      action rather than the whole page — say so, or the zoom looks like a bug. */
   .frame.live { border-color: rgba(217, 119, 87, .55); }
-  .frame.live img { object-position: center; }
+  .frame.recent { border-color: rgba(74, 158, 255, .36); }
+  .frame.live img, .frame.recent img { object-position: center; }
   .live-chip {
     position: absolute; left: 9px; bottom: 9px; right: 9px;
     display: flex; align-items: center; gap: 7px;
@@ -161,6 +170,9 @@ export const SPACES_HTML = `<!doctype html>
   .live-chip i {
     flex: none; width: 7px; height: 7px; border-radius: 50%;
     background: #d97757; animation: breathe 1.7s ease-in-out infinite;
+  }
+  .live-chip.recent i {
+    background: #4a9eff; animation: none; opacity: .72;
   }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
   .frame.empty { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
@@ -249,6 +261,7 @@ const profileLabel = ${profileLabel.toString()};
 const spacePriority = ${spacePriority.toString()};
 const compareSpaces = ${compareSpaces.toString()};
 const compareSpaceGroups = ${compareSpaceGroups.toString()};
+const activityStatus = ${activityStatus.toString()};
 
 async function api(path, options) {
   const response = await fetch(path, {
@@ -266,7 +279,7 @@ async function api(path, options) {
  */
 function liveChip(activity) {
   const chip = document.createElement("div");
-  chip.className = "live-chip";
+  chip.className = "live-chip" + (activity.live ? "" : " recent");
   const seconds = Math.round(activity.ageMs / 1000);
   const when = seconds < 2 ? "now" : seconds + "s ago";
   const text = document.createElement("span");
@@ -296,7 +309,9 @@ function card(space) {
 
   const frame = document.createElement("div");
   frame.className =
-    "frame" + (space.thumbnail ? "" : " empty") + (space.activity ? " live" : "");
+    "frame" +
+    (space.thumbnail ? "" : " empty") +
+    (space.activity ? (space.activity.live ? " live" : " recent") : "");
   frame.title = space.url || "";
   if (space.thumbnail) {
     const img = document.createElement("img");
@@ -350,13 +365,8 @@ function card(space) {
   const status = document.createElement("span");
   status.className = "status " + space.ownership;
   status.textContent =
-    space.ownership === "agent"
-      ? space.activity
-        ? "Live"
-        : "Agent"
-      : space.ownership === "agentDelegatedToUser"
-        ? "Your control"
-        : "Personal";
+    activityStatus(space) ||
+    (space.ownership === "agentDelegatedToUser" ? "Your control" : "Personal");
   metaTop.append(name, status);
 
   const pageMeta = document.createElement("div");
@@ -518,7 +528,7 @@ async function loadSpaces() {
   try {
     const { spaces } = await api("/api/spaces");
     const groups = groupByProfile(spaces);
-    const liveCount = spaces.filter((space) => space.activity).length;
+    const liveCount = spaces.filter((space) => space.activity?.live).length;
     const profileCount = new Set(spaces.map((space) => space.profile).filter(Boolean)).size;
     summary.textContent = spaces.length
       ? spaces.length + " spaces · " + liveCount + " live · " + profileCount + " profiles"

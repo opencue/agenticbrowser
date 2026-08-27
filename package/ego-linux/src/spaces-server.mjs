@@ -26,8 +26,11 @@ const THUMBNAIL = {
   quality: 60,
 };
 
-/** How long after its last pointer event a space still counts as being worked in. */
-const ACTIVE_WINDOW_MS = 30_000;
+/** How long after its last cursor update a space still counts as actively moving. */
+const LIVE_ACTIVITY_WINDOW_MS = 30_000;
+
+/** Keep the last cursor readable while the agent pauses to think between actions. */
+const CURSOR_VISIBILITY_WINDOW_MS = 120_000;
 
 /** Card decoration is optional and must never stall the Spaces API. */
 const CARD_CAPTURE_BUDGET_MS = 500;
@@ -317,15 +320,17 @@ async function captureCard(cdp, targetId, pool) {
     if (!cast) return emptyCard();
 
     const cursor = await readCursor(cdp, cast.probeSessionId);
-    const active = Boolean(cursor) && cursor.ageMs < ACTIVE_WINDOW_MS;
+    const cursorVisible =
+      Boolean(cursor) && cursor.ageMs < CURSOR_VISIBILITY_WINDOW_MS;
     return {
       thumbnail: cast.frame ? `data:image/jpeg;base64,${cast.frame}` : null,
       agent: cursor?.name || null,
-      activity: active
+      activity: cursorVisible
         ? {
             name: cursor.name,
             label: cursor.label,
             ageMs: Math.round(cursor.ageMs),
+            live: cursor.ageMs < LIVE_ACTIVITY_WINDOW_MS,
             // Fractions of the viewport, so the card can zoom to the cursor
             // without the server cropping the frame.
             fx: cursor.viewportWidth ? cursor.x / cursor.viewportWidth : null,
