@@ -5,7 +5,7 @@ import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { createPlatform } from "../src/platform.mjs";
+import { activateWindowByClass, createPlatform } from "../src/platform.mjs";
 
 /**
  * A process that sits still and carries the argv a case wants to read back.
@@ -126,13 +126,15 @@ describe("platform: finding a browser", () => {
 
   it("honours EGO_LINUX_CHROME first on both platforms", () => {
     assert.equal(
-      windows({ EGO_LINUX_CHROME: "D:\\portable\\chrome.exe" })
-        .browserBinaryCandidates()[0],
+      windows({
+        EGO_LINUX_CHROME: "D:\\portable\\chrome.exe",
+      }).browserBinaryCandidates()[0],
       "D:\\portable\\chrome.exe",
     );
     assert.equal(
-      linux({ EGO_LINUX_CHROME: "/opt/chrome/chrome" })
-        .browserBinaryCandidates()[0],
+      linux({
+        EGO_LINUX_CHROME: "/opt/chrome/chrome",
+      }).browserBinaryCandidates()[0],
       "/opt/chrome/chrome",
     );
   });
@@ -174,7 +176,9 @@ describe("platform: finding a browser", () => {
   it("points at the Windows profile directories logins can be imported from", () => {
     const dirs = windows().stockBrowserProfileDirs();
     assert.ok(
-      dirs.includes("C:\\Users\\dev\\AppData\\Local\\Google\\Chrome\\User Data"),
+      dirs.includes(
+        "C:\\Users\\dev\\AppData\\Local\\Google\\Chrome\\User Data",
+      ),
       // The importer copies `<dir>/Default`, which only exists under
       // `User Data` — pointing one level off would silently import nothing.
       `Chrome's Windows profile root; got ${JSON.stringify(dirs)}`,
@@ -257,21 +261,25 @@ describe("platform: process control", () => {
 });
 
 describe("platform: the profile's single-instance guard", () => {
-  it("reads the owner out of the POSIX SingletonLock symlink", {
-    // Creating a symlink on Windows needs Developer Mode or an elevated shell,
-    // and this case is about the branch Windows never takes anyway.
-    skip:
-      process.platform === "win32" &&
-      "POSIX-only: Windows Chrome guards the profile with a mutex, not a link",
-  }, async () => {
-    const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));
-    await symlink("somehost-4242", join(sandbox, "SingletonLock"));
-    try {
-      assert.equal(await linux().readSingletonOwner(sandbox), 4242);
-    } finally {
-      await rm(sandbox, { recursive: true, force: true });
-    }
-  });
+  it(
+    "reads the owner out of the POSIX SingletonLock symlink",
+    {
+      // Creating a symlink on Windows needs Developer Mode or an elevated shell,
+      // and this case is about the branch Windows never takes anyway.
+      skip:
+        process.platform === "win32" &&
+        "POSIX-only: Windows Chrome guards the profile with a mutex, not a link",
+    },
+    async () => {
+      const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));
+      await symlink("somehost-4242", join(sandbox, "SingletonLock"));
+      try {
+        assert.equal(await linux().readSingletonOwner(sandbox), 4242);
+      } finally {
+        await rm(sandbox, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("reports no owner when there is no lock", async () => {
     const sandbox = await mkdtemp(join(tmpdir(), "ego-singleton-"));
@@ -329,6 +337,67 @@ describe("platform: detached spawn options", () => {
     const options = linux().detachedSpawnOptions({ cwd: "/tmp" });
     assert.equal(options.cwd, "/tmp");
     assert.equal(options.detached, true);
+  });
+});
+
+describe("platform: explicit X11 window activation", () => {
+  it("activates only a visible window owned by the requested browser pid", async () => {
+    const calls = [];
+    const run = async (_command, args) => {
+      calls.push(args);
+      const key = args.join(" ");
+      if (key === "search --onlyvisible --class ego-lite-linux") {
+        return { ok: true, stdout: "11\n22\n", stderr: "" };
+      }
+      if (key === "getwindowpid 11") {
+        return { ok: true, stdout: "999\n", stderr: "" };
+      }
+      if (key === "getwindowpid 22") {
+        return { ok: true, stdout: "4242\n", stderr: "" };
+      }
+      if (key === "windowactivate 22") {
+        return { ok: true, stdout: "", stderr: "" };
+      }
+      if (key === "getactivewindow") {
+        return { ok: true, stdout: "33\n", stderr: "" };
+      }
+      if (key === "getwindowpid 33") {
+        return { ok: true, stdout: "4242\n", stderr: "" };
+      }
+      return { ok: false, stdout: "", stderr: "unexpected" };
+    };
+
+    assert.equal(
+      await activateWindowByClass(
+        {
+          wmClass: "ego-lite-linux",
+          pid: 4242,
+          env: { DISPLAY: ":1" },
+          platform: "linux",
+        },
+        { run, sleep: async () => {} },
+      ),
+      true,
+    );
+    assert.ok(calls.some((args) => args.join(" ") === "windowactivate 22"));
+    assert.ok(!calls.some((args) => args.join(" ") === "windowactivate 11"));
+  });
+
+  it("does nothing without an X11 display", async () => {
+    let called = false;
+    assert.equal(
+      await activateWindowByClass(
+        { wmClass: "ego-lite-linux", pid: 4242, env: {}, platform: "linux" },
+        {
+          run: async () => {
+            called = true;
+            return { ok: true, stdout: "" };
+          },
+        },
+      ),
+      false,
+    );
+    assert.equal(called, false);
   });
 });
 

@@ -121,6 +121,30 @@ type TaskSpace = {
 type UserOwnedSelectionPolicy = "select" | "claim" | "reject";
 type TaskExecutionRisk = "read-only" | "reversible" | "destructive";
 type TaskExecutionRetryKind = "error" | "verification";
+type UserActionTarget = string | { selector?: string; text?: string };
+type RequestUserActionOptions = {
+  instruction?: string;
+  target?: UserActionTarget;
+  actionKey?: string;
+  doneLabel?: string;
+  cancelLabel?: string;
+  wait?: boolean;
+  timeout?: number;
+  interval?: number;
+};
+type LoginPreflightOptions = {
+  waitForAutofill?: number;
+  interval?: number;
+  submit?: boolean | string;
+};
+type ChallengeOptions = {
+  waitForAutomatic?: number;
+  interval?: number;
+  instruction?: string;
+  doneLabel?: string;
+  cancelLabel?: string;
+  timeout?: number;
+};
 
 const MAX_TASK_EXECUTION_RETRIES = 5;
 const TASK_EXECUTION_CONTRACT_CODE = "EGO_TASK_EXECUTION_CONTRACT";
@@ -155,7 +179,7 @@ export async function listTaskSpaces(): Promise<TaskSpace[]> {
  *   handOffTaskSpace                    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: true }    -> skipped, resolves { done: false, skipped: "user-owned" }
  *   completeTaskSpace { keep: false }   -> claims it, then closes it
- *   bringToFrontTaskSpace               -> raises it without selecting, claiming, or changing ownership
+ *   bringToFrontTaskSpace               -> checks focus-protected availability without claiming or changing ownership
  *   takeOverTaskSpace                   -> claims user-owned spaces when nameOrId is provided, then takes over
  *   waitForAgentControl                 -> waits for user-owned spaces to be handed back
  *
@@ -381,9 +405,8 @@ async function selectTaskSpaceForControlProbe(
  * resolves `{ done: false, skipped: "user-owned" }`; `keep:false` claims the
  * space first, then closes it.
  *
- * `keep:true` also raises the window and reports `visible` — the same contract as
- * handOffTaskSpace, because "I left the page open for you" is the same claim about
- * something the user has to be able to see. `keep:false` has nothing to report: the
+ * `keep:true` reports `visible` without taking focus from the user's current app —
+ * the same contract as handOffTaskSpace. `keep:false` has nothing to report: the
  * page is gone either way.
  * @param {string|number} nameOrId Task space id or name.
  * @param {{ keep: boolean }} options Required. `keep:true` hands the page to the user; `keep:false` closes the space.
@@ -447,8 +470,8 @@ export async function completeTaskSpace(
 }
 
 /**
- * Hand off a task space back to the user, hiding the agent overlay and raising
- * the browser window so the user can find the page they are being asked to act on.
+ * Hand off a task space back to the user and hide the agent overlay without
+ * taking keyboard focus from the user's current application.
  * User-owned spaces are skipped (the user already controls them) and resolve
  * `{ done: false, skipped: "user-owned" }`.
  *
@@ -485,60 +508,536 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
 }
 
 /**
- * Raise a task space's browser window/tab for the user without selecting it for
- * automation and without changing ownership. Safe for user-owned spaces.
+ * Check that a task space's browser window is available without changing
+ * ownership. It stays focus-protected unless the user's latest instruction
+ * explicitly asks to show/raise the browser and `{ focus: true }` is passed.
  * @param {string|number} nameOrId Task space id or name.
+ * @param {{focus?: boolean}} [options] `focus:true` is allowed only after an explicit user request to show/raise the browser.
  * @returns {Promise<{done:boolean,visible?:boolean,reason?:string}>}
  */
-export async function bringToFrontTaskSpace(nameOrId: TaskSpaceNameOrId) {
+export async function bringToFrontTaskSpace(
+  nameOrId: TaskSpaceNameOrId,
+  options: { focus?: boolean } = {},
+) {
   const ego = globalThis.ego;
   if (!ego || typeof ego.presentTaskSpace !== "function") {
     throw new Error("bringToFrontTaskSpace requires ego.presentTaskSpace");
   }
   const match = await findTaskSpace(nameOrId);
-  const result = await ego.presentTaskSpace(
-    taskSpaceNumericId(match, "bringToFrontTaskSpace"),
-  );
+  if (!options || typeof options !== "object") {
+    throw new Error("bringToFrontTaskSpace options must be an object");
+  }
+  if (options.focus !== undefined && typeof options.focus !== "boolean") {
+    throw new Error("bringToFrontTaskSpace focus must be boolean");
+  }
+  const id = taskSpaceNumericId(match, "bringToFrontTaskSpace");
+  const result = options.focus
+    ? await ego.presentTaskSpace(id, { focus: true })
+    : await ego.presentTaskSpace(id);
   assertNoEgoError(result, "bringToFrontTaskSpace");
   return result;
 }
 
 /**
- * Present a task space immediately before asking the user for a manual action.
- * Agent-controlled spaces are handed off; user-owned spaces are raised without
- * changing ownership. Throws unless the page is confirmed visible so callers
- * cannot accidentally ask the user to act on a hidden or headless page.
+ * Prepare a task space immediately before asking the user for a manual action.
+ * Agent-controlled spaces are handed off; user-owned spaces keep their ownership.
+ * A non-empty `instruction` is the capability that permits focus: bare legacy
+ * calls remain focus-protected, so an accidental or speculative handoff cannot
+ * interrupt the user's current application. With an instruction, Linux shows an
+ * in-page Done/Cancel panel, highlights `target`, focuses once per action key, and
+ * can wait for the decision and resume automatically.
  * @param {string|number} nameOrId Task space id or name.
- * @returns {Promise<{done:true,visible:true,presentation:"hand-off"|"bring-to-front"}>}
+ * @param {RequestUserActionOptions} [options] Human instruction, target, labels, and wait settings. Supplying instruction defaults wait to true.
+ * @returns {Promise<object>}
  */
-export async function requestUserActionTaskSpace(nameOrId: TaskSpaceNameOrId) {
-  const match = await findTaskSpace(nameOrId);
-  let presentation: "hand-off" | "bring-to-front";
-  let result;
-
-  if (match.ownership === "user") {
-    presentation = "bring-to-front";
-    result = await bringToFrontTaskSpace(nameOrId);
-  } else {
-    presentation = "hand-off";
-    result = await handOffTaskSpace(nameOrId);
-    // Ownership can change between the initial lookup and handoff. Presenting a
-    // user-owned space is safe and does not reclaim automation control.
-    if (result.skipped === "user-owned") {
-      presentation = "bring-to-front";
-      result = await bringToFrontTaskSpace(nameOrId);
-    }
+export async function requestUserActionTaskSpace(
+  nameOrId: TaskSpaceNameOrId,
+  options: RequestUserActionOptions = {},
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("requestUserActionTaskSpace options must be an object");
   }
+  const instruction = String(options.instruction ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 360);
+  const wait = options.wait ?? Boolean(instruction);
+  const timeout = options.timeout ?? 900;
+  const interval = options.interval ?? 0.15;
+  if (wait && !instruction) {
+    throw new Error(
+      "requestUserActionTaskSpace wait:true requires a non-empty instruction",
+    );
+  }
+  if (typeof wait !== "boolean") {
+    throw new Error("requestUserActionTaskSpace wait must be boolean");
+  }
+  if (!Number.isFinite(timeout) || timeout < 0) {
+    throw new Error(
+      "requestUserActionTaskSpace timeout must be a non-negative number",
+    );
+  }
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error(
+      "requestUserActionTaskSpace interval must be a positive number",
+    );
+  }
+
+  const actionKey = instruction
+    ? String(
+        options.actionKey ||
+          `manual:${instruction}:${JSON.stringify(options.target ?? null)}`,
+      )
+        .trim()
+        .slice(0, 220)
+    : "";
+  if (instruction && !actionKey) {
+    throw new Error("requestUserActionTaskSpace actionKey must not be empty");
+  }
+
+  const ego = globalThis.ego;
+  if (
+    !ego ||
+    typeof ego.useTaskSpace !== "function" ||
+    typeof ego.presentTaskSpace !== "function"
+  ) {
+    throw new Error(
+      "requestUserActionTaskSpace requires ego task-space presentation",
+    );
+  }
+  const match = await findTaskSpace(nameOrId);
+  const id = taskSpaceNumericId(match, "requestUserActionTaskSpace");
+  let presentation: "hand-off" | "bring-to-front";
+  await selectResolvedTaskSpaceFor(ego, match, "requestUserActionTaskSpace", {
+    userOwned: "select",
+  });
+
+  if (match.ownership !== "user") {
+    if (typeof ego.handOffTaskSpace !== "function") {
+      throw new Error(
+        "requestUserActionTaskSpace requires ego.handOffTaskSpace",
+      );
+    }
+    presentation = "hand-off";
+    assertNoEgoError(
+      await ego.handOffTaskSpace(),
+      "requestUserActionTaskSpace",
+    );
+  } else {
+    presentation = "bring-to-front";
+  }
+
+  let panel: any = null;
+  if (instruction && typeof ego.showUserAction === "function") {
+    panel = assertNoEgoError(
+      await ego.showUserAction({
+        key: actionKey,
+        instruction,
+        target: options.target,
+        doneLabel: options.doneLabel,
+        cancelLabel: options.cancelLabel,
+      }),
+      "requestUserActionTaskSpace",
+    );
+  }
+
+  // A concrete instruction authorizes presentation; the persisted in-page
+  // action key makes retries idempotent. Bare calls and repeated blockers only
+  // check availability and never take focus.
+  const focused = Boolean(instruction) && panel?.alreadyVisible !== true;
+  const result = assertNoEgoError(
+    focused
+      ? await ego.presentTaskSpace(id, { focus: true })
+      : await ego.presentTaskSpace(id),
+    "requestUserActionTaskSpace",
+  );
 
   if (result?.visible !== true) {
     const reason =
       typeof result?.reason === "string" ? result.reason : "not-visible";
+    if (instruction && typeof ego.notifyUserAction === "function") {
+      await Promise.resolve(
+        ego.notifyUserAction({ instruction, reason }),
+      ).catch(() => {});
+    }
     throw new Error(
       `requestUserActionTaskSpace: the page is not visible (${reason}); do not ask the user to act until presentation succeeds`,
     );
   }
 
-  return { done: true as const, visible: true as const, presentation };
+  const base = {
+    done: true as const,
+    visible: true as const,
+    presentation,
+    ...(instruction ? { actionKey, focused } : {}),
+  };
+  if (!wait) return base;
+  if (
+    typeof ego.waitForUserAction !== "function" ||
+    typeof ego.clearUserAction !== "function"
+  ) {
+    throw new Error(
+      "requestUserActionTaskSpace wait:true requires the user-action runtime",
+    );
+  }
+  const decision =
+    panel?.result ||
+    assertNoEgoError(
+      await ego.waitForUserAction({
+        key: actionKey,
+        timeoutMs: timeout * 1000,
+        pollMs: interval * 1000,
+      }),
+      "requestUserActionTaskSpace",
+    )?.result;
+  await ego.clearUserAction(actionKey);
+  if (decision === "cancel") {
+    return {
+      ...base,
+      userResult: "cancel" as const,
+      resumed: false as const,
+    };
+  }
+  if (decision !== "done") {
+    throw new Error(
+      `requestUserActionTaskSpace received an invalid user result: ${JSON.stringify(decision)}`,
+    );
+  }
+  await takeOverTaskSpace(nameOrId);
+  return {
+    ...base,
+    userResult: "done" as const,
+    resumed: true as const,
+  };
+}
+
+/**
+ * Inspect a login form without returning credential values. Waits briefly for
+ * password-manager autofill, then submits a uniquely identifiable login form
+ * when every visible credential field is populated. Call before requesting
+ * user action; `needsUser:false` means no focus or permission prompt is needed.
+ * @param {string|number} nameOrId Task space id or name.
+ * @param {LoginPreflightOptions} [options] Autofill wait/poll seconds and optional submit selector or false to inspect only.
+ * @returns {Promise<{detected:boolean,ready:boolean,needsUser:boolean,fieldCount:number,filledCount:number,submitted:boolean}>}
+ */
+export async function loginPreflightTaskSpace(
+  nameOrId: TaskSpaceNameOrId,
+  options: LoginPreflightOptions = {},
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("loginPreflightTaskSpace options must be an object");
+  }
+  const waitForAutofill = options.waitForAutofill ?? 1.5;
+  const interval = options.interval ?? 0.1;
+  if (!Number.isFinite(waitForAutofill) || waitForAutofill < 0) {
+    throw new Error(
+      "loginPreflightTaskSpace waitForAutofill must be non-negative",
+    );
+  }
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error("loginPreflightTaskSpace interval must be positive");
+  }
+  if (
+    options.submit !== undefined &&
+    typeof options.submit !== "boolean" &&
+    typeof options.submit !== "string"
+  ) {
+    throw new Error(
+      "loginPreflightTaskSpace submit must be boolean or a CSS selector",
+    );
+  }
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.useTaskSpace !== "function") {
+    throw new Error("loginPreflightTaskSpace requires ego.useTaskSpace");
+  }
+  const match = await findTaskSpace(nameOrId);
+  await selectResolvedTaskSpaceFor(ego, match, "loginPreflightTaskSpace", {
+    userOwned: "reject",
+    rejectMessage: (ownership) =>
+      `loginPreflightTaskSpace requires agent control, got ownership ${JSON.stringify(ownership)}`,
+  });
+
+  const deadline = Date.now() + waitForAutofill * 1000;
+  let state: any;
+  while (true) {
+    state = await evaluate(inspectLoginPage);
+    if (!state?.detected || state.ready || Date.now() >= deadline) break;
+    await waits.waitForTimeout(interval * 1000);
+  }
+  const detected = state?.detected === true;
+  const ready = state?.ready === true;
+  const fieldCount = Number(state?.fieldCount) || 0;
+  const filledCount = Number(state?.filledCount) || 0;
+  let submitted = false;
+  if (ready && options.submit !== false) {
+    const selector =
+      typeof options.submit === "string" ? options.submit.trim() : "";
+    submitted = (await evaluate(submitReadyLogin, selector || null)) === true;
+  }
+  return {
+    detected,
+    ready,
+    needsUser: detected && !ready,
+    fieldCount,
+    filledCount,
+    submitted,
+  };
+}
+
+/**
+ * Detect a browser verification challenge without taking focus. Give automatic
+ * verification a short chance to finish; only a challenge that remains then
+ * receives the one-shot user-action panel and focus flow.
+ * @param {string|number} nameOrId Task space id or name.
+ * @param {ChallengeOptions} [options] Automatic wait, poll interval, instruction, labels, and manual timeout in seconds.
+ * @returns {Promise<object>}
+ */
+export async function handleChallengeTaskSpace(
+  nameOrId: TaskSpaceNameOrId,
+  options: ChallengeOptions = {},
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("handleChallengeTaskSpace options must be an object");
+  }
+  const waitForAutomatic = options.waitForAutomatic ?? 5;
+  const interval = options.interval ?? 0.2;
+  if (!Number.isFinite(waitForAutomatic) || waitForAutomatic < 0) {
+    throw new Error(
+      "handleChallengeTaskSpace waitForAutomatic must be non-negative",
+    );
+  }
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error("handleChallengeTaskSpace interval must be positive");
+  }
+
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.useTaskSpace !== "function") {
+    throw new Error("handleChallengeTaskSpace requires ego.useTaskSpace");
+  }
+  const match = await findTaskSpace(nameOrId);
+  await selectResolvedTaskSpaceFor(ego, match, "handleChallengeTaskSpace", {
+    userOwned: "reject",
+    rejectMessage: (ownership) =>
+      `handleChallengeTaskSpace requires agent control, got ownership ${JSON.stringify(ownership)}`,
+  });
+
+  let challenge: any = await evaluate(inspectHumanChallenge);
+  if (challenge?.detected !== true) {
+    return { detected: false, handled: false };
+  }
+  const first = challenge;
+  const deadline = Date.now() + waitForAutomatic * 1000;
+  while (challenge?.detected === true && Date.now() < deadline) {
+    await waits.waitForTimeout(interval * 1000);
+    challenge = await evaluate(inspectHumanChallenge);
+  }
+  if (challenge?.detected !== true) {
+    return {
+      detected: true,
+      provider: first.provider,
+      kind: first.kind,
+      handled: false,
+      resolvedAutomatically: true,
+    };
+  }
+
+  const provider = String(challenge.provider || "unknown");
+  const kind = String(challenge.kind || "verification");
+  const origin = String(challenge.origin || "unknown-origin");
+  const result = await requestUserActionTaskSpace(nameOrId, {
+    instruction:
+      options.instruction ||
+      "Complete the verification in the browser, then press Done.",
+    target: challenge.target,
+    actionKey: `human-challenge:${provider}:${kind}:${origin}`,
+    doneLabel: options.doneLabel,
+    cancelLabel: options.cancelLabel,
+    timeout: options.timeout,
+    interval: options.interval,
+  });
+  return {
+    detected: true,
+    provider,
+    kind,
+    handled: true,
+    ...result,
+  };
+}
+
+function inspectHumanChallenge() {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const findVisible = (selectors) => {
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && visible(element)) return selector;
+    }
+    return null;
+  };
+  const checks = [
+    {
+      provider: "cloudflare",
+      kind: "turnstile",
+      responseSelectors: ['input[name="cf-turnstile-response"]'],
+      selectors: [".cf-turnstile", "iframe[src*='challenges.cloudflare.com']"],
+    },
+    {
+      provider: "hcaptcha",
+      kind: "captcha",
+      responseSelectors: [
+        'textarea[name="h-captcha-response"]',
+        'input[name="h-captcha-response"]',
+      ],
+      selectors: [".h-captcha", "iframe[src*='hcaptcha.com']"],
+    },
+    {
+      provider: "google",
+      kind: "recaptcha",
+      responseSelectors: [
+        'textarea[name="g-recaptcha-response"]',
+        'input[name="g-recaptcha-response"]',
+      ],
+      selectors: [
+        ".g-recaptcha",
+        "iframe[src*='google.com/recaptcha']",
+        "iframe[src*='recaptcha.net']",
+      ],
+    },
+  ];
+  for (const check of checks) {
+    const responses = check.responseSelectors.flatMap((selector) =>
+      typeof document.querySelectorAll === "function"
+        ? Array.from(document.querySelectorAll(selector))
+        : [document.querySelector(selector)].filter(Boolean),
+    );
+    if (
+      responses.length > 0 &&
+      responses.every(
+        (input) =>
+          String((input as HTMLInputElement).value || "").trim().length > 0,
+      )
+    ) {
+      return { detected: false };
+    }
+    const target = findVisible(check.selectors);
+    if (target) {
+      return {
+        detected: true,
+        provider: check.provider,
+        kind: check.kind,
+        origin: location.origin,
+        target,
+      };
+    }
+  }
+  const title = String(document.title || "").toLowerCase();
+  if (title.includes("just a moment") || title.includes("attention required")) {
+    return {
+      detected: true,
+      provider: "cloudflare",
+      kind: "interstitial",
+      origin: location.origin,
+      target: "body",
+    };
+  }
+  return { detected: false };
+}
+
+function inspectLoginPage() {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      !element.disabled &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const inputs = Array.from(document.querySelectorAll("input")).filter(visible);
+  const anchors = inputs.filter((input) => {
+    const autocomplete = String(input.autocomplete || "").toLowerCase();
+    return (
+      input.type === "password" ||
+      autocomplete === "current-password" ||
+      autocomplete === "one-time-code"
+    );
+  });
+  if (anchors.length === 0) {
+    return { detected: false, ready: false, fieldCount: 0, filledCount: 0 };
+  }
+  const form = anchors[0].form;
+  const fields = inputs.filter((input) => {
+    if (form && input.form !== form) return false;
+    const autocomplete = String(input.autocomplete || "").toLowerCase();
+    const identity = `${input.name || ""} ${input.id || ""}`.toLowerCase();
+    return (
+      anchors.includes(input) ||
+      input.type === "email" ||
+      autocomplete === "username" ||
+      autocomplete === "email" ||
+      (/user|email|login/.test(identity) && input.type !== "hidden")
+    );
+  });
+  const filledCount = fields.filter(
+    (input) => String(input.value || "").length > 0,
+  ).length;
+  return {
+    detected: true,
+    ready: fields.length > 0 && filledCount === fields.length,
+    fieldCount: fields.length,
+    filledCount,
+  };
+}
+
+function submitReadyLogin(selector) {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      !element.disabled &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  if (selector) {
+    const explicit = document.querySelector(selector);
+    if (!explicit || !visible(explicit)) return false;
+    explicit.click();
+    return true;
+  }
+  const anchor = Array.from(document.querySelectorAll("input")).find(
+    (input) => {
+      const autocomplete = String(input.autocomplete || "").toLowerCase();
+      return (
+        visible(input) &&
+        (input.type === "password" ||
+          autocomplete === "current-password" ||
+          autocomplete === "one-time-code")
+      );
+    },
+  );
+  if (!anchor) return false;
+  const root = anchor.form || document;
+  const submits = Array.from(
+    root.querySelectorAll(
+      'button[type="submit"],input[type="submit"],button:not([type])',
+    ),
+  ).filter(visible);
+  if (submits.length !== 1) return false;
+  (submits[0] as HTMLElement).click();
+  return true;
 }
 
 /**
@@ -1484,6 +1983,8 @@ function createTaskSpacesFacade() {
     handOff: handOffTaskSpace,
     bringToFront: bringToFrontTaskSpace,
     requestUserAction: requestUserActionTaskSpace,
+    loginPreflight: loginPreflightTaskSpace,
+    handleChallenge: handleChallengeTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
     isHardStopError: isEgoHardStopError,
@@ -1513,15 +2014,19 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.execute(nameOrId, options) when success must be explicitly verified, taskSpaces.run(nameOrId, fn, options) for a basic one-round task, taskSpaces.requestUserAction(nameOrId) immediately before asking the user for a manual browser action, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.bringToFront(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
+    "taskSpaces: task-space facade. Use taskSpaces.execute(nameOrId, options) when success must be explicitly verified, taskSpaces.run(nameOrId, fn, options) for a basic one-round task, taskSpaces.loginPreflight(nameOrId, options) before login handoff, taskSpaces.handleChallenge(nameOrId, options) for a detected browser verification, taskSpaces.requestUserAction(nameOrId, options) for a concrete manual browser action, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.bringToFront(nameOrId), taskSpaces.takeOver(nameOrId), taskSpaces.waitForAgentControl(nameOrId, options), and taskSpaces.isHardStopError(error).",
   "taskSpaces.execute":
     'taskSpaces.execute(nameOrId, { goal?, risk, work, verify, retries?, keep?, timeout?, complete? }) => Promise<object>: run work, require verify to return true or { ok: true, ... }, then complete the task space. Automatic retries (max 5) require risk: "read-only"; hard stops are never retried. Returns result, verification, attempts, receipt, and completion.',
   "taskSpaces.useOrCreate":
     "taskSpaces.useOrCreate(nameOrId) => Promise<object>: select or create a task space. A user-controlled space is selected without claiming for passive page.snapshot(), page.screenshot(), and page.debug() verification; mutating commands remain blocked until an explicitly confirmed takeOver().",
   "taskSpaces.bringToFront":
-    "taskSpaces.bringToFront(nameOrId) => Promise<object>: raise the task space's browser window/tab for the user without selecting it for automation, claiming it, or changing ownership. Use this instead of useOrCreate when the user controls the space and you only need to bring the window forward.",
+    "taskSpaces.bringToFront(nameOrId, { focus?: boolean }?) => Promise<object>: check that the task space's browser window is open without selecting it for automation, claiming it, or changing ownership. Default focus:false never raises it. Pass focus:true only when the user's latest instruction explicitly asks to show/raise the browser.",
   "taskSpaces.requestUserAction":
-    "taskSpaces.requestUserAction(nameOrId) => Promise<object>: immediately before asking the user for a click, password, captcha, or confirmation, hand off or raise the task space and require visible: true. Throws instead of allowing a request against a hidden or headless page.",
+    "taskSpaces.requestUserAction(nameOrId, { instruction?, target?, actionKey?, doneLabel?, cancelLabel?, wait?, timeout?, interval? }?) => Promise<object>: bare calls hand off without focusing. A non-empty instruction shows a Done/Cancel panel, highlights target, focuses once per action key, and will require visible: true before waiting by default; Done automatically resumes agent control, Cancel leaves user control in place.",
+  "taskSpaces.loginPreflight":
+    "taskSpaces.loginPreflight(nameOrId, { waitForAutofill?, interval?, submit? }?) => Promise<object>: under agent control, wait briefly for password-manager autofill and return only booleans/counts. When every visible login credential is populated, submit the unique login form (or an explicit CSS selector) without focusing or asking permission.",
+  "taskSpaces.handleChallenge":
+    "taskSpaces.handleChallenge(nameOrId, { waitForAutomatic?, interval?, instruction?, doneLabel?, cancelLabel?, timeout? }?) => Promise<object>: detect common visible Cloudflare, hCaptcha, and reCAPTCHA challenges without focusing; wait briefly for automatic completion, then show and focus the one-shot Done/Cancel action panel only if the challenge persists.",
   "taskSpaces.takeOver":
     "taskSpaces.takeOver(nameOrId?) => Promise<void>: after explicit user confirmation, take control back. When nameOrId points at a user-owned space, it claims that space before selecting it and calling the native take-over overlay.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
@@ -1577,4 +2082,8 @@ export async function loadAgentHelpers() {
   return out;
 }
 
-export const __testing = { setOverrides, decodeUnserializableJsValue };
+export const __testing = {
+  setOverrides,
+  decodeUnserializableJsValue,
+  inspectHumanChallenge,
+};

@@ -1,7 +1,7 @@
 import { after, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -34,12 +34,17 @@ async function api(path, options) {
 }
 
 /** Run a heredoc through the real CLI, against the browser this suite started. */
-function runScript(source, { timeout = 120000 } = {}) {
+function runScript(source, { timeout = 120000, env = {} } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [BIN], {
       // Pinned so the activity assertions read the same under every harness —
       // the badge otherwise names whichever agent ran the suite.
-      env: { ...process.env, FIXTURE_URL, EGO_LINUX_CURSOR_NAME: "Testbot" },
+      env: {
+        ...process.env,
+        FIXTURE_URL,
+        EGO_LINUX_CURSOR_NAME: "Testbot",
+        ...env,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdout = "";
@@ -97,6 +102,23 @@ async function waitForSpace(name, timeoutMs = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`timed out waiting for space ${name}`);
+}
+
+async function waitForActiveSpace(name, label, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    const { body } = await api("/api/spaces");
+    const space = body.spaces.find((candidate) => candidate.name === name);
+    last = space || null;
+    if (space?.activity?.label === label && space.trail?.length) {
+      return space;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(
+    `timed out waiting for activity in space ${name}: ${JSON.stringify(last)}`,
+  );
 }
 
 /**
@@ -160,7 +182,7 @@ describe("Spaces overview server", () => {
     assert.deepEqual(body, { ok: true });
   });
 
-  it("creates a space and describes it with a thumbnail", async () => {
+  it("creates a targetless space without an empty thumbnail tab", async () => {
     const created = await api("/api/spaces", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -175,70 +197,87 @@ describe("Spaces overview server", () => {
     );
     assert.ok(space, "the new space is listed");
     assert.equal(space.ownership, "agent");
-    assert.equal(space.tabCount, 1);
-    assert.match(
-      space.thumbnail,
-      /^data:image\/jpeg;base64,/,
-      "a card gets a picture",
-    );
-
-    // Nothing has acted in it, so there is nothing to report and no reason to zoom.
+    assert.equal(space.tabCount, 0);
+    assert.equal(space.title, "");
+    assert.equal(space.url, "");
+    assert.equal(space.thumbnail, null);
+    // Nothing has acted in it, so there is nothing to report.
     assert.equal(space.activity, null);
-    assert.ok(
-      jpegSize(space.thumbnail).width > FOLLOW_CROP.width,
-      "an idle card shows the whole page, not a crop",
-    );
   });
 
   it("reports what an agent is doing, and where on the card it is working", async () => {
-    await runScript(`
+    const releaseFile = join(SANDBOX, "release-busy-space");
+    await rm(releaseFile, { force: true });
+    const running = runScript(`
       await taskSpaces.useOrCreate("busy space");
       await page.goto(process.env.FIXTURE_URL);
       await page.waitForLoadState();
       const point = await page.elementCenter("loc=css:#click-button");
       await page.mouse.click(point.x, point.y, { label: "counting clicks" });
-    `);
+      const { access } = await import("node:fs/promises");
+      while (true) {
+        try {
+          await access(process.env.RELEASE_FILE);
+          break;
+        } catch {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+    `, { env: { RELEASE_FILE: releaseFile } });
 
-    const { body } = await api("/api/spaces");
-    const space = body.spaces.find(
+    try {
+      const space = await waitForActiveSpace("busy space", "counting clicks");
+
+      // The panel and the agent are separate processes with separate CDP
+      // connections; this only works because the live overlay leaves its state in
+      // the page, where the server reads it back while the agent is still active.
+      assert.equal(space.activity?.name, "Testbot");
+      assert.equal(
+        space.agent,
+        "Testbot",
+        "the card keeps its concise agent label",
+      );
+      assert.equal(space.activity?.label, "counting clicks");
+      assert.ok(space.activity.ageMs >= 0 && space.activity.ageMs < 30000);
+
+      // Frames now arrive by screencast, which delivers the whole viewport and
+      // cannot crop. The card zooms to the cursor itself, so what the server has
+      // to supply is where the cursor is — as a fraction of the viewport, which
+      // survives whatever size the frame happens to be.
+      const { fx, fy } = space.activity;
+      assert.ok(
+        typeof fx === "number" && fx >= 0 && fx <= 1,
+        "the cursor's horizontal position travels with the card",
+      );
+      assert.ok(
+        typeof fy === "number" && fy >= 0 && fy <= 1,
+        "the cursor's vertical position travels with the card",
+      );
+
+      if (space.thumbnail) {
+        const size = jpegSize(space.thumbnail);
+        assert.ok(size && size.width > 0 && size.height > 0, "a frame is served");
+      }
+
+      // The trail travels the same way and outlives the activity window, so a
+      // space that has gone quiet still says what it did.
+      assert.ok(space.trail?.length, "the card carries a trail of what happened");
+      assert.match(space.trail[0].text, /^clicked /, "newest first");
+      assert.ok(space.trail[0].ageMs >= 0, "aged, not timestamped");
+    } finally {
+      await writeFile(releaseFile, "done");
+      await running;
+    }
+
+    const { body: afterExit } = await api("/api/spaces");
+    const stopped = afterExit.spaces.find(
       (candidate) => candidate.name === "busy space",
     );
-    assert.ok(space, "the space the agent worked in is listed");
-
-    // The panel and the agent are separate processes with separate CDP
-    // connections; this only works because the overlay leaves its state in the
-    // page, where the server reads it back.
-    assert.equal(space.activity?.name, "Testbot");
     assert.equal(
-      space.agent,
-      "Testbot",
-      "the card keeps its concise agent label",
+      stopped?.activity,
+      null,
+      "the card stops reporting activity when the driving process exits",
     );
-    assert.equal(space.activity?.label, "counting clicks");
-    assert.ok(space.activity.ageMs >= 0 && space.activity.ageMs < 30000);
-
-    // Frames now arrive by screencast, which delivers the whole viewport and
-    // cannot crop. The card zooms to the cursor itself, so what the server has
-    // to supply is where the cursor is — as a fraction of the viewport, which
-    // survives whatever size the frame happens to be.
-    const { fx, fy } = space.activity;
-    assert.ok(
-      typeof fx === "number" && fx >= 0 && fx <= 1,
-      "the cursor's horizontal position travels with the card",
-    );
-    assert.ok(
-      typeof fy === "number" && fy >= 0 && fy <= 1,
-      "the cursor's vertical position travels with the card",
-    );
-
-    const size = jpegSize(space.thumbnail);
-    assert.ok(size && size.width > 0 && size.height > 0, "a frame is served");
-
-    // The trail travels the same way and outlives the activity window, so a
-    // space that has gone quiet still says what it did.
-    assert.ok(space.trail?.length, "the card carries a trail of what happened");
-    assert.match(space.trail[0].text, /^clicked /, "newest first");
-    assert.ok(space.trail[0].ageMs >= 0, "aged, not timestamped");
   });
 
   it("refuses a cross-origin caller", async () => {
@@ -307,6 +346,95 @@ describe("Spaces overview server", () => {
     assert.deepEqual(body, { error: "request body too large" });
   });
 
+  it("isolates a stalled priming screenshot from live card state", async () => {
+    const calls = [];
+    const stalledServer = await startSpacesServer({
+      ego: {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              {
+                id: 1,
+                name: "stalled card",
+                ownership: "agent",
+                targetIds: ["t-stalled"],
+              },
+            ],
+          };
+        },
+      },
+      cdp: {
+        onShimEvent() {},
+        claimSession() {},
+        releaseSession() {},
+        async call(method) {
+          calls.push(method);
+          if (method === "Target.getTargets") {
+            return {
+              targetInfos: [
+                {
+                  type: "page",
+                  targetId: "t-stalled",
+                  title: "Stalled",
+                  url: "https://example.com",
+                },
+              ],
+            };
+          }
+          if (method === "Target.attachToTarget") {
+            const attaches = calls.filter(
+              (candidate) => candidate === "Target.attachToTarget",
+            ).length;
+            return { sessionId: `s-${attaches}` };
+          }
+          if (method === "Page.captureScreenshot") {
+            return new Promise(() => {});
+          }
+          if (method === "Runtime.evaluate") {
+            return {
+              result: {
+                value: {
+                  name: "Testbot",
+                  label: "still responsive",
+                  ageMs: 0,
+                  x: 10,
+                  y: 10,
+                  viewportWidth: 100,
+                  viewportHeight: 100,
+                  trail: [],
+                },
+              },
+            };
+          }
+          return {};
+        },
+      },
+    });
+
+    try {
+      const response = await fetch(
+        `http://127.0.0.1:${stalledServer.port}/api/spaces`,
+        { signal: AbortSignal.timeout(2500) },
+      );
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.spaces[0].name, "stalled card");
+      assert.equal(body.spaces[0].thumbnail, null);
+      assert.equal(
+        body.spaces[0].activity?.name,
+        "Testbot",
+        "a stuck optional screenshot must not block live cursor state",
+      );
+      assert.equal(
+        calls.filter((method) => method === "Target.attachToTarget").length,
+        3,
+        "priming, screencast, and cursor reads use independent sessions",
+      );
+    } finally {
+      stalledServer.close();
+    }
+  });
+
   it("returns a structured 500 when a browser operation fails", async () => {
     const failingServer = await startSpacesServer({
       ...shim,
@@ -343,6 +471,8 @@ describe("Spaces overview server", () => {
       body: JSON.stringify({ name: "handoff visibility space" }),
     });
     const target = created.space;
+    await shim.ego.useTaskSpace(target.id);
+    await shim.ego.createTab(FIXTURE_URL);
 
     const stopped = await api(`/api/spaces/${target.id}/stop`, {
       method: "POST",
@@ -364,6 +494,8 @@ describe("Spaces overview server", () => {
       body: JSON.stringify({ name: "open visibility space" }),
     });
     const target = created.space;
+    await shim.ego.useTaskSpace(target.id);
+    await shim.ego.createTab(FIXTURE_URL);
 
     const opened = await api(`/api/spaces/${target.id}/use`, {
       method: "POST",

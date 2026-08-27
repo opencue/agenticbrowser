@@ -61,6 +61,8 @@ This install builds the harness and symlinks the Linux port's CLI shim:
 - Node.js ≥ 22 and npm
 - Chrome or Chromium **on the Linux side** (not Windows `chrome.exe` for MVP)
 - For headed mode: a display (`DISPLAY` set) — prefer **WSLg** on Windows
+- For headed human-action focus on Linux: `xdotool` (the browser uses XWayland
+  on Wayland desktops so only the explicit focus gate can activate it)
 - For headless: `EGO_LINUX_HEADLESS=1` (opt-in; no GUI required)
 
 ### Run the installer
@@ -99,10 +101,21 @@ Run `ego-browser --stop` first; never copy a live Chrome profile by hand.
 
 ### Headed vs headless (WSL notes)
 
-| Mode | When | How |
-|------|------|-----|
+| Mode               | When                               | How                                                   |
+| ------------------ | ---------------------------------- | ----------------------------------------------------- |
 | Headed (preferred) | Interactive browsing, visual debug | WSLg or native Linux desktop; ensure `DISPLAY` is set |
-| Headless | CI / no GUI | `export EGO_LINUX_HEADLESS=1` before `ego-browser` |
+| Headless           | CI / no GUI                        | `export EGO_LINUX_HEADLESS=1` before `ego-browser`    |
+
+Headed mode defaults to XWayland when `XDG_SESSION_TYPE=wayland` and `DISPLAY`
+is available. This keeps ordinary agent work background-only while allowing
+`taskSpaces.requestUserAction(...)` to activate the exact managed browser
+window. `EGO_LINUX_WINDOW_BACKEND=wayland` forces native Wayland, but GNOME may
+then reject application-level focus without a fresh compositor activation token.
+
+The managed browser also uses a randomly allocated non-zero loopback CDP port.
+Do not replace it with `--remote-debugging-port=0`: Chrome exposes
+`navigator.webdriver=true` in that mode, which can make Google and Cloudflare
+treat an otherwise normal headed browser as automation.
 
 MVP targets **Linux-side** Chrome/Chromium only. Pointing at Windows Chrome under `/mnt/c/...` is out of scope.
 

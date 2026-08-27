@@ -49,7 +49,13 @@ const settle = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms));
 
 before(async () => {
   await mkdir(SANDBOX, { recursive: true });
-  await writeFile(STANDIN, "setTimeout(() => {}, 60_000);\n");
+  await writeFile(
+    STANDIN,
+    'if (process.argv[2] === "--rewrite-title") {\n' +
+      '  process.title = process.argv.slice(3).join(" ");\n' +
+      "}\n" +
+      "setTimeout(() => {}, 60_000);\n",
+  );
 });
 
 after(async () => {
@@ -107,6 +113,27 @@ describe("reapOrphanedBrowsers", () => {
 
     assert.equal(reaped, 0, "a reachable profile is not an orphan");
     assert.equal(alive(browser), true, "the browser survives");
+  });
+
+  it("reaps Chromium's one-argument rewritten process title", async () => {
+    const gone = join(SANDBOX, "rewritten-deleted-profile");
+    for (let attempt = 0; ; attempt += 1) {
+      const orphan = await standIn(
+        "--rewrite-title",
+        process.execPath,
+        "--class=ego-lite-linux",
+        `--user-data-dir=${gone}`,
+      );
+      await settle(50);
+
+      const reaped = await reapOrphanedBrowsers();
+      await settle();
+      if (reaped === 0 && !alive(orphan) && attempt < 5) continue;
+
+      assert.equal(reaped, 1);
+      assert.equal(alive(orphan), false);
+      return;
+    }
   });
 
   it("ignores renderers and non-ego processes with a missing profile", async () => {

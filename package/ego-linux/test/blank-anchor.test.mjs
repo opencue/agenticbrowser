@@ -60,6 +60,48 @@ function fakeCreateSpaceCdp() {
   };
 }
 
+function fakeSyncedStorageCdp() {
+  const calls = [];
+  let session = 0;
+  return {
+    calls,
+    claimSession() {},
+    releaseSession() {},
+    selectTarget() {},
+    async call(method, params, sessionId, options) {
+      calls.push({ method, params, sessionId, options });
+      if (method === "Target.createBrowserContext") {
+        return { browserContextId: "ctx" };
+      }
+      if (method === "Storage.getCookies") return { cookies: [] };
+      if (method === "Target.getTargets") {
+        return {
+          targetInfos: [
+            { type: "page", targetId: "default-page", url: "about:blank" },
+          ],
+        };
+      }
+      if (method === "Target.attachToTarget") {
+        session += 1;
+        return { sessionId: `session-${session}` };
+      }
+      if (method === "DOMStorage.getDOMStorageItems") {
+        return { entries: [["auth-token", "secret-value"]] };
+      }
+      if (
+        method === "Runtime.evaluate" &&
+        params.expression === "location.origin"
+      ) {
+        return { result: { value: "https://example.com" } };
+      }
+      if (method === "Target.createTarget") {
+        return { targetId: "synced-target" };
+      }
+      return {};
+    },
+  };
+}
+
 const tabsApi = (cdp) => ({
   async createTab(url, browserContextId) {
     return cdp.call("Target.createTarget", { url, browserContextId });
@@ -86,12 +128,13 @@ const baseSpace = {
 };
 
 describe("the space's blank anchor tab is used, not stranded", () => {
-  it("opens the initial anchor in the shared profile without focusing a blank page", async () => {
+  it("defers the shared profile's first tab until the destination is known", async () => {
     const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
     delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
     const cdp = fakeCreateSpaceCdp();
     try {
-      await createTaskSpacesApi(cdp).createTaskSpace("work");
+      const api = createTaskSpacesApi(cdp);
+      const space = await api.createTaskSpace("work");
 
       assert.ok(
         !cdp.calls.some(
@@ -99,26 +142,25 @@ describe("the space's blank anchor tab is used, not stranded", () => {
         ),
         "shared storage is the default, so no isolated context is created",
       );
+      assert.equal(
+        cdp.calls.some((call) => call.method === "Target.createTarget"),
+        false,
+        "no ready page is opened before the requested URL is known",
+      );
+      assert.deepEqual(space.targetIds, []);
+      assert.equal(space.pendingFirstTab, true);
+
+      await api.createTabInSelectedSpace(
+        tabsApi(cdp),
+        "https://example.com/requested",
+      );
       const create = cdp.calls.find(
         (call) => call.method === "Target.createTarget",
       );
       assert.deepEqual(create?.params, {
-        url: "about:blank",
-        background: true,
-        focus: false,
+        url: "https://example.com/requested",
+        browserContextId: null,
       });
-      assert.ok(
-        !cdp.calls.some((call) => call.method === "Target.activateTarget"),
-        "the blank anchor is not brought to the foreground",
-      );
-      assert.ok(
-        cdp.calls.some(
-          (call) =>
-            call.method === "Runtime.evaluate" &&
-            call.params.expression.includes("If this page stays here"),
-        ),
-        "the fallback page explains why it is visible if it ever remains onscreen",
-      );
     } finally {
       if (previous === undefined)
         delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
@@ -126,26 +168,92 @@ describe("the space's blank anchor tab is used, not stranded", () => {
     }
   });
 
-  it("can still create a cookie-seeded isolated context when explicitly requested", async () => {
+  it("defers an isolated context's first tab until the destination is known", async () => {
     const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
     process.env.EGO_LINUX_TASK_SPACE_STORAGE = "isolated";
     const cdp = fakeCreateSpaceCdp();
     try {
-      await createTaskSpacesApi(cdp).createTaskSpace("work");
+      const api = createTaskSpacesApi(cdp);
+      const space = await api.createTaskSpace("work");
 
       assert.ok(
         cdp.calls.some((call) => call.method === "Storage.getCookies"),
         "the default jar is read for the isolated cookie-copy mode",
       );
+      assert.equal(
+        cdp.calls.some((call) => call.method === "Target.createTarget"),
+        false,
+        "no ready-page window is opened before the requested URL is known",
+      );
+      assert.deepEqual(space.targetIds, []);
+      const listed = await api.listTaskSpaces();
+      assert.equal(
+        listed.taskSpaces.some((candidate) => candidate.id === space.id),
+        true,
+        "the targetless space remains selectable until its first navigation",
+      );
+
+      await api.createTabInSelectedSpace(
+        tabsApi(cdp),
+        "https://example.com/requested",
+      );
       const create = cdp.calls.find(
         (call) => call.method === "Target.createTarget",
       );
       assert.deepEqual(create?.params, {
-        url: "about:blank",
+        url: "https://example.com/requested",
         browserContextId: "ctx",
-        background: true,
-        focus: false,
       });
+    } finally {
+      if (previous === undefined)
+        delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+      else process.env.EGO_LINUX_TASK_SPACE_STORAGE = previous;
+    }
+  });
+
+  it("seeds localStorage before an isolated-sync space loads the site", async () => {
+    const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
+    process.env.EGO_LINUX_TASK_SPACE_STORAGE = "isolated-sync";
+    const cdp = fakeSyncedStorageCdp();
+    try {
+      const api = createTaskSpacesApi(cdp);
+      const space = await api.createTaskSpace("signed-in work");
+      assert.equal(space.storageSeed, "localStorage");
+
+      const result = await api.createTabInSelectedSpace(
+        tabsApi(cdp),
+        "https://example.com/dashboard",
+      );
+      assert.equal(result.targetId, "synced-target");
+
+      const storageRead = cdp.calls.find(
+        (call) => call.method === "DOMStorage.getDOMStorageItems",
+      );
+      assert.deepEqual(storageRead?.params.storageId, {
+        securityOrigin: "https://example.com",
+        isLocalStorage: true,
+      });
+
+      const created = cdp.calls.find(
+        (call) =>
+          call.method === "Target.createTarget" &&
+          call.params.browserContextId === "ctx",
+      );
+      assert.equal(created?.params.url, "about:blank");
+      assert.equal(created?.params.browserContextId, "ctx");
+      const injection = cdp.calls.find(
+        (call) => call.method === "Page.addScriptToEvaluateOnNewDocument",
+      );
+      assert.match(injection?.params.source, /auth-token/);
+      assert.match(injection?.params.source, /secret-value/);
+      assert.ok(
+        cdp.calls.some(
+          (call) =>
+            call.method === "Page.navigate" &&
+            call.params.url === "https://example.com/dashboard",
+        ),
+        "the destination is loaded only after the storage seed is installed",
+      );
     } finally {
       if (previous === undefined)
         delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;

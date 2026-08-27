@@ -5,6 +5,44 @@
  * with no toolbar, so there is no navigation to a second file, and inlining
  * avoids a static-file route that would widen the server's surface.
  */
+export function profileLabel(profile) {
+  if (!profile) return "Personal";
+  return profile
+    .split("+")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" · ");
+}
+
+export function spacePriority(space) {
+  if (space.activity) return 0;
+  if (space.ownership === "agentDelegatedToUser") return 1;
+  if (space.ownership === "user") return 2;
+  return 3;
+}
+
+export function compareSpaces(left, right) {
+  return (
+    spacePriority(left) - spacePriority(right) ||
+    (left.name || "").localeCompare(right.name || "")
+  );
+}
+
+export function compareSpaceGroups(
+  [leftProfile, leftSpaces],
+  [rightProfile, rightSpaces],
+) {
+  if (!leftProfile && !rightProfile) return 0;
+  if (!leftProfile) return 1;
+  if (!rightProfile) return -1;
+  const leftPriority = Math.min(...leftSpaces.map(spacePriority));
+  const rightPriority = Math.min(...rightSpaces.map(spacePriority));
+  return (
+    leftPriority - rightPriority ||
+    profileLabel(leftProfile).localeCompare(profileLabel(rightProfile))
+  );
+}
+
 export const SPACES_HTML = `<!doctype html>
 <html lang="en">
 <head>
@@ -43,13 +81,22 @@ export const SPACES_HTML = `<!doctype html>
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 26px; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+    gap: 18px; margin-bottom: 26px;
+  }
+  .heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
   h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
   .sub { color: var(--muted); font-size: 13px; }
+  .summary {
+    flex: none; color: var(--muted); font-size: 12px;
+    padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+    background: color-mix(in srgb, var(--card) 72%, transparent);
+  }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 340px), 390px));
-    gap: 30px 26px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
+    gap: 28px 20px;
     justify-content: start;
   }
   /* The outer container stacks sections; only each section's body is a grid. */
@@ -60,7 +107,10 @@ export const SPACES_HTML = `<!doctype html>
     margin-bottom: 14px; padding-bottom: 9px;
     border-bottom: 1px solid var(--line);
   }
-  .section-title { font-size: 15px; font-weight: 650; letter-spacing: -0.01em; }
+  .section-title {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 15px; font-weight: 650; letter-spacing: -0.01em;
+  }
   .section-count {
     color: var(--muted); font-size: 11.5px;
     padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
@@ -179,8 +229,11 @@ export const SPACES_HTML = `<!doctype html>
 </head>
 <body>
   <header>
-    <h1>Spaces</h1>
-    <span class="sub">workspaces you and your agents share</span>
+    <div class="heading">
+      <h1>Spaces</h1>
+      <span class="sub">workspaces you and your agents share</span>
+    </div>
+    <span class="summary" id="summary"></span>
   </header>
   <div class="sections" id="grid"></div>
   <p class="note" id="note"></p>
@@ -188,8 +241,14 @@ export const SPACES_HTML = `<!doctype html>
 <script>
 const grid = document.getElementById("grid");
 const note = document.getElementById("note");
+const summary = document.getElementById("summary");
 let busy = false;
-let anyLive = false;
+let refreshInFlight = null;
+
+const profileLabel = ${profileLabel.toString()};
+const spacePriority = ${spacePriority.toString()};
+const compareSpaces = ${compareSpaces.toString()};
+const compareSpaceGroups = ${compareSpaceGroups.toString()};
 
 async function api(path, options) {
   const response = await fetch(path, {
@@ -422,12 +481,8 @@ function groupByProfile(spaces) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(space);
   }
-  // Named profiles first, alphabetically; unattributed spaces last.
-  return [...groups.entries()].sort(([a], [b]) => {
-    if (!a) return 1;
-    if (!b) return -1;
-    return a.localeCompare(b);
-  });
+  for (const list of groups.values()) list.sort(compareSpaces);
+  return [...groups.entries()].sort(compareSpaceGroups);
 }
 
 function section(profile, spaces, withAddCard) {
@@ -438,18 +493,7 @@ function section(profile, spaces, withAddCard) {
   head.className = "section-head";
   const title = document.createElement("span");
   title.className = "section-title";
-  const agents = [
-    ...new Set(
-      spaces
-        .map((space) => space.agent || space.activity?.name)
-        .filter(Boolean),
-    ),
-  ];
-  title.textContent = profile
-    ? agents.length > 2
-      ? agents.length + " agents"
-      : agents.join(" + ") || "Agent"
-    : "Personal";
+  title.textContent = profileLabel(profile);
   title.title = profile ? "cue profile: " + profile : "spaces created by you";
   const count = document.createElement("span");
   count.className = "section-count";
@@ -470,11 +514,15 @@ function section(profile, spaces, withAddCard) {
   return wrap;
 }
 
-async function refresh() {
+async function loadSpaces() {
   try {
     const { spaces } = await api("/api/spaces");
-    anyLive = spaces.some((space) => space.activity);
     const groups = groupByProfile(spaces);
+    const liveCount = spaces.filter((space) => space.activity).length;
+    const profileCount = new Set(spaces.map((space) => space.profile).filter(Boolean)).size;
+    summary.textContent = spaces.length
+      ? spaces.length + " spaces · " + liveCount + " live · " + profileCount + " profiles"
+      : "No spaces";
 
     if (!spaces.length) {
       const body = document.createElement("div");
@@ -500,22 +548,40 @@ async function refresh() {
   }
 }
 
-// Poll faster while an agent is actually working, so a card that is meant to
-// show movement gets to show some. Idle spaces do not need the traffic: every
-// refresh costs a screenshot per space.
-const IDLE_POLL_MS = 4000;
-const LIVE_POLL_MS = 400;
+function refresh() {
+  if (!refreshInFlight) {
+    refreshInFlight = loadSpaces().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+// State-file writes and screencast frames wake the panel through EventSource.
+// A slow reconciliation remains for missed filesystem events, activity expiry,
+// and older browsers without EventSource support.
+const FALLBACK_POLL_MS = 15000;
 let timer = null;
 
 function schedule() {
   clearTimeout(timer);
-  timer = setTimeout(tick, anyLive ? LIVE_POLL_MS : IDLE_POLL_MS);
+  timer = setTimeout(tick, FALLBACK_POLL_MS);
 }
 
 async function tick() {
   if (!busy && !document.hidden) await refresh();
   schedule();
 }
+
+if ("EventSource" in window) {
+  const events = new EventSource("/api/events");
+  events.addEventListener("refresh", () => {
+    if (!busy && !document.hidden) void refresh();
+  });
+}
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !busy) void refresh();
+});
 
 refresh().then(schedule);
 </script>

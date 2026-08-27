@@ -30,8 +30,8 @@ that takes the `PATH` entry back out with it.
 > A shell that was already open keeps the old `PATH`. Open a new terminal after
 > installing.
 
-> The installer is **not code-signed**, so SmartScreen shows *"Windows protected
-> your PC — Unknown publisher"* on first run: choose **More info → Run anyway**.
+> The installer is **not code-signed**, so SmartScreen shows _"Windows protected
+> your PC — Unknown publisher"_ on first run: choose **More info → Run anyway**.
 > Signing it needs a certificate (roughly $200–400/year), which this project does
 > not have.
 
@@ -45,7 +45,7 @@ node installer\stage.mjs --node <path to node.exe>
 & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=0.1.0 installer\ego-lite.iss
 ```
 
-What the installer *contains* is decided by `installer/stage.mjs` and checked by
+What the installer _contains_ is decided by `installer/stage.mjs` and checked by
 `test/installer.test.mjs`, which runs everywhere — a renamed or moved file still
 compiles into a perfectly valid installer that fails on the user's machine, so
 that check reads `ego-lite.iss` back and verifies every path it points at was
@@ -53,9 +53,28 @@ actually staged.
 
 ## Install from a checkout
 
-Requires Node >= 22 and any Chrome/Chromium/Brave/Edge build. Linux resolves it
-from `PATH`; Windows also looks in the standard install locations, so a normal
-Chrome or Edge install needs no configuration.
+Requires Node >= 22 and any Chrome/Chromium/Brave/Edge build. Headed Linux also
+uses `xdotool` for the explicit human-action focus gate. Linux resolves the
+browser and `xdotool` from `PATH`; Windows also looks in the standard browser
+install locations, so a normal Chrome or Edge install needs no configuration.
+
+On a Wayland desktop, headed agent Chrome defaults to XWayland. It starts with
+`--no-startup-window`; the first task target is then created with
+`background:true, focus:false`, so even a cold browser launch stays behind the
+application the user is typing in. A `requestUserAction()` call focuses only
+when it carries a concrete non-empty instruction, and can activate the exact
+managed-browser PID without opening a second window. Its Done/Cancel state lives
+in a named isolated CDP world behind a closed shadow root, so page JavaScript can
+remove the panel but cannot forge a human decision. Set
+`EGO_LINUX_WINDOW_BACKEND=wayland` to force native Wayland; that opts out of
+reliable programmatic application activation, so focused presentation may
+report `raise-failed` instead.
+
+The CDP endpoint uses a randomly allocated non-zero loopback port. Chrome treats
+`--remote-debugging-port=0` as an automation signal and exposes
+`navigator.webdriver=true`, which can trigger Google sign-in rejection and
+Cloudflare verification loops even in a normal headed window. The explicit
+non-zero port keeps the same local CDP transport without that false signal.
 
 ```bash
 cd package/ego-browser && CI=true npm ci && npm run build   # build the upstream harness
@@ -118,6 +137,12 @@ application shell. Never describe that window as “not Chrome”.
 `ego-browser --spaces` opens an overview of every task space: one card each, with
 a live screenshot of the space's page, its name, its owner, and its tab count.
 Clicking a card switches to that space, `×` closes it, `+` creates one.
+
+Cards use cached screencast frames and server-sent refresh events. A 15-second
+reconciliation poll remains only as a recovery path for missed filesystem events
+and activity expiry. The panel daemon publishes a hash of the runtime sources;
+running `--spaces` after an update shuts down an older matching daemon through a
+token-protected loopback endpoint and starts the current build.
 
 Upstream draws this inside the browser's own chrome, replacing the tab strip.
 That is not reachable from outside a Chromium fork — Chrome 137 removed the
@@ -243,8 +268,8 @@ usually exited before the last line is drawn. It gives up after about two and a
 half seconds, and any real input — a click, a keystroke, the next read, an
 explicit `highlight()` — takes the cursor back from it immediately, mid-line.
 
-It also keeps the state the Spaces overview polls moving, so a space whose agent
-is reading no longer looks like a space whose agent walked away.
+It also keeps the state the Spaces overview subscribes to moving, so a space
+whose agent is reading no longer looks like a space whose agent walked away.
 
 ### Watching it scroll
 
@@ -319,7 +344,7 @@ then aborts with "Failed to create a ProcessSingleton". Since `launch()` only
 runs after no DevTools endpoint answered, a guard still held by a live process
 means an unreachable orphan of ours, which is terminated first.
 
-What that guard *is* differs: POSIX Chrome writes `SingletonLock` as a symlink
+What that guard _is_ differs: POSIX Chrome writes `SingletonLock` as a symlink
 naming its owner's pid, so the owner is readable off the filesystem. Windows
 Chrome uses a named mutex and a message window — nothing on disk names the owner
 — so the port finds it in the process table instead, by the `--class=` marker
@@ -330,15 +355,15 @@ Windows and is passed there purely as that marker.
 
 Everything above applies on Windows, with these differences:
 
-| Linux                                   | Windows                                                        |
-| --------------------------------------- | -------------------------------------------------------------- |
-| `~/.local/share/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite`                                      |
-| `~/.local/state/ego-lite-linux`         | `%LOCALAPPDATA%\ego-lite` (Windows has no data/state split)    |
-| browser found on `PATH`                 | standard install paths first, `where.exe` as a backstop        |
-| `/proc` for argv and ancestry           | `Win32_Process` over PowerShell, ancestry cached per process   |
-| `SIGTERM`                               | `taskkill /T /F` (both leave the crash mark `--stop` clears)   |
-| XDG desktop entry, SVG icon             | Start Menu `.lnk`, `.ico` icon                                 |
-| `--class` sets the window class         | inert as a hint; still the ownership marker                    |
+| Linux                           | Windows                                                      |
+| ------------------------------- | ------------------------------------------------------------ |
+| `~/.local/share/ego-lite-linux` | `%LOCALAPPDATA%\ego-lite`                                    |
+| `~/.local/state/ego-lite-linux` | `%LOCALAPPDATA%\ego-lite` (Windows has no data/state split)  |
+| browser found on `PATH`         | standard install paths first, `where.exe` as a backstop      |
+| `/proc` for argv and ancestry   | `Win32_Process` over PowerShell, ancestry cached per process |
+| `SIGTERM`                       | `taskkill /T /F` (both leave the crash mark `--stop` clears) |
+| XDG desktop entry, SVG icon     | Start Menu `.lnk`, `.ico` icon                               |
+| `--class` sets the window class | inert as a hint; still the ownership marker                  |
 
 Packaging: `installer/` builds `ego-lite-setup.exe` (Inno Setup, per-user, with
 a bundled Node runtime), and `scripts/make-icon.mjs` builds the `.ico` both the
@@ -378,7 +403,7 @@ remaining differences are structural rather than unfinished native methods.
 | `upgradeBrowser`                                          | no-op                                                 | App lifecycle; the user's own Chrome updates itself.                                                                                                                                         |
 | `animationHighlightMouseToPosition`, `setAgentTaskState`  | a DOM overlay injected into the page                  | **Equivalent, drawn elsewhere.** The native app paints the cursor over its web view; the shim has only the page, so it injects one there. See above.                                         |
 | `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** See below.                                                                                                                                                  |
-| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-copy mode is available. See below.                                                     |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | **Shared live login/storage state, with scoped tabs and enforced handoff.** Optional isolated cookie-only and cookie + localStorage seed modes are available. See below.                     |
 
 Verified against upstream's own real-browser e2e suite (45 cases, ~525
 assertions), which drives this CLI exactly as it drives the macOS app.
@@ -408,12 +433,26 @@ profile-level login parity over per-space storage privacy: cookies,
 shared with the rest of the agent browser, so a login made in one space is
 visible in the next one without a seed or sync pass.
 
+Creating a task space opens no tab or window. The first `page.goto(...)` or
+`browser.openOrReuseTab(...)` creates its first tab directly at the requested
+URL, so an interrupted agent run cannot leave an "agent space is ready" page on
+the desktop.
+
 Set `EGO_LINUX_TASK_SPACE_STORAGE=isolated` to opt into the older
 browser-context mode. In that mode a space owns a context seeded from the
 default cookie jar when the space is created. Cookies written in one isolated
 space stay invisible to the others and to the default jar, but non-cookie auth
-stores do not come along. Measurements and two reproducible cookie experiments
-are in
+stores do not come along.
+
+Set `EGO_LINUX_TASK_SPACE_STORAGE=isolated-sync` when isolation is required but
+the login also uses `localStorage`. It keeps the isolated cookie jar and, before
+each HTTP(S) origin's first page scripts run, copies a bounded point-in-time
+snapshot of that origin's default-profile `localStorage`. The snapshot is capped
+at 1000 entries / 256 KiB and is installed once per tab; it is not a live bridge.
+If that origin is not already open in the default profile, the shim briefly
+loads the origin root in a background, unfocused source tab and closes it after
+reading storage. IndexedDB, CacheStorage and service-worker state remain
+isolated. Measurements and two reproducible cookie experiments are in
 [`docs/isolation-with-inherited-logins.md`](../../docs/isolation-with-inherited-logins.md);
 seeding a real 2038-cookie profile costs ~105 ms, once per isolated space.
 
@@ -436,16 +475,19 @@ spaces still scope by `browserContextId`; default shared-profile spaces scope by
 the tracked target ids the shim opened.
 
 **What does not work:** default spaces do not isolate browser storage from each
-other. Use `EGO_LINUX_TASK_SPACE_STORAGE=isolated` when that privacy boundary is
-more important than live login parity.
+other. Use `isolated` for the strongest boundary, or `isolated-sync` for a
+point-in-time cookie + localStorage login seed. Neither isolated mode clones
+IndexedDB, CacheStorage or service-worker state.
 
 The user-control boundary is enforced at the bridge: selecting a user-controlled
 space returns `{ done: true, readOnly: true }` without claiming it. Semantic
 snapshot and screenshot capture remain available for passive verification;
-navigation, input, Runtime evaluation, new-tab operations, and all other
-page-domain CDP stay blocked with `EGO_TASK_SPACE_USER_IN_CONTROL` while the
-space is handed off. Browser/Target CDP remains available for attach, inspection,
-and takeover plumbing.
+navigation, input, Runtime evaluation, tab/window/browser mutation, and all
+other non-passive CDP stay blocked with `EGO_TASK_SPACE_USER_IN_CONTROL` while
+the space is handed off. Only an exact observation/attachment allowlist remains:
+screenshot and browser/window metadata reads plus Target list/info/context and
+session attach/detach. Takeover uses the shim's internal path, not this public
+passthrough.
 
 ## Verification
 
@@ -477,26 +519,10 @@ Everything else passes: navigation, observation, task spaces, pointer input,
 keyboard, downloads, screencast, fetch, canvas drawing, the Playwright
 regression set, and the adversarial cases.
 
-### Known flake: canvas drawing under load
+### Resolved flake: canvas drawing under load
 
-The three canvas cases intermittently count one stroke too many
-(`expected 1, got 2`). This is a timing race in the _upstream_ harness, not in
-the shim, and it is worth knowing about because it can bite any drag-heavy work:
-
-`driver/pointer.ts` `finishDragProbe` waits **50 ms** for a trusted `mouseup` on
-the drag's end element. If it has not seen one by then, it assumes the real
-input never landed and re-synthesises the entire drag in JavaScript. When the
-real events did land but arrived late, the page gets both — one trusted drag and
-one synthetic one.
-
-Anything that adds latency trips it. Running the screencast case immediately
-before the canvas cases reproduces it reliably (drag time goes from ~1.2 s to
-~4.1 s), and so does general machine load. The same code, unchanged, produced
-six clean runs in a row and later four failing ones on the same box, so the
-outcome tracks the machine rather than the port.
-
-Fixing it properly means raising that 50 ms window or making the fallback
-conditional on evidence the input actually failed — a change to
-`package/ego-browser`, which this port deliberately leaves untouched. Nothing in
-the shim layer can suppress the fallback without also removing
-`sendCDPMessage`, which everything else depends on.
+The former canvas race counted one stroke twice when a trusted `mouseup` arrived
+after the first 50 ms probe and the harness re-synthesised the drag. The harness
+now checks the non-consuming probe after 50, 100 and 150 ms and only permits the
+fallback after all evidence windows miss. `driver/pointer.test.mjs` covers a late
+trusted event and asserts that the drag is consumed once rather than replayed.

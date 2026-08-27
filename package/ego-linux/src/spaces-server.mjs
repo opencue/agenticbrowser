@@ -1,6 +1,9 @@
+import { watch } from "node:fs";
 import { createServer } from "node:http";
+import { basename, dirname } from "node:path";
 
 import { CURSOR_PROBE_EXPRESSION } from "./cursor.mjs";
+import { TASK_SPACE_FILE } from "./paths.mjs";
 import { SPACES_HTML } from "./spaces-ui.mjs";
 
 /**
@@ -25,6 +28,27 @@ const THUMBNAIL = {
 
 /** How long after its last pointer event a space still counts as being worked in. */
 const ACTIVE_WINDOW_MS = 30_000;
+
+/** Card decoration is optional and must never stall the Spaces API. */
+const CARD_CAPTURE_BUDGET_MS = 500;
+const CARD_PRIME_BUDGET_MS = 250;
+
+function emptyCard() {
+  return { thumbnail: null, agent: null, activity: null, trail: [] };
+}
+
+/** Return a fallback without cancelling useful background work. */
+async function within(promise, timeoutMs, fallback) {
+  let timer;
+  const deadline = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(fallback), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** The crop used while an agent is active. Matches the card's 16/10 frame. */
 const FOLLOW = { width: 760, aspect: 16 / 10 };
@@ -85,7 +109,7 @@ function followClip(cursor) {
  */
 const CAST = { format: "jpeg", quality: 55, maxWidth: 960, maxHeight: 600 };
 
-function createCastPool(cdp) {
+function createCastPool(cdp, onFrame = null) {
   const casts = new Map();
   // Opening is async, so two concurrent polls for the same tab would each find
   // no cast and each attach — the loser's session then leaks, attached and
@@ -98,6 +122,7 @@ function createCastPool(cdp) {
       if (cast.sessionId !== sessionId) continue;
       cast.frame = params.data || null;
       cast.seq += 1;
+      onFrame?.();
       break;
     }
     // Chrome stops sending frames until each one is acknowledged.
@@ -110,7 +135,40 @@ function createCastPool(cdp) {
       .catch(() => {});
   });
 
+  async function primeFrame(targetId) {
+    let sessionId;
+    try {
+      ({ sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      }));
+      cdp.claimSession(sessionId);
+      const shot = await within(
+        cdp.call(
+          "Page.captureScreenshot",
+          {
+            format: CAST.format,
+            quality: CAST.quality,
+            captureBeyondViewport: false,
+          },
+          sessionId,
+        ),
+        CARD_PRIME_BUDGET_MS,
+        null,
+      );
+      return shot?.data || null;
+    } catch {
+      return null;
+    } finally {
+      if (sessionId) {
+        cdp.releaseSession(sessionId);
+        cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      }
+    }
+  }
+
   async function open(targetId) {
+    const primedFrame = await primeFrame(targetId);
     const { sessionId } = await cdp.call("Target.attachToTarget", {
       targetId,
       flatten: true,
@@ -123,7 +181,24 @@ function createCastPool(cdp) {
       cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
       throw new Error("cast pool is closed");
     }
-    const cast = { sessionId, frame: null, seq: 0 };
+    let probeSessionId;
+    try {
+      ({ sessionId: probeSessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      }));
+    } catch (error) {
+      cdp.releaseSession(sessionId);
+      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      throw error;
+    }
+    cdp.claimSession(probeSessionId);
+    const cast = {
+      sessionId,
+      probeSessionId,
+      frame: primedFrame,
+      seq: 0,
+    };
     casts.set(targetId, cast);
     try {
       await cdp.call(
@@ -136,26 +211,13 @@ function createCastPool(cdp) {
       // lives: every later poll finds it, skips open(), and reads a stream that
       // is not running.
       casts.delete(targetId);
-      cdp.releaseSession(sessionId);
-      cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+      for (const ownedSessionId of [sessionId, probeSessionId]) {
+        cdp.releaseSession(ownedSessionId);
+        cdp
+          .call("Target.detachFromTarget", { sessionId: ownedSessionId })
+          .catch(() => {});
+      }
       throw error;
-    }
-    // The first frame only arrives once the page next paints, which on a static
-    // page can be never — so prime the cache with one shot rather than show an
-    // empty card until something happens to move.
-    try {
-      const shot = await cdp.call(
-        "Page.captureScreenshot",
-        {
-          format: CAST.format,
-          quality: CAST.quality,
-          captureBeyondViewport: false,
-        },
-        sessionId,
-      );
-      if (shot.data && !cast.frame) cast.frame = shot.data;
-    } catch {
-      // The stream will fill it in as soon as the page paints.
     }
     return cast;
   }
@@ -184,10 +246,12 @@ function createCastPool(cdp) {
       for (const [targetId, cast] of [...casts.entries()]) {
         if (liveTargetIds.has(targetId)) continue;
         casts.delete(targetId);
-        cdp.releaseSession(cast.sessionId);
-        await cdp
-          .call("Target.detachFromTarget", { sessionId: cast.sessionId })
-          .catch(() => {});
+        for (const sessionId of [cast.sessionId, cast.probeSessionId]) {
+          cdp.releaseSession(sessionId);
+          await cdp
+            .call("Target.detachFromTarget", { sessionId })
+            .catch(() => {});
+        }
       }
     },
 
@@ -198,12 +262,51 @@ function createCastPool(cdp) {
       // to the harness — into the buffer drainEvents() hands to agents, which is
       // the exact leak the claim exists to prevent.
       for (const cast of casts.values()) {
-        cdp
-          .call("Target.detachFromTarget", { sessionId: cast.sessionId })
-          .catch(() => {});
-        cdp.releaseSession(cast.sessionId);
+        for (const sessionId of [cast.sessionId, cast.probeSessionId]) {
+          cdp.call("Target.detachFromTarget", { sessionId }).catch(() => {});
+          cdp.releaseSession(sessionId);
+        }
       }
       casts.clear();
+    },
+  };
+}
+
+/** Coalesce state/frame changes and wake every connected Spaces panel. */
+function createEventHub() {
+  const clients = new Set();
+  let notifyTimer = null;
+  const heartbeat = setInterval(() => {
+    for (const response of clients) response.write(": keepalive\n\n");
+  }, 15_000);
+  heartbeat.unref?.();
+
+  function flush() {
+    notifyTimer = null;
+    for (const response of clients) {
+      response.write(`event: refresh\ndata: ${Date.now()}\n\n`);
+    }
+  }
+
+  return {
+    add(request, response) {
+      clients.add(response);
+      response.write("retry: 2000\n\n");
+      response.write(`event: refresh\ndata: ${Date.now()}\n\n`);
+      request.on("close", () => clients.delete(response));
+    },
+
+    notify() {
+      if (notifyTimer) return;
+      notifyTimer = setTimeout(flush, 500);
+      notifyTimer.unref?.();
+    },
+
+    close() {
+      clearInterval(heartbeat);
+      clearTimeout(notifyTimer);
+      for (const response of clients) response.end();
+      clients.clear();
     },
   };
 }
@@ -211,10 +314,9 @@ function createCastPool(cdp) {
 async function captureCard(cdp, targetId, pool) {
   try {
     const cast = await pool.frameFor(targetId);
-    if (!cast)
-      return { thumbnail: null, agent: null, activity: null, trail: [] };
+    if (!cast) return emptyCard();
 
-    const cursor = await readCursor(cdp, cast.sessionId);
+    const cursor = await readCursor(cdp, cast.probeSessionId);
     const active = Boolean(cursor) && cursor.ageMs < ACTIVE_WINDOW_MS;
     return {
       thumbnail: cast.frame ? `data:image/jpeg;base64,${cast.frame}` : null,
@@ -233,7 +335,7 @@ async function captureCard(cdp, targetId, pool) {
       trail: cursor?.trail?.slice(-3).reverse() ?? [],
     };
   } catch {
-    return { thumbnail: null, agent: null, activity: null, trail: [] };
+    return emptyCard();
   }
 }
 
@@ -273,11 +375,29 @@ async function readBody(request) {
 /**
  * Start the overview server.
  * @param {object} shim The live ego shim (ego + cdp).
+ * @param {{buildId?:string, shutdownToken?:string, onShutdown?:() => void}} [options]
  * @returns {Promise<{port:number, close:() => void}>}
  */
-export async function startSpacesServer(shim) {
+export async function startSpacesServer(shim, options = {}) {
   const { ego, cdp } = shim;
-  const pool = createCastPool(cdp);
+  const { buildId = null, shutdownToken = null, onShutdown = null } = options;
+  const events = createEventHub();
+  const pool = createCastPool(cdp, () => events.notify());
+  let stateWatcher = null;
+  try {
+    stateWatcher = watch(
+      dirname(TASK_SPACE_FILE),
+      { persistent: false },
+      (_event, filename) => {
+        if (!filename || String(filename) === basename(TASK_SPACE_FILE)) {
+          events.notify();
+        }
+      },
+    );
+  } catch {
+    // EventSource still has a slow reconciliation fallback if this platform's
+    // file watcher cannot observe the state directory.
+  }
 
   let server;
   const handleRequest = async (request, response) => {
@@ -307,7 +427,34 @@ export async function startSpacesServer(shim) {
     }
 
     if (request.method === "GET" && url.pathname === "/api/health") {
-      json(response, 200, { ok: true });
+      json(response, 200, {
+        ok: true,
+        ...(buildId ? { buildId } : {}),
+      });
+      return;
+    }
+
+    if (request.method === "GET" && url.pathname === "/api/events") {
+      response.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      events.add(request, response);
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/shutdown") {
+      if (
+        !shutdownToken ||
+        request.headers["x-ego-daemon-token"] !== shutdownToken
+      ) {
+        json(response, 403, { error: "invalid daemon token" });
+        return;
+      }
+      json(response, 202, { stopping: true });
+      queueMicrotask(() => onShutdown?.());
       return;
     }
 
@@ -330,8 +477,12 @@ export async function startSpacesServer(shim) {
           const live = (space.targetIds || []).filter((id) => byTarget.has(id));
           const lead = live[0];
           const card = lead
-            ? await captureCard(cdp, lead, pool)
-            : { thumbnail: null, agent: null, activity: null, trail: [] };
+            ? await within(
+                captureCard(cdp, lead, pool),
+                CARD_CAPTURE_BUDGET_MS,
+                emptyCard(),
+              )
+            : emptyCard();
           return {
             id: space.id,
             name: space.name,
@@ -373,6 +524,7 @@ export async function startSpacesServer(shim) {
       }
       const space = await ego.createTaskSpace(name || "new space");
       json(response, 200, { space });
+      events.notify();
       return;
     }
 
@@ -387,9 +539,11 @@ export async function startSpacesServer(shim) {
       let result;
       if (match[2] === "use") {
         await ego.useTaskSpace(id);
-        result = ego.presentTaskSpace
-          ? await ego.presentTaskSpace(id)
-          : { done: true };
+        result = shim.presentTaskSpaceForPanel
+          ? await shim.presentTaskSpaceForPanel(id)
+          : ego.presentTaskSpace
+            ? await ego.presentTaskSpace(id)
+            : { done: true };
       } else if (match[2] === "stop") {
         result = await ego.handOffTaskSpace(id);
       } else if (match[2] === "takeover") {
@@ -398,6 +552,7 @@ export async function startSpacesServer(shim) {
         result = await ego.closeTaskSpace(id);
       }
       json(response, 200, result || { done: true });
+      events.notify();
       return;
     }
 
@@ -418,6 +573,8 @@ export async function startSpacesServer(shim) {
   return {
     port: server.address().port,
     close: () => {
+      stateWatcher?.close();
+      events.close();
       pool.closeAll();
       server.close();
     },

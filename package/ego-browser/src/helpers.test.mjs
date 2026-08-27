@@ -8,7 +8,9 @@ import {
   claimTaskSpace,
   completeTaskSpace,
   executeTaskSpace,
+  handleChallengeTaskSpace,
   handOffTaskSpace,
+  loginPreflightTaskSpace,
   requestUserActionTaskSpace,
   newTaskSpace,
   helperContext,
@@ -218,6 +220,8 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.taskSpaces.claim, "function");
   assert.equal(typeof context.taskSpaces.bringToFront, "function");
   assert.equal(typeof context.taskSpaces.requestUserAction, "function");
+  assert.equal(typeof context.taskSpaces.loginPreflight, "function");
+  assert.equal(typeof context.taskSpaces.handleChallenge, "function");
   assert.equal(typeof context.taskSpaces.isHardStopError, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
@@ -360,7 +364,10 @@ test("help exposes nested taskSpaces.requestUserAction guidance", () => {
     context.help("taskSpaces.requestUserAction"),
     /require visible: true/,
   );
-  assert.match(context.help(), /taskSpaces\.requestUserAction\(nameOrId\)/);
+  assert.match(
+    context.help(),
+    /taskSpaces\.requestUserAction\(nameOrId, options\)/,
+  );
 });
 
 test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
@@ -1441,7 +1448,7 @@ test("useOrCreateTaskSpace selects user-owned spaces read-only without claiming"
   assert.deepEqual(calls, [["listTaskSpaces"], ["useTaskSpace", 7]]);
 });
 
-test("bringToFrontTaskSpace raises user-owned spaces without selecting or claiming", async () => {
+test("bringToFrontTaskSpace checks user-owned spaces without selecting or claiming", async () => {
   const calls = [];
   await withEgo(
     {
@@ -1479,6 +1486,38 @@ test("bringToFrontTaskSpace raises user-owned spaces without selecting or claimi
     },
   );
   assert.deepEqual(calls, [["listTaskSpaces"], ["presentTaskSpace", 7]]);
+});
+
+test("bringToFrontTaskSpace forwards explicit user-authorized focus", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async presentTaskSpace(id, options) {
+        calls.push(["presentTaskSpace", id, options]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      await bringToFrontTaskSpace("checkout-flow", { focus: true });
+    },
+  );
+  assert.deepEqual(calls, [
+    ["listTaskSpaces"],
+    ["presentTaskSpace", 7, { focus: true }],
+  ]);
 });
 
 test("claimTaskSpace claims and selects an existing user-owned space", async () => {
@@ -2255,7 +2294,7 @@ test("handOffTaskSpace reports a handoff the user cannot see", async () => {
   );
 });
 
-test("requestUserActionTaskSpace hands off an agent-owned visible space", async () => {
+test("requestUserActionTaskSpace keeps a bare legacy handoff focus-protected", async () => {
   const calls = [];
   await withEgo(
     {
@@ -2280,6 +2319,10 @@ test("requestUserActionTaskSpace hands off an agent-owned visible space", async 
         calls.push(["handOffTaskSpace"]);
         return { done: true, visible: true };
       },
+      async presentTaskSpace(id) {
+        calls.push(["presentTaskSpace", id]);
+        return { done: true, visible: true };
+      },
     },
     async () => {
       assert.deepEqual(await requestUserActionTaskSpace("checkout-flow"), {
@@ -2291,13 +2334,13 @@ test("requestUserActionTaskSpace hands off an agent-owned visible space", async 
   );
   assert.deepEqual(calls, [
     ["listTaskSpaces"],
-    ["listTaskSpaces"],
     ["useTaskSpace", 7],
     ["handOffTaskSpace"],
+    ["presentTaskSpace", 7],
   ]);
 });
 
-test("requestUserActionTaskSpace raises a user-owned space without claiming it", async () => {
+test("requestUserActionTaskSpace checks a bare user-owned space without focusing or claiming it", async () => {
   const calls = [];
   await withEgo(
     {
@@ -2314,6 +2357,10 @@ test("requestUserActionTaskSpace raises a user-owned space without claiming it",
           ],
         };
       },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return { done: true, readOnly: true };
+      },
       async presentTaskSpace(id) {
         calls.push(["presentTaskSpace", id]);
         return { done: true, visible: true };
@@ -2329,9 +2376,174 @@ test("requestUserActionTaskSpace raises a user-owned space without claiming it",
   );
   assert.deepEqual(calls, [
     ["listTaskSpaces"],
-    ["listTaskSpaces"],
+    ["useTaskSpace", 7],
     ["presentTaskSpace", 7],
   ]);
+});
+
+test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the agent", async () => {
+  const calls = [];
+  let ownership = "agent";
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        calls.push(["listTaskSpaces"]);
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership,
+            },
+          ],
+        };
+      },
+      async useTaskSpace(id) {
+        calls.push(["useTaskSpace", id]);
+        return { done: true };
+      },
+      async handOffTaskSpace() {
+        calls.push(["handOffTaskSpace"]);
+        ownership = "agentDelegatedToUser";
+        return { done: true, visible: true };
+      },
+      async showUserAction(action) {
+        calls.push(["showUserAction", action]);
+        return { done: true, alreadyVisible: false, targetFound: true };
+      },
+      async presentTaskSpace(id, options) {
+        calls.push(["presentTaskSpace", id, options]);
+        return { done: true, visible: true };
+      },
+      async waitForUserAction(options) {
+        calls.push(["waitForUserAction", options]);
+        return { done: true, result: "done" };
+      },
+      async clearUserAction(key) {
+        calls.push(["clearUserAction", key]);
+        return { done: true };
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        ownership = "agent";
+        return { done: true };
+      },
+    },
+    async () => {
+      const result = await requestUserActionTaskSpace("checkout-flow", {
+        instruction: "Approve the login, then press Kész.",
+        target: { selector: "button.approve" },
+        actionKey: "approve-login",
+        doneLabel: "Kész",
+        cancelLabel: "Mégsem",
+        timeout: 5,
+      });
+      assert.deepEqual(result, {
+        done: true,
+        visible: true,
+        presentation: "hand-off",
+        actionKey: "approve-login",
+        focused: true,
+        userResult: "done",
+        resumed: true,
+      });
+    },
+  );
+  assert.ok(
+    calls.some(
+      (call) => call[0] === "presentTaskSpace" && call[2]?.focus === true,
+    ),
+  );
+  assert.ok(calls.some((call) => call[0] === "waitForUserAction"));
+  assert.ok(calls.some((call) => call[0] === "takeOverTaskSpace"));
+});
+
+test("requestUserActionTaskSpace does not refocus an already-visible blocker", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async useTaskSpace() {
+        return { done: true, readOnly: true };
+      },
+      async showUserAction() {
+        return { done: true, alreadyVisible: true, targetFound: true };
+      },
+      async presentTaskSpace(id, options) {
+        calls.push(["presentTaskSpace", id, options]);
+        return { done: true, visible: true };
+      },
+    },
+    async () => {
+      await requestUserActionTaskSpace("checkout-flow", {
+        instruction: "Approve the login.",
+        actionKey: "approve-login",
+        wait: false,
+      });
+    },
+  );
+  assert.deepEqual(calls, [["presentTaskSpace", 7, undefined]]);
+});
+
+test("requestUserActionTaskSpace keeps user control after Cancel", async () => {
+  const calls = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async useTaskSpace() {
+        return { done: true, readOnly: true };
+      },
+      async showUserAction() {
+        return { done: true, alreadyVisible: false, targetFound: false };
+      },
+      async presentTaskSpace() {
+        return { done: true, visible: true };
+      },
+      async waitForUserAction() {
+        return { done: true, result: "cancel" };
+      },
+      async clearUserAction(key) {
+        calls.push(["clearUserAction", key]);
+        return { done: true };
+      },
+      async takeOverTaskSpace() {
+        calls.push(["takeOverTaskSpace"]);
+        return { done: true };
+      },
+    },
+    async () => {
+      const result = await requestUserActionTaskSpace("checkout-flow", {
+        instruction: "Confirm the purchase.",
+        actionKey: "confirm-purchase",
+      });
+      assert.equal(result.userResult, "cancel");
+      assert.equal(result.resumed, false);
+    },
+  );
+  assert.deepEqual(calls, [["clearUserAction", "confirm-purchase"]]);
 });
 
 test("requestUserActionTaskSpace rejects a page that is not visible", async () => {
@@ -2355,6 +2567,9 @@ test("requestUserActionTaskSpace rejects a page that is not visible", async () =
       async handOffTaskSpace() {
         return { done: true, visible: false, reason: "headless" };
       },
+      async presentTaskSpace() {
+        return { done: true, visible: false, reason: "headless" };
+      },
     },
     async () => {
       await assert.rejects(
@@ -2363,6 +2578,381 @@ test("requestUserActionTaskSpace rejects a page that is not visible", async () =
       );
     },
   );
+});
+
+test("requestUserActionTaskSpace notifies when focused presentation fails", async () => {
+  const notifications = [];
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            {
+              taskId: "checkout-flow",
+              id: 7,
+              name: "checkout-flow",
+              ownership: "user",
+            },
+          ],
+        };
+      },
+      async useTaskSpace() {
+        return { done: true, readOnly: true };
+      },
+      async showUserAction() {
+        return { done: true, alreadyVisible: false, targetFound: false };
+      },
+      async presentTaskSpace() {
+        return { done: true, visible: false, reason: "raise-failed" };
+      },
+      async notifyUserAction(payload) {
+        notifications.push(payload);
+        return { done: true };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        requestUserActionTaskSpace("checkout-flow", {
+          instruction: "Approve the login.",
+          wait: false,
+        }),
+        /page is not visible \(raise-failed\)/,
+      );
+    },
+  );
+  assert.deepEqual(notifications, [
+    { instruction: "Approve the login.", reason: "raise-failed" },
+  ]);
+});
+
+test("loginPreflightTaskSpace waits for autofill and submits without exposing values", async () => {
+  const evaluations = [
+    { detected: true, ready: false, fieldCount: 2, filledCount: 1 },
+    { detected: true, ready: true, fieldCount: 2, filledCount: 2 },
+    true,
+  ];
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      assert.equal(method, "Runtime.evaluate");
+      return { result: { value: evaluations.shift() } };
+    },
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              {
+                taskId: "login",
+                id: 9,
+                name: "login",
+                ownership: "agent",
+              },
+            ],
+          };
+        },
+        async useTaskSpace() {
+          return { done: true };
+        },
+      },
+      async () => {
+        assert.deepEqual(
+          await loginPreflightTaskSpace("login", {
+            waitForAutofill: 0.05,
+            interval: 0.001,
+          }),
+          {
+            detected: true,
+            ready: true,
+            needsUser: false,
+            fieldCount: 2,
+            filledCount: 2,
+            submitted: true,
+          },
+        );
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("handleChallengeTaskSpace hands a persistent Cloudflare challenge to the user once", async () => {
+  const calls = [];
+  let ownership = "agent";
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      assert.equal(method, "Runtime.evaluate");
+      return {
+        result: {
+          value: {
+            detected: true,
+            provider: "cloudflare",
+            kind: "turnstile",
+            origin: "https://www.npmjs.com",
+            target: ".cf-turnstile",
+          },
+        },
+      };
+    },
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              {
+                taskId: "npm",
+                id: 12,
+                name: "npm",
+                ownership,
+              },
+            ],
+          };
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return { done: true };
+        },
+        async handOffTaskSpace() {
+          calls.push(["handOffTaskSpace"]);
+          ownership = "agentDelegatedToUser";
+          return { done: true, visible: true };
+        },
+        async showUserAction(action) {
+          calls.push(["showUserAction", action]);
+          return { done: true, alreadyVisible: false, targetFound: true };
+        },
+        async presentTaskSpace(id, options) {
+          calls.push(["presentTaskSpace", id, options]);
+          return { done: true, visible: true };
+        },
+        async waitForUserAction() {
+          calls.push(["waitForUserAction"]);
+          return { done: true, result: "done" };
+        },
+        async clearUserAction(key) {
+          calls.push(["clearUserAction", key]);
+          return { done: true };
+        },
+        async takeOverTaskSpace() {
+          calls.push(["takeOverTaskSpace"]);
+          ownership = "agent";
+          return { done: true };
+        },
+      },
+      async () => {
+        assert.deepEqual(
+          await handleChallengeTaskSpace("npm", {
+            waitForAutomatic: 0,
+            instruction:
+              "Erősítsd meg, hogy nem vagy robot, majd kattints a Kész gombra.",
+            doneLabel: "Kész",
+            cancelLabel: "Mégsem",
+          }),
+          {
+            detected: true,
+            provider: "cloudflare",
+            kind: "turnstile",
+            handled: true,
+            done: true,
+            visible: true,
+            presentation: "hand-off",
+            actionKey:
+              "human-challenge:cloudflare:turnstile:https://www.npmjs.com",
+            focused: true,
+            userResult: "done",
+            resumed: true,
+          },
+        );
+      },
+    );
+  } finally {
+    restore();
+  }
+
+  const panel = calls.find((call) => call[0] === "showUserAction");
+  assert.equal(panel[1].target, ".cf-turnstile");
+  assert.equal(panel[1].doneLabel, "Kész");
+  assert.equal(
+    calls.filter((call) => call[0] === "presentTaskSpace").length,
+    1,
+  );
+});
+
+test("handleChallengeTaskSpace stays background-only when no challenge is present", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async () => ({ result: { value: { detected: false } } }),
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              { taskId: "plain", id: 13, name: "plain", ownership: "agent" },
+            ],
+          };
+        },
+        async useTaskSpace(id) {
+          calls.push(["useTaskSpace", id]);
+          return { done: true };
+        },
+        async presentTaskSpace() {
+          calls.push(["presentTaskSpace"]);
+          return { done: true, visible: true };
+        },
+      },
+      async () => {
+        assert.deepEqual(await handleChallengeTaskSpace("plain"), {
+          detected: false,
+          handled: false,
+        });
+      },
+    );
+  } finally {
+    restore();
+  }
+  assert.deepEqual(calls, [["useTaskSpace", 13]]);
+});
+
+test("handleChallengeTaskSpace does not focus a challenge that resolves automatically", async () => {
+  const evaluations = [
+    {
+      detected: true,
+      provider: "cloudflare",
+      kind: "turnstile",
+      origin: "https://example.test",
+      target: ".cf-turnstile",
+    },
+    { detected: false },
+  ];
+  const restore = setOverrides({
+    cdpOverride: async () => ({ result: { value: evaluations.shift() } }),
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              { taskId: "auto", id: 14, name: "auto", ownership: "agent" },
+            ],
+          };
+        },
+        async useTaskSpace() {
+          return { done: true };
+        },
+      },
+      async () => {
+        assert.deepEqual(
+          await handleChallengeTaskSpace("auto", {
+            waitForAutomatic: 0.05,
+            interval: 0.001,
+          }),
+          {
+            detected: true,
+            provider: "cloudflare",
+            kind: "turnstile",
+            handled: false,
+            resolvedAutomatically: true,
+          },
+        );
+      },
+    );
+  } finally {
+    restore();
+  }
+});
+
+test("challenge inspection ignores a Turnstile widget that already has a token", () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  const previousStyle = globalThis.getComputedStyle;
+  const visibleWidget = {
+    getBoundingClientRect: () => ({ width: 300, height: 65 }),
+  };
+  globalThis.document = {
+    title: "Sign in",
+    querySelector(selector) {
+      if (selector === 'input[name="cf-turnstile-response"]') {
+        return { value: "completed-token" };
+      }
+      if (selector === ".cf-turnstile") return visibleWidget;
+      return null;
+    },
+  };
+  globalThis.location = { origin: "https://accounts.example.test" };
+  globalThis.getComputedStyle = () => ({
+    display: "block",
+    visibility: "visible",
+  });
+  try {
+    assert.deepEqual(helperExports.__testing.inspectHumanChallenge(), {
+      detected: false,
+    });
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    if (previousStyle === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = previousStyle;
+  }
+});
+
+test("challenge inspection ignores solved hCaptcha and reCAPTCHA widgets", () => {
+  const previousDocument = globalThis.document;
+  const previousLocation = globalThis.location;
+  const previousStyle = globalThis.getComputedStyle;
+  const visibleWidget = {
+    getBoundingClientRect: () => ({ width: 300, height: 65 }),
+  };
+  globalThis.location = { origin: "https://accounts.example.test" };
+  globalThis.getComputedStyle = () => ({
+    display: "block",
+    visibility: "visible",
+  });
+  try {
+    for (const testCase of [
+      {
+        response: "h-captcha-response",
+        widget: ".h-captcha",
+      },
+      {
+        response: "g-recaptcha-response",
+        widget: ".g-recaptcha",
+      },
+    ]) {
+      globalThis.document = {
+        title: "Sign in",
+        querySelectorAll(selector) {
+          return selector.includes(testCase.response)
+            ? [{ value: "completed-token" }]
+            : [];
+        },
+        querySelector(selector) {
+          return selector === testCase.widget ||
+            selector === "[data-sitekey][data-callback]"
+            ? visibleWidget
+            : null;
+        },
+      };
+      assert.deepEqual(helperExports.__testing.inspectHumanChallenge(), {
+        detected: false,
+      });
+    }
+  } finally {
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
+    if (previousLocation === undefined) delete globalThis.location;
+    else globalThis.location = previousLocation;
+    if (previousStyle === undefined) delete globalThis.getComputedStyle;
+    else globalThis.getComputedStyle = previousStyle;
+  }
 });
 
 test("useOrCreateTaskSpace rejects unknown ownership", async () => {

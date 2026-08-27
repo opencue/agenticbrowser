@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { clearStaleCrashMark } from "../src/chrome.mjs";
+import { clearStaleCrashMark, neutralizeZoom } from "../src/chrome.mjs";
 
 /**
  * Build a profile directory whose Preferences carry the given profile block.
@@ -108,6 +108,36 @@ describe("clearStaleCrashMark", () => {
         false,
         "a fresh profile is not an error",
       );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("neutralizeZoom", () => {
+  it("resets numeric default and per-host zoom without changing their types", async () => {
+    const dir = await profileWith({
+      exit_type: "Normal",
+      name: "ego lite — agent",
+    });
+    try {
+      await writeFile(
+        join(dir, "Default", "Preferences"),
+        JSON.stringify({
+          partition: {
+            default_zoom_level: 1.75,
+            per_host_zoom_levels: { "https://example.com": 2.5 },
+          },
+          profile: { exit_type: "Normal", name: "ego lite — agent" },
+        }),
+      );
+
+      assert.equal(await neutralizeZoom(dir), true);
+      const prefs = JSON.parse(
+        await readFile(join(dir, "Default", "Preferences"), "utf8"),
+      );
+      assert.equal(prefs.partition.default_zoom_level, 0);
+      assert.deepEqual(prefs.partition.per_host_zoom_levels, {});
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

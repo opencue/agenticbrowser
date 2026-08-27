@@ -307,3 +307,48 @@ console.log("33. clears when on them: " + marking.clear);
 console.log(
   "34. and stays on screen: " + (resting.onScreen && marking.onScreen),
 );
+
+// A page may forbid inline styles. The overlay lives in a shadow root, but its
+// <style> element is still subject to the document CSP; without a constructable
+// sheet the three cursor SVGs and badge fall back to raw document flow.
+await page.goto(new URL("csp.html", fixture).href);
+await page.waitForLoadState();
+const cspButton = await page.elementCenter("loc=css:#csp-button");
+await page.mouse.move(cspButton.x, cspButton.y);
+await page.waitForTimeout(250);
+// Recreate the broken shape already-open tabs have after upgrading: an inline
+// sheet rejected by CSP and no adopted sheet. The next render must repair it
+// rather than requiring a navigation.
+await probe(`(() => {
+  const root = ${SHADOW};
+  const css = [...root.adoptedStyleSheets[0].cssRules]
+    .map((rule) => rule.cssText)
+    .join('');
+  const style = document.createElement('style');
+  style.textContent = css;
+  root.adoptedStyleSheets = [];
+  root.prepend(style);
+})()`);
+await page.mouse.click(cspButton.x, cspButton.y);
+await page.waitForTimeout(250);
+const cspStyles = JSON.parse(
+  await probe(`(() => {
+    const root = ${SHADOW};
+    const visibleShapes = [...root.querySelectorAll('svg.shape')]
+      .filter((shape) => getComputedStyle(shape).display !== 'none')
+      .map((shape) => shape.id);
+    return JSON.stringify({
+      adopted: root.adoptedStyleSheets.length,
+      visibleShapes,
+      pointerPosition: getComputedStyle(root.getElementById('pointer')).position,
+      badgeDisplay: getComputedStyle(root.getElementById('badge')).display,
+    });
+  })()`),
+);
+console.log(
+  "35. CSP styles active:    " +
+    (cspStyles.adopted === 1 &&
+      cspStyles.visibleShapes.join() === "arrow" &&
+      cspStyles.pointerPosition === "absolute" &&
+      cspStyles.badgeDisplay === "flex"),
+);

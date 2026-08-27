@@ -31,6 +31,123 @@ import path, { join } from "node:path";
 const HOME = homedir();
 
 /**
+ * Keep headed agent Chrome activatable without allowing autonomous launches to
+ * steal focus. Native Wayland requires a fresh compositor activation token;
+ * short-lived agent processes do not own one, while XWayland lets the explicit
+ * presentation gate activate the exact managed-browser PID.
+ */
+export function browserDisplayFlags({
+  headless = false,
+  env = process.env,
+  platform = process.platform,
+} = {}) {
+  if (headless || platform !== "linux") return [];
+  const requested = (env.EGO_LINUX_WINDOW_BACKEND || "").toLowerCase();
+  if (requested === "wayland") return ["--ozone-platform=wayland"];
+  if (requested === "x11") return ["--ozone-platform=x11"];
+  if (env.XDG_SESSION_TYPE === "wayland" && env.DISPLAY) {
+    return ["--ozone-platform=x11"];
+  }
+  return [];
+}
+
+function runCapturedCommand(command, args, { timeoutMs = 2000 } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish({ ok: false, stdout, stderr, reason: "timeout" });
+    }, timeoutMs);
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.on("error", (error) => {
+      finish({
+        ok: false,
+        stdout,
+        stderr,
+        reason: error.code || "spawn-error",
+      });
+    });
+    child.on("close", (code) => {
+      finish({ ok: code === 0, stdout, stderr, code });
+    });
+  });
+}
+
+/**
+ * Activate the visible X11/XWayland window owned by one browser process.
+ *
+ * Wayland deliberately ignores CDP's Page.bringToFront for application-level
+ * focus unless Chromium has a compositor activation token. Agent processes do
+ * not have a fresh user-input token, so the managed browser is launched through
+ * XWayland and this explicit, user-authorized path activates its exact PID.
+ */
+export async function activateWindowByClass(
+  { wmClass, pid, env = process.env, platform = process.platform },
+  {
+    run = runCapturedCommand,
+    sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  } = {},
+) {
+  if (platform !== "linux" || !env.DISPLAY) return false;
+  if (!wmClass || !Number.isInteger(pid) || pid <= 0) return false;
+
+  const search = await run("xdotool", [
+    "search",
+    "--onlyvisible",
+    "--class",
+    wmClass,
+  ]);
+  if (!search.ok) return false;
+
+  const windowIds = search.stdout
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  let windowId = null;
+  for (const candidate of windowIds) {
+    const owner = await run("xdotool", ["getwindowpid", candidate]);
+    if (owner.ok && Number(owner.stdout.trim()) === pid) {
+      windowId = candidate;
+      break;
+    }
+  }
+  if (!windowId) return false;
+
+  const activation = await run("xdotool", ["windowactivate", windowId]);
+  if (!activation.ok) return false;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const active = await run("xdotool", ["getactivewindow"]);
+    if (active.ok && active.stdout.trim()) {
+      const owner = await run("xdotool", [
+        "getwindowpid",
+        active.stdout.trim(),
+      ]);
+      if (owner.ok && Number(owner.stdout.trim()) === pid) return true;
+    }
+    await sleep(50);
+  }
+  return false;
+}
+
+/**
  * Split a Windows command line the way CommandLineToArgvW does, near enough.
  *
  * Only double quotes matter for what reads this: Chrome switches are
@@ -253,8 +370,7 @@ export function createPlatform({
    */
   function startMenuProgramsDir() {
     if (!isWindows) return null;
-    const roaming =
-      env.APPDATA || conventions.join(HOME, "AppData", "Roaming");
+    const roaming = env.APPDATA || conventions.join(HOME, "AppData", "Roaming");
     return conventions.join(
       roaming,
       "Microsoft",
@@ -303,7 +419,10 @@ export function createPlatform({
       return [
         configured,
         conventions.join(app(programFiles, "Google", "Chrome"), "chrome.exe"),
-        conventions.join(app(programFilesX86, "Google", "Chrome"), "chrome.exe"),
+        conventions.join(
+          app(programFilesX86, "Google", "Chrome"),
+          "chrome.exe",
+        ),
         conventions.join(app(local, "Google", "Chrome"), "chrome.exe"),
         conventions.join(app(local, "Chromium"), "chrome.exe"),
         conventions.join(

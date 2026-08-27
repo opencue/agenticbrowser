@@ -816,24 +816,30 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     example: "await taskSpaces.handOff(task.id)",
   },
   "taskSpaces.bringToFront": {
-    signature: "taskSpaces.bringToFront(nameOrId) => Promise<object>",
+    signature: "taskSpaces.bringToFront(nameOrId, options?) => Promise<object>",
     description:
-      "Raise a task space's browser window/tab without selecting it for automation or changing ownership.",
+      "Check a task space without changing ownership. Default focus:false stays background-only; focus:true is reserved for an explicit user request to show the browser.",
     params: [
       {
         name: "nameOrId",
         type: "string | number",
         required: true,
         description: "Task space name, taskId, or numeric id.",
+      },
+      {
+        name: "options",
+        type: "{ focus?: boolean }",
+        description: "Set focus:true only after explicit user authorization.",
       },
     ],
     returns: "Promise<{ done: boolean, visible?: boolean, reason?: string }>",
-    example: "await taskSpaces.bringToFront(task.id)",
+    example: "await taskSpaces.bringToFront(task.id, { focus: true })",
   },
   "taskSpaces.requestUserAction": {
-    signature: "taskSpaces.requestUserAction(nameOrId) => Promise<object>",
+    signature:
+      "taskSpaces.requestUserAction(nameOrId, options?) => Promise<object>",
     description:
-      "Immediately before asking the user for a manual browser action, hand off or raise the task space and require confirmation that it is visible.",
+      "Hand off for a manual browser action. Bare calls never focus; a concrete instruction shows a one-shot Done/Cancel panel, highlights the target, and waits by default.",
     params: [
       {
         name: "nameOrId",
@@ -841,10 +847,63 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         required: true,
         description: "Task space name, taskId, or numeric id.",
       },
+      {
+        name: "options",
+        type: "{ instruction?: string, target?: string | { selector?: string, text?: string }, actionKey?: string, doneLabel?: string, cancelLabel?: string, wait?: boolean, timeout?: number, interval?: number }",
+        description:
+          "A non-empty instruction authorizes one focus event. Done resumes automatically; Cancel keeps user control.",
+      },
+    ],
+    returns: "Promise<object>",
+    example:
+      'await taskSpaces.requestUserAction(task.id, { instruction: "Approve the login", target: "button.approve", doneLabel: "Kész", cancelLabel: "Mégsem" })',
+  },
+  "taskSpaces.loginPreflight": {
+    signature:
+      "taskSpaces.loginPreflight(nameOrId, options?) => Promise<object>",
+    description:
+      "Wait briefly for password-manager autofill, return only booleans/counts, and submit a uniquely identifiable ready login form without focusing the browser.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Agent-controlled task space name, taskId, or numeric id.",
+      },
+      {
+        name: "options",
+        type: "{ waitForAutofill?: number, interval?: number, submit?: boolean | string }",
+        description:
+          "Seconds to wait/poll; submit false only inspects, a string selects an explicit CSS submit target.",
+      },
     ],
     returns:
-      'Promise<{ done: true, visible: true, presentation: "hand-off" | "bring-to-front" }>',
-    example: "await taskSpaces.requestUserAction(task.id)",
+      "Promise<{ detected: boolean, ready: boolean, needsUser: boolean, fieldCount: number, filledCount: number, submitted: boolean }>",
+    example:
+      "const login = await taskSpaces.loginPreflight(task.id); if (login.needsUser) { /* request user action */ }",
+  },
+  "taskSpaces.handleChallenge": {
+    signature:
+      "taskSpaces.handleChallenge(nameOrId, options?) => Promise<object>",
+    description:
+      "Detect common visible browser challenges in the background, wait briefly for automatic completion, and focus the one-shot user-action panel only when the challenge persists.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Agent-controlled task space name, taskId, or numeric id.",
+      },
+      {
+        name: "options",
+        type: "{ waitForAutomatic?: number, interval?: number, instruction?: string, doneLabel?: string, cancelLabel?: string, timeout?: number }",
+        description:
+          "Seconds to wait/poll before requesting the human action, plus localized panel text and manual timeout.",
+      },
+    ],
+    returns: "Promise<object>",
+    example:
+      'await taskSpaces.handleChallenge(task.id, { instruction: "Erősítsd meg, hogy nem vagy robot, majd kattints a Kész gombra.", doneLabel: "Kész", cancelLabel: "Mégsem" })',
   },
   "taskSpaces.takeOver": {
     signature: "taskSpaces.takeOver(nameOrId?) => Promise<void>",

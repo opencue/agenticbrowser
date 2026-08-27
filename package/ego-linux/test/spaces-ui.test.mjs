@@ -1,0 +1,70 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+
+import {
+  SPACES_HTML,
+  compareSpaceGroups,
+  compareSpaces,
+  profileLabel,
+} from "../src/spaces-ui.mjs";
+
+function space(name, ownership = "agent", activity = null) {
+  return { name, ownership, activity };
+}
+
+describe("Spaces overview organization", () => {
+  it("turns composite Cue profiles into readable section labels", () => {
+    assert.equal(
+      profileLabel("medusa-vite+medusa-stack+resend"),
+      "Medusa-vite · Medusa-stack · Resend",
+    );
+    assert.equal(profileLabel(""), "Personal");
+  });
+
+  it("orders live and actionable spaces before idle agent spaces", () => {
+    const spaces = [
+      space("idle"),
+      space("personal", "user"),
+      space("handed-off", "agentDelegatedToUser"),
+      space("live", "agent", { ageMs: 10 }),
+    ];
+
+    spaces.sort(compareSpaces);
+
+    assert.deepEqual(
+      spaces.map(({ name }) => name),
+      ["live", "handed-off", "personal", "idle"],
+    );
+  });
+
+  it("orders profile groups by their most important space and keeps Personal last", () => {
+    const groups = [
+      ["", [space("personal", "user")]],
+      ["python", [space("idle")]],
+      ["medusa-vite+resend", [space("live", "agent", { ageMs: 10 })]],
+    ];
+
+    groups.sort(compareSpaceGroups);
+
+    assert.deepEqual(
+      groups.map(([profile]) => profile),
+      ["medusa-vite+resend", "python", ""],
+    );
+    assert.equal(compareSpaceGroups(groups[2], groups[2]), 0);
+  });
+
+  it("ships the summary and denser responsive grid in the served page", () => {
+    assert.match(SPACES_HTML, /id="summary"/);
+    assert.match(SPACES_HTML, /minmax\(min\(100%, 310px\), 1fr\)/);
+    assert.doesNotMatch(SPACES_HTML, /agents\.join\(" \+ "\) \|\| "Agent"/);
+    const script = SPACES_HTML.match(/<script>([\s\S]*)<\/script>/)?.[1];
+    assert.ok(script);
+    assert.doesNotThrow(() => new Function(script));
+  });
+
+  it("uses server-sent updates with only a slow polling fallback", () => {
+    assert.match(SPACES_HTML, /new EventSource\("\/api\/events"\)/);
+    assert.match(SPACES_HTML, /FALLBACK_POLL_MS = 15000/);
+    assert.doesNotMatch(SPACES_HTML, /LIVE_POLL_MS|IDLE_POLL_MS/);
+  });
+});

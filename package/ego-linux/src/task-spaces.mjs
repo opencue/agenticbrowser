@@ -19,6 +19,9 @@ import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
  * EGO_LINUX_TASK_SPACE_STORAGE=isolated. That revives the older context-backed
  * mode: a space owns a browser context seeded with a point-in-time cookie copy
  * from the default jar, while non-cookie storage stays isolated.
+ * EGO_LINUX_TASK_SPACE_STORAGE=isolated-sync adds a bounded, point-in-time
+ * localStorage copy for each HTTP(S) origin before its first document scripts
+ * run. IndexedDB, CacheStorage and service-worker state remain isolated.
  *
  * Membership comes from tracked target ids by default, and from browserContextId
  * first for opt-in isolated or restart-adopted context-backed spaces.
@@ -31,7 +34,10 @@ const USER_CONTROL_CODE = "EGO_TASK_SPACE_USER_IN_CONTROL";
 const STATE_UNAVAILABLE_CODE = "EGO_TASK_SPACE_STATE_UNAVAILABLE";
 const TASK_SPACE_LOCK = join(STATE_DIR, "task-spaces.lock");
 const ISOLATED_STORAGE_RE =
-  /^(1|true|yes|on|isolated|context|browser-context|cookie-copy)$/i;
+  /^(1|true|yes|on|isolated|isolated-sync|isolated-login|context|browser-context|cookie-copy)$/i;
+const SYNCED_STORAGE_RE = /^(isolated-sync|isolated-login)$/i;
+const MAX_LOCAL_STORAGE_ENTRIES = 1000;
+const MAX_LOCAL_STORAGE_BYTES = 256 * 1024;
 
 /**
  * How many idle-closed spaces to remember.
@@ -85,7 +91,10 @@ function closureNote(name, previous) {
 
 export function createTaskSpacesApi(
   cdp,
-  { shouldAutoFocus = async () => true } = {},
+  {
+    shouldAutoFocus = async () => true,
+    activateWindow = async () => true,
+  } = {},
 ) {
   /**
    * Which space *this process* is working in.
@@ -105,6 +114,10 @@ export function createTaskSpacesApi(
    * process acts on.
    */
   let pinnedSpaceId = null;
+  // A normal CLI process should not leave behind a targetless state record when
+  // its script returns before opening a page. Keep this process's creations
+  // local so cleanup cannot close an empty space opened by another agent.
+  const createdSpaceIds = new Set();
 
   function emptyState() {
     return { spaces: [], selectedId: null, nextId: 1, closedSpaces: [] };
@@ -143,6 +156,12 @@ export function createTaskSpacesApi(
 
   function useIsolatedStorage() {
     return ISOLATED_STORAGE_RE.test(
+      String(process.env.EGO_LINUX_TASK_SPACE_STORAGE || ""),
+    );
+  }
+
+  function syncIsolatedLocalStorage() {
+    return SYNCED_STORAGE_RE.test(
       String(process.env.EGO_LINUX_TASK_SPACE_STORAGE || ""),
     );
   }
@@ -513,7 +532,7 @@ export function createTaskSpacesApi(
     if (await pruneAbandoned(state, live)) changed = true;
 
     const surviving = state.spaces.filter(
-      (space) => space.targetIds.length > 0,
+      (space) => space.targetIds.length > 0 || space.pendingFirstTab === true,
     );
     if (surviving.length !== state.spaces.length) {
       // Losing its last tab is how a space ends when the user closes tabs by
@@ -578,8 +597,8 @@ export function createTaskSpacesApi(
   /**
    * Select the space for this agent connection and optionally foreground it.
    *
-   * Linux agent work uses logical selection only. Integrations that opt into
-   * auto-focus still avoid flashing a brand-new about:blank anchor.
+   * Linux agent work uses logical selection only. A brand-new targetless space
+   * remains invisible until its first navigation creates the destination tab.
    */
   async function focusSpace(space, { allowActivation = true } = {}) {
     const live = await livePageTargets();
@@ -627,35 +646,34 @@ export function createTaskSpacesApi(
   }
 
   /**
-   * Put the space where a person can actually see it.
+   * Inspect the space without stealing keyboard focus by default.
    *
-   * focusSpace() selects the tab, which is all an agent ever needs — it observes
-   * through CDP either way, so a buried window costs it nothing. Handing control
-   * to the user is the one moment someone has to find that window on their own
-   * desktop, and a minimized window behind an IDE looks exactly like nothing
-   * happened.
-   *
-   * Resolves to whether the page was actually raised, with a reason when it was
-   * not, so the caller can say the right thing instead of treating every failure
-   * as "headless".
+   * Agents often hand off while the user is typing in chat. Target activation,
+   * restoring a minimized window, or Page.bringToFront would interrupt that
+   * input. Keep selection logical to this CDP connection and only report whether
+   * the managed browser already has a normal on-screen window. The user decides
+   * when to click or restore it. Explicit, user-authorized presentation may
+   * opt in through `allowFocus`.
    */
-  async function presentSpace(space) {
+  async function presentSpace(space, { allowFocus = false } = {}) {
     const live = await livePageTargets().catch(() => new Map());
     const liveIds = (space.targetIds || []).filter((id) => live.has(id));
     const hintedIds = [
       cdp.activeHint?.(),
       cdp.attachedHint?.(),
       space.activeTargetId,
-    ].filter(
-      (id) => id && liveIds.includes(id),
-    );
+    ].filter((id) => id && liveIds.includes(id));
     const targetId =
       hintedIds.find((id) => !isBlankUrl(live.get(id)?.url)) ||
       liveIds.find((id) => !isBlankUrl(live.get(id)?.url)) ||
       hintedIds[0] ||
       liveIds[0];
     if (!targetId) return { visible: false, reason: "no-live-tab" };
-    await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    if (allowFocus) {
+      await cdp.call("Target.activateTarget", { targetId }).catch(() => {});
+    } else {
+      cdp.selectTarget?.(targetId);
+    }
     if (!(await hasWindow())) return { visible: false, reason: "headless" };
 
     try {
@@ -665,18 +683,20 @@ export function createTaskSpacesApi(
       const { bounds } = await cdp.call("Browser.getWindowBounds", {
         windowId,
       });
-      // Only a minimized window is restored. Sending "normal" unconditionally
-      // would un-maximize a window the user maximized themselves — taking the
-      // browser away from them on the call that hands it to them.
       if (bounds?.windowState === "minimized") {
+        if (!allowFocus) return { visible: false, reason: "minimized" };
         await cdp.call("Browser.setWindowBounds", {
           windowId,
           bounds: { windowState: "normal" },
         });
       }
     } catch {
-      // No window manager, or a compositor that refuses the bounds change.
+      if (!allowFocus) {
+        return { visible: false, reason: "window-unavailable" };
+      }
     }
+
+    if (!allowFocus) return { visible: true };
 
     let sessionId;
     try {
@@ -686,6 +706,9 @@ export function createTaskSpacesApi(
       }));
       cdp.claimSession?.(sessionId);
       await cdp.call("Page.bringToFront", {}, sessionId);
+      if ((await activateWindow({ targetId })) !== true) {
+        return { visible: false, reason: "raise-failed" };
+      }
       return { visible: true };
     } catch {
       return { visible: false, reason: "raise-failed" };
@@ -715,10 +738,17 @@ export function createTaskSpacesApi(
         `fresh task space before asking the user to click, log in, or solve a captcha.\n`
       );
     }
+    if (reason === "minimized") {
+      return (
+        `ego-browser: handed off task space ${space.id} without stealing focus, but the ` +
+        `ego lite browser window is minimized. The user must restore it manually before ` +
+        `acting on the page.\n`
+      );
+    }
     return (
-      `ego-browser: handed off task space ${space.id}, but the browser window could not ` +
-      `be raised. The user may need to open the ego lite browser window manually before ` +
-      `acting on the page.\n`
+      `ego-browser: handed off task space ${space.id} without stealing focus, but its ` +
+      `browser window could not be confirmed on screen. The user may need to open the ` +
+      `ego lite browser window manually before acting on the page.\n`
     );
   }
 
@@ -751,82 +781,6 @@ export function createTaskSpacesApi(
     const live = await livePageTargets().catch(() => new Map());
     const target = live.get(ids[0]);
     return target && isBlankUrl(target.url) ? target.targetId : null;
-  }
-
-  async function createBlankAnchor(browserContextId) {
-    const params = {
-      url: "about:blank",
-      ...(browserContextId ? { browserContextId } : {}),
-    };
-    try {
-      return await cdp.call("Target.createTarget", {
-        ...params,
-        // background keeps the tab behind the current Spaces overview; focus
-        // keeps the browser window itself from jumping over another app.
-        background: true,
-        focus: false,
-      });
-    } catch (error) {
-      try {
-        return await cdp.call("Target.createTarget", params);
-      } catch {
-        throw error;
-      }
-    }
-  }
-
-  async function paintBlankAnchor(targetId) {
-    let sessionId;
-    try {
-      ({ sessionId } = await cdp.call("Target.attachToTarget", {
-        targetId,
-        flatten: true,
-      }));
-      await cdp.call(
-        "Runtime.evaluate",
-        {
-          expression: String.raw`(() => {
-            document.title = "Ego Lite agent space";
-            document.body.innerHTML = "";
-            document.body.style.cssText = [
-              "margin:0",
-              "font:15px system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif",
-              "background:#0f172a",
-              "color:#e5e7eb",
-              "display:grid",
-              "place-items:center",
-              "min-height:100vh"
-            ].join(";");
-            const card = document.createElement("main");
-            card.style.cssText = [
-              "max-width:560px",
-              "padding:28px 32px",
-              "border:1px solid rgba(148,163,184,.35)",
-              "border-radius:18px",
-              "background:rgba(15,23,42,.84)",
-              "box-shadow:0 24px 80px rgba(0,0,0,.35)"
-            ].join(";");
-            card.innerHTML = [
-              "<h1 style='margin:0 0 10px;font-size:22px'>Ego Lite agent space is ready</h1>",
-              "<p style='margin:0;color:#cbd5e1;line-height:1.55'>The agent has created a browser task space and should navigate this tab shortly.</p>",
-              "<p style='margin:14px 0 0;color:#94a3b8;line-height:1.55'>If this page stays here, the agent stopped before opening the requested site. It is safe to close this task space.</p>"
-            ].join("");
-            document.body.append(card);
-          })()`,
-          awaitPromise: false,
-          returnByValue: false,
-        },
-        sessionId,
-      );
-    } catch {
-      // Cosmetic only. A plain about:blank anchor is still functional.
-    } finally {
-      if (sessionId) {
-        await cdp
-          .call("Target.detachFromTarget", { sessionId })
-          .catch(() => {});
-      }
-    }
   }
 
   async function disposeContext(browserContextId) {
@@ -869,6 +823,201 @@ export function createTaskSpacesApi(
     return browserContextId;
   }
 
+  function storageOrigin(url) {
+    try {
+      const parsed = new URL(url);
+      return /^https?:$/.test(parsed.protocol) ? parsed.origin : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Read a bounded localStorage snapshot from the live default profile. */
+  async function defaultLocalStorage(url) {
+    const origin = storageOrigin(url);
+    if (!origin) return null;
+    const { targetInfos = [] } = await cdp.call(
+      "Target.getTargets",
+      {},
+      undefined,
+      { timeoutMs: 3000 },
+    );
+    const { browserContextIds = [] } = await cdp.call(
+      "Target.getBrowserContexts",
+      {},
+      undefined,
+      { timeoutMs: 3000 },
+    );
+    const isolatedContexts = new Set(browserContextIds);
+    const defaultTargets = targetInfos.filter(
+      (candidate) =>
+        candidate.type === "page" &&
+        !isolatedContexts.has(candidate.browserContextId),
+    );
+    let target = defaultTargets.find(
+      (candidate) => storageOrigin(candidate.url) === origin,
+    );
+    let temporary = false;
+    if (!target) {
+      let created;
+      const sourceUrl = `${origin}/`;
+      try {
+        created = await cdp.call("Target.createTarget", {
+          url: sourceUrl,
+          background: true,
+          focus: false,
+        });
+      } catch (error) {
+        try {
+          created = await cdp.call("Target.createTarget", { url: sourceUrl });
+        } catch {
+          throw error;
+        }
+      }
+      target = { targetId: created.targetId };
+      temporary = true;
+    }
+
+    let sessionId;
+    try {
+      ({ sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId: target.targetId,
+        flatten: true,
+      }));
+      cdp.claimSession?.(sessionId);
+      if (temporary) {
+        const deadline = Date.now() + 3000;
+        while (Date.now() < deadline) {
+          const current = await cdp
+            .call(
+              "Runtime.evaluate",
+              { expression: "location.origin", returnByValue: true },
+              sessionId,
+              { timeoutMs: 1000 },
+            )
+            .catch(() => null);
+          if (current?.result?.value === origin) break;
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+      const { entries = [] } = await cdp.call(
+        "DOMStorage.getDOMStorageItems",
+        {
+          storageId: { securityOrigin: origin, isLocalStorage: true },
+        },
+        sessionId,
+        { timeoutMs: 3000 },
+      );
+      const selected = [];
+      let bytes = 0;
+      for (const entry of entries) {
+        if (!Array.isArray(entry) || entry.length < 2) continue;
+        const key = String(entry[0]);
+        const value = String(entry[1]);
+        const nextBytes = Buffer.byteLength(key) + Buffer.byteLength(value);
+        if (
+          selected.length >= MAX_LOCAL_STORAGE_ENTRIES ||
+          bytes + nextBytes > MAX_LOCAL_STORAGE_BYTES
+        ) {
+          break;
+        }
+        selected.push([key, value]);
+        bytes += nextBytes;
+      }
+      return { origin, entries: selected };
+    } catch {
+      return null;
+    } finally {
+      if (sessionId) {
+        await cdp
+          .call("Target.detachFromTarget", { sessionId })
+          .catch(() => {});
+        cdp.releaseSession?.(sessionId);
+      }
+      if (temporary && target?.targetId) {
+        await cdp
+          .call("Target.closeTarget", { targetId: target.targetId })
+          .catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Create the isolated bootstrap target needed to install localStorage before
+   * the destination's first scripts run. This is delayed until navigation, so
+   * merely creating the space still opens no tab or window.
+   */
+  async function createStorageSeedTarget(browserContextId) {
+    const params = { url: "about:blank", browserContextId };
+    try {
+      return await cdp.call("Target.createTarget", {
+        ...params,
+        background: false,
+        focus: false,
+      });
+    } catch (error) {
+      try {
+        return await cdp.call("Target.createTarget", params);
+      } catch {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Create an isolated target whose first document receives a point-in-time
+   * localStorage copy before the site's own scripts execute.
+   */
+  async function createLocalStorageSeededTarget(browserContextId, url) {
+    const seed = await defaultLocalStorage(url);
+    if (!seed?.entries?.length) return null;
+
+    let targetId;
+    let sessionId;
+    try {
+      ({ targetId } = await createStorageSeedTarget(browserContextId));
+      ({ sessionId } = await cdp.call("Target.attachToTarget", {
+        targetId,
+        flatten: true,
+      }));
+      cdp.claimSession?.(sessionId);
+      await cdp.call("Page.enable", {}, sessionId, { timeoutMs: 3000 });
+      const marker = `__egoStorageSeeded:${seed.origin}`;
+      const source = `(() => {
+        if (location.origin !== ${JSON.stringify(seed.origin)}) return;
+        try {
+          if (sessionStorage.getItem(${JSON.stringify(marker)})) return;
+          for (const [key, value] of ${JSON.stringify(seed.entries)}) {
+            localStorage.setItem(key, value);
+          }
+          sessionStorage.setItem(${JSON.stringify(marker)}, "1");
+        } catch {}
+      })()`;
+      await cdp.call(
+        "Page.addScriptToEvaluateOnNewDocument",
+        { source },
+        sessionId,
+        { timeoutMs: 3000 },
+      );
+      await cdp.call("Page.navigate", { url }, sessionId, { timeoutMs: 10000 });
+      cdp.selectTarget?.(targetId);
+      return { targetId };
+    } catch (error) {
+      if (targetId) {
+        await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+      }
+      if (/browser context/i.test(String(error?.message))) throw error;
+      return null;
+    } finally {
+      if (sessionId) {
+        await cdp
+          .call("Target.detachFromTarget", { sessionId })
+          .catch(() => {});
+        cdp.releaseSession?.(sessionId);
+      }
+    }
+  }
+
   return {
     selectedContextId,
 
@@ -908,15 +1057,9 @@ export function createTaskSpacesApi(
         const browserContextId = useIsolatedStorage()
           ? await createSeededContext()
           : null;
-        let targetId;
-        try {
-          ({ targetId } = await createBlankAnchor(browserContextId));
-        } catch (err) {
-          // Nothing will ever reference this context if space fails to open.
-          if (browserContextId) await disposeContext(browserContextId);
-          throw err;
-        }
-        await paintBlankAnchor(targetId);
+        // Keep every new space targetless until the first navigation. This makes
+        // creation invisible and lets the first tab open directly at the site
+        // the agent requested instead of briefly showing a ready/about:blank page.
 
         const space = {
           id: state.nextId,
@@ -929,8 +1072,12 @@ export function createTaskSpacesApi(
           // Which agent profile opened it — the overview's right-hand label.
           ...identity,
           browserContextId,
-          targetIds: [targetId],
-          activeTargetId: targetId,
+          ...(browserContextId && syncIsolatedLocalStorage()
+            ? { storageSeed: "localStorage" }
+            : {}),
+          targetIds: [],
+          activeTargetId: null,
+          pendingFirstTab: true,
         };
         state.spaces.push(space);
         state.nextId += 1;
@@ -962,7 +1109,56 @@ export function createTaskSpacesApi(
         }
 
         await writeState(state);
+        createdSpaceIds.add(space.id);
         return space;
+      });
+    },
+
+    /** Close targetless spaces created by this process that never navigated. */
+    async cleanupCreatedEmptySpaces() {
+      if (createdSpaceIds.size === 0) return { closed: 0 };
+      return withStateLock(async (state) => {
+        const live = await livePageTargets();
+        const now = Date.now();
+        const doomed = state.spaces.filter((space) => {
+          if (!createdSpaceIds.has(space.id)) return false;
+          if (space.ownership !== "agent" || space.lastContentAt) return false;
+          const ids = space.targetIds || [];
+          if (ids.length === 0) return space.pendingFirstTab === true;
+          const tabs = ids.map((id) => live.get(id)).filter(Boolean);
+          return (
+            tabs.length === ids.length &&
+            tabs.every((target) => isBlankUrl(target.url))
+          );
+        });
+        if (doomed.length === 0) return { closed: 0 };
+
+        for (const space of doomed) {
+          for (const targetId of space.targetIds || []) {
+            await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+          }
+          if (space.browserContextId) {
+            await disposeContext(space.browserContextId);
+          }
+        }
+        rememberClosures(state, doomed, (space) => ({
+          name: space.name,
+          urls: [],
+          closedAt: now,
+          reason: "abandoned",
+          unusedSeconds: Math.max(
+            0,
+            Math.round((now - (space.createdAt || now)) / 1000),
+          ),
+        }));
+
+        const gone = new Set(doomed.map((space) => space.id));
+        state.spaces = state.spaces.filter((space) => !gone.has(space.id));
+        if (gone.has(state.selectedId)) state.selectedId = null;
+        if (gone.has(pinnedSpaceId)) pinnedSpaceId = null;
+        for (const id of gone) createdSpaceIds.delete(id);
+        await writeState(state);
+        return { closed: doomed.length };
       });
     },
 
@@ -997,7 +1193,8 @@ export function createTaskSpacesApi(
     async handOffTaskSpace(id) {
       return withStateLock(async (state) => {
         const space = await requireSpace(state, id, "handOffTaskSpace");
-        // Raised before ownership moves: past this line the agent stops driving.
+        // Availability is checked before ownership moves; this never focuses or
+        // raises the managed browser over the user's current application.
         const presentation = await presentSpace(space);
         space.ownership = "agentDelegatedToUser";
         await writeState(state);
@@ -1009,10 +1206,10 @@ export function createTaskSpacesApi(
       });
     },
 
-    async presentTaskSpace(id) {
+    async presentTaskSpace(id, { allowFocus = false } = {}) {
       return withStateLock(async (state) => {
         const space = await requireSpace(state, id, "presentTaskSpace");
-        const presentation = await presentSpace(space);
+        const presentation = await presentSpace(space, { allowFocus });
         await writeState(state);
         return { done: true, ...presentation };
       });
@@ -1035,7 +1232,7 @@ export function createTaskSpacesApi(
     async completeTaskSpace(id) {
       return withStateLock(async (state) => {
         const space = await requireSpace(state, id, "completeTaskSpace");
-        // `keep: true` leaves a page for the user, so raise it like handoff.
+        // `keep: true` leaves a page for the user without taking application focus.
         const presentation = await presentSpace(space);
         space.ownership = "user";
         await writeState(state);
@@ -1100,8 +1297,8 @@ export function createTaskSpacesApi(
         if (!isPanelProcess() && isUserControlled(space)) {
           return userControlResult();
         }
-        // A space is anchored by a tab — one with none is reaped as soon as it
-        // is reconciled — so its first navigation reuses about:blank.
+        // Legacy spaces may still carry a never-used blank anchor. Reuse it so
+        // upgrades do not strand that tab; new spaces are targetless instead.
         const anchor =
           space && !space.lastContentAt ? await blankAnchor(space) : null;
         if (anchor && url && url !== "about:blank") {
@@ -1135,7 +1332,13 @@ export function createTaskSpacesApi(
         // Open in the selected context when isolation is explicitly enabled.
         let result;
         try {
-          result = await tabs.createTab(url, space?.browserContextId);
+          result =
+            space?.browserContextId && space.storageSeed === "localStorage"
+              ? (await createLocalStorageSeededTarget(
+                  space.browserContextId,
+                  url,
+                )) || (await tabs.createTab(url, space.browserContextId))
+              : await tabs.createTab(url, space?.browserContextId);
         } catch (error) {
           // A context can disappear on browser restart. Fall back to shared
           // storage and persist that recovery in the same transaction.
@@ -1152,6 +1355,10 @@ export function createTaskSpacesApi(
         if (space && result.targetId) {
           space.targetIds.push(result.targetId);
           space.activeTargetId = result.targetId;
+          delete space.pendingFirstTab;
+          if (!space.lastContentAt && url && !isBlankUrl(url)) {
+            space.lastContentAt = Date.now();
+          }
           await writeState(state);
         }
         return result;

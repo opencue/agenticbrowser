@@ -186,7 +186,7 @@ describe("Linux user-control boundary", () => {
     );
   });
 
-  it("mutating page CDP is rejected, while screenshot and Browser/Target stay available", async () => {
+  it("only passive screenshot and attach plumbing remain available under user control", async () => {
     const original = globalThis.WebSocket;
     FakeWebSocket.instances = [];
     globalThis.WebSocket = FakeWebSocket;
@@ -211,9 +211,7 @@ describe("Linux user-control boundary", () => {
       assert.equal(errors.length, 2);
       assert.deepEqual(socket.sent, [], "navigation was not sent");
 
-      cdp.sendRaw(
-        JSON.stringify({ id: 3, method: "Page.captureScreenshot" }),
-      );
+      cdp.sendRaw(JSON.stringify({ id: 3, method: "Page.captureScreenshot" }));
       cdp.sendRaw(JSON.stringify({ id: 4, method: "Browser.getVersion" }));
       cdp.sendRaw(
         JSON.stringify({
@@ -222,6 +220,22 @@ describe("Linux user-control boundary", () => {
           params: { targetId: "t-a", flatten: true },
         }),
       );
+      cdp.sendRaw(
+        JSON.stringify({
+          id: 6,
+          method: "Target.closeTarget",
+          params: { targetId: "t-a" },
+        }),
+      );
+      cdp.sendRaw(JSON.stringify({ id: 7, method: "Browser.close" }));
+      cdp.sendRaw(
+        JSON.stringify({
+          id: 8,
+          method: "Target.createTarget",
+          params: { url: "https://example.com" },
+        }),
+      );
+      assert.equal(errors.length, 5, "all mutating commands are blocked");
       assert.deepEqual(
         socket.sent.map((payload) => JSON.parse(payload).method),
         [

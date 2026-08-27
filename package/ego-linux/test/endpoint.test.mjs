@@ -5,7 +5,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { waitForEndpoint } from "../src/chrome.mjs";
+import { allocateDebugPort, waitForEndpoint } from "../src/chrome.mjs";
 
 const PORT_FILE = "DevToolsActivePort";
 
@@ -42,6 +42,21 @@ async function deadPort() {
 }
 
 describe("waitForEndpoint", () => {
+  it("connects to an explicit non-zero port without a port file", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "ego-endpoint-"));
+    const live = await startFakeDevTools();
+    try {
+      const endpoint = await waitForEndpoint(profileDir, {
+        timeoutMs: 2000,
+        port: live.port,
+      });
+      assert.equal(endpoint.port, live.port);
+    } finally {
+      await new Promise((resolve) => live.server.close(resolve));
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps probing when Chrome rewrites its port file", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "ego-endpoint-"));
     // A launch that loses the ProcessSingleton race publishes a port that never
@@ -86,5 +101,13 @@ describe("waitForEndpoint", () => {
     } finally {
       await rm(profileDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("allocateDebugPort", () => {
+  it("returns a non-zero loopback port", async () => {
+    const port = await allocateDebugPort();
+    assert.ok(Number.isInteger(port));
+    assert.ok(port > 0 && port <= 65535);
   });
 });

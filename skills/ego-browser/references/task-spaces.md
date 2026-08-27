@@ -35,8 +35,8 @@ opening because the run that created it never navigated. An abandoned closure
 carries no URLs, so there is nothing to restore — read
 `task.previously.note` and open the target URL yourself. Current builds automatically reopen non-internal `task.previously.urls`
 and report them as `task.restoredUrls`. If `task.previously` exists but
-`task.restoredUrls` is empty, do not keep acting on the ready page. Navigate
-with `await browser.openOrReuseTab(url)` before app-specific selectors.
+`task.restoredUrls` is empty, the replacement remains targetless. Navigate with
+`await browser.openOrReuseTab(url)` before app-specific selectors.
 
 After explicit user confirmation, to continue work from an existing user-owned,
 inactive, or unassigned task space, use `await taskSpaces.list()` to find the
@@ -45,29 +45,44 @@ then use `await browser.listTabs()` and `await browser.switchTab(targetId)` to
 select the exact tab before acting. `taskSpaces.claim(id)` remains available
 when you only need to transfer ownership without the take-over overlay.
 
+## Linux storage modes
+
+- Default: spaces share the live browser profile, including cookies,
+  localStorage, IndexedDB, CacheStorage and service workers.
+- `EGO_LINUX_TASK_SPACE_STORAGE=isolated`: each new space gets an isolated
+  browser context with a point-in-time cookie copy only.
+- `EGO_LINUX_TASK_SPACE_STORAGE=isolated-sync`: keeps the isolated context and
+  adds a bounded point-in-time localStorage copy for each HTTP(S) origin before
+  its first page scripts run (1000 entries / 256 KiB maximum). If the origin is
+  not already open in the default profile, the runtime briefly loads its root in
+  an unfocused background source tab, reads storage, then closes it. It does not
+  copy IndexedDB, CacheStorage or service-worker state and is not a live sync.
+
 ## Ownership policy
 
 Every task space has `ownership: 'agent' | 'agentDelegatedToUser' | 'user'`;
 the facades treat user-owned spaces differently:
 
-| Call                                      | When the target space is user-owned                           |
-| ----------------------------------------- | ------------------------------------------------------------- |
-| `taskSpaces.useOrCreate`                  | selects read-only; snapshot, screenshot, and debug only       |
-| `taskSpaces.switch`                       | throws — agent-owned spaces only                              |
-| `taskSpaces.claim`                        | claims it (ownership transfers to the agent), then selects it |
-| `taskSpaces.handOff`                      | skipped — resolves `{ done: false, skipped: 'user-owned' }`   |
-| `taskSpaces.complete(…, { keep: true })`  | skipped — resolves `{ done: false, skipped: 'user-owned' }`   |
-| `taskSpaces.complete(…, { keep: false })` | claims it, then closes it                                     |
-| `taskSpaces.bringToFront(nameOrId)`       | raises it without selecting, claiming, or changing ownership  |
-| `taskSpaces.requestUserAction(nameOrId)`  | raises it and requires confirmation that it is visible        |
-| `taskSpaces.takeOver(nameOrId)`           | claims it, selects it, then takes over                        |
-| `taskSpaces.waitForAgentControl`          | waits for it to be handed back without claiming it            |
+| Call                                               | When the target space is user-owned                                                                                       |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `taskSpaces.useOrCreate`                           | selects read-only; snapshot, screenshot, and debug only                                                                   |
+| `taskSpaces.switch`                                | throws — agent-owned spaces only                                                                                          |
+| `taskSpaces.claim`                                 | claims it (ownership transfers to the agent), then selects it                                                             |
+| `taskSpaces.handOff`                               | skipped — resolves `{ done: false, skipped: 'user-owned' }`                                                               |
+| `taskSpaces.complete(…, { keep: true })`           | skipped — resolves `{ done: false, skipped: 'user-owned' }`                                                               |
+| `taskSpaces.complete(…, { keep: false })`          | claims it, then closes it                                                                                                 |
+| `taskSpaces.bringToFront(nameOrId, options?)`      | checks its window without focusing by default; `{ focus: true }` is allowed only after an explicit same-turn user request |
+| `taskSpaces.requestUserAction(nameOrId, options?)` | preserves ownership; bare calls do not focus, while a concrete instruction focuses once and shows Done/Cancel             |
+| `taskSpaces.loginPreflight(nameOrId, options?)`    | rejects — autofill inspection/submission requires agent control                                                           |
+| `taskSpaces.handleChallenge(nameOrId, options?)`   | rejects — background challenge inspection requires agent control                                                          |
+| `taskSpaces.takeOver(nameOrId)`                    | claims it, selects it, then takes over                                                                                    |
+| `taskSpaces.waitForAgentControl`                   | waits for it to be handed back without claiming it                                                                        |
 
 `taskSpaces.handOff` and `taskSpaces.complete` resolve `{ done: true }` when
 the operation actually happened. `handOff`, and `complete(..., { keep: true })`
 on window-aware backends, also include `visible` so you know whether the user
-can actually see the page. `bringToFront` returns the same visibility shape but
-does not change ownership. Check `done` before telling the user the
+has an open, non-minimized page window. `bringToFront` returns the same visibility
+shape without changing ownership or application focus. Check `done` before telling the user the
 handoff/cleanup is finished — a `skipped` result usually means you targeted a
 space that was never yours.
 
@@ -142,10 +157,11 @@ open merely because a page was visited, a document was created, or a screenshot
 was used for verification.
 
 `complete(nameOrId, { keep: true })` has the same visibility contract as
-`handOff`: it resolves `{ done: true, visible, reason? }`. Only `visible: true`
-means the kept page was raised on a screen for the user to review. If
-`visible: false`, `reason` is one of `headless`, `no-live-tab`, or
-`raise-failed`. `keep: false` closes the space and resolves `{ done: true }`.
+`handOff`: it resolves `{ done: true, visible, reason? }`. On Linux,
+`visible: true` means the managed browser window is open and not minimized; the
+agent never focuses or raises it over the user's current app. If `visible: false`,
+`reason` is one of `headless`, `no-live-tab`, `minimized`, or
+`window-unavailable`. `keep: false` closes the space and resolves `{ done: true }`.
 
 When passing a string that may create a new task space, the string should
 reflect the task's intent (e.g. `'search github issues'`); don't use literal
@@ -190,31 +206,55 @@ if (taskSpaces.isHardStopError(error)) throw error;
 Swallowing hard-stop errors in a retry loop makes the agent appear stuck even
 though the user-control boundary is working correctly.
 
-**Requesting user action**: When the task requires user intervention (e.g.
-login, captcha, manual confirmation), call
-`await taskSpaces.requestUserAction(nameOrId)` in the same turn, immediately
-before telling the user exactly what to do. Pass `task.id` across heredoc rounds
-to avoid ambiguity. It hands off an agent-controlled space or raises a
-user-owned space without reclaiming it, then requires `visible: true`. It throws
-instead of letting the agent ask the user to act on a hidden or headless page.
-Calling it again is the first response when the user says they cannot see the
-page.
+**Autofilled login is not user intervention**: Before handing off a login page,
+call `const login = await taskSpaces.loginPreflight(task.id)`. It waits briefly
+for browser/password-manager autofill, returns only booleans and counts, and
+submits a uniquely identifiable ready form. It never returns or logs credential
+values and never takes focus. If `login.submitted`, verify login success. Use an
+explicit CSS selector in `{ submit: "..." }` when the page has multiple submit
+controls, or `{ submit: false }` for inspection only. Handoff is only for a
+missing credential, CAPTCHA, passkey/hardware interaction, or genuinely human
+2FA approval.
 
-The lower-level `taskSpaces.handOff(nameOrId)` selects the space's tab, restores
-the window if it was minimized, and raises it. Prefer `requestUserAction` for
-manual steps because it also handles already user-owned spaces and enforces the
-visibility check.
+**Browser challenges wait before interrupting**: Call
+`await taskSpaces.handleChallenge(task.id, options)` when a visible CAPTCHA or
+verification page blocks progress. It checks common Cloudflare, hCaptcha, and
+reCAPTCHA surfaces without focusing, gives automatic verification a short chance
+to finish, recognizes populated Turnstile, hCaptcha, and reCAPTCHA response fields,
+then uses one stable action key to focus and show the Done/Cancel panel only while
+the challenge remains. Done returns control and resumes the agent.
+
+**Requesting user action**: When the task genuinely requires user intervention,
+call
+`await taskSpaces.requestUserAction(task.id, { instruction, target?, actionKey?,
+doneLabel?, cancelLabel? })`. Pass a concrete, non-empty instruction: it is the
+capability that allows this one automatic focus event. The helper hands off an
+agent-controlled space or preserves a user-owned space, displays an in-page
+action card whose controls and decision state live in an isolated browser world,
+highlights the optional selector/text target, and waits by default. Page scripts
+can remove the card but cannot inspect its closed shadow root or forge Done.
+Done explicitly returns control and resumes the agent; Cancel leaves the user in
+control. A repeat with the same action key refreshes the panel without focusing
+again. A bare legacy call only hands off/checks visibility and never focuses.
+If focused presentation fails, Linux sends a best-effort desktop notification
+and the helper throws rather than pretending the page is visible.
+
+The lower-level `taskSpaces.handOff(nameOrId)` transfers control and checks the
+window without activating a tab, restoring a minimized window, or raising the
+application. Prefer `requestUserAction` for manual steps because it also handles
+already user-owned spaces and enforces the availability check.
 
 **What the user can actually see**: `handOff` and
 `complete(..., { keep: true })` resolve
 `{ done: true, visible: boolean, reason?: string }`.
 
-| `visible`                          | What it means                                                                              | What you may say                                                                                                                  |
-| ---------------------------------- | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `true`                             | The managed Chrome/Chromium window has the space's page on screen.                         | Ask for the click, login, or captcha. Call it the **managed agent Chrome/Chromium window**, never a separate native Ego Lite app. |
-| `false` + `reason: "headless"`     | The browser is running headless (`EGO_LINUX_HEADLESS`). There is no window on any display. | Nothing about clicking. Report that the browser is headless and give the fix below.                                               |
-| `false` + `reason: "no-live-tab"`  | The task space has no live tab left.                                                       | Nothing about clicking. Reopen the page or start a fresh task space before asking for user action.                                |
-| `false` + `reason: "raise-failed"` | The browser has a window, but the port could not bring it to the front.                    | Ask the user to locate the managed agent Chrome/Chromium window manually before acting.                                           |
+| `visible`                                | What it means                                                                                   | What you may say                                                                                                 |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `true`                                   | The managed Chrome/Chromium window is open and not minimized; it was not focused automatically. | Ask the user to click the already-open managed browser when convenient. Never claim it was brought to the front. |
+| `false` + `reason: "headless"`           | The browser is running headless (`EGO_LINUX_HEADLESS`). There is no window on any display.      | Nothing about clicking. Report that the browser is headless and give the fix below.                              |
+| `false` + `reason: "no-live-tab"`        | The task space has no live tab left.                                                            | Nothing about clicking. Reopen the page or start a fresh task space before asking for user action.               |
+| `false` + `reason: "minimized"`          | The managed browser window is minimized and was deliberately not restored over the current app. | Ask the user to restore Ego Lite manually when ready.                                                            |
+| `false` + `reason: "window-unavailable"` | The port could not confirm an on-screen window without trying to focus it.                      | Ask the user to locate the managed browser manually before acting.                                               |
 
 For `reason: "headless"`, follow `references/install.md` to restart the active
 runtime in headed mode. Do not invoke either package by source path or open a
@@ -246,11 +286,17 @@ start a new heredoc with `taskSpaces.useOrCreate(nameOrId)` and finish using the
 passive observation helpers. Otherwise surface the Ask above (Continue / Finish)
 and resume mutation only when the user picks Continue.
 
-**Raise without taking control**: If the user already controls the space and you
-only need to bring the window forward, call
-`await taskSpaces.bringToFront(nameOrId)`. Do not call
-`taskSpaces.useOrCreate(nameOrId)` merely to raise it: read-only selection is
-background-only and intentionally does not replace the user's current view.
+**Check without taking control**: If the user already controls the space and you
+need to confirm that its window is available, call
+`await taskSpaces.bringToFront(nameOrId)`. The legacy name is retained for API
+compatibility; without options it never brings the window forward. When the user
+explicitly asks to show/raise/focus the existing Ego Lite window, call
+`await taskSpaces.bringToFront(nameOrId, { focus: true })`. The higher-level
+An instructed `requestUserAction(...)` applies the focused path automatically;
+a bare call remains background-only.
+Do not call `taskSpaces.useOrCreate(nameOrId)` merely to present it: read-only
+selection is background-only and intentionally does not replace the user's
+current view.
 
 `await taskSpaces.waitForAgentControl(nameOrId)` is a read-only blocking poll
 (it never takes control or claims ownership). If the space is user-owned, it

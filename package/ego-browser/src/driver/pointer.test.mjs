@@ -463,7 +463,13 @@ test("drag waits for a late trusted mouseup instead of re-synthesising it", asyn
     },
   });
   try {
-    await drag(["#from", "#to"]);
+    // Coordinates keep this regression focused on the mouseup probe. Selector
+    // resolution has its own tests and would add two unrelated 10s waits when a
+    // minimal CDP override intentionally implements only the probe expressions.
+    await drag([
+      [10, 10],
+      [20, 20],
+    ]);
   } finally {
     restore();
     if (originalEgo === undefined) delete globalThis.ego;

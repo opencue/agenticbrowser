@@ -9,8 +9,9 @@
  * unmodified.
  */
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -24,7 +25,8 @@ import {
   TASK_SPACE_FILE,
   STATE_DIR,
 } from "../src/paths.mjs";
-import { detachedSpawnOptions } from "../src/platform.mjs";
+import { detachedSpawnOptions, terminateProcess } from "../src/platform.mjs";
+import { runtimeBuildId } from "../src/runtime-version.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
@@ -92,16 +94,55 @@ async function importChromeProfile() {
 }
 
 /** Is a Spaces server already listening on the recorded port? */
-async function liveSpacesServer() {
+async function liveSpacesServer(expectedBuildId = null) {
   try {
     const state = JSON.parse(await readFile(SPACES_STATE_FILE, "utf8"));
     const response = await fetch(`http://127.0.0.1:${state.port}/api/health`, {
       signal: AbortSignal.timeout(1500),
     });
-    return response.ok ? state.port : null;
+    if (!response.ok) return null;
+    const health = await response.json();
+    return {
+      ...state,
+      health,
+      current: !expectedBuildId || health.buildId === expectedBuildId,
+    };
   } catch {
     return null;
   }
+}
+
+/** Stop only the daemon that answered the state file's verified health probe. */
+async function stopSpacesDaemon(state) {
+  if (state.shutdownToken) {
+    const response = await fetch(
+      `http://127.0.0.1:${state.port}/api/shutdown`,
+      {
+        method: "POST",
+        headers: { "x-ego-daemon-token": state.shutdownToken },
+        signal: AbortSignal.timeout(2000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Spaces daemon refused restart (${response.status})`);
+    }
+  } else if (Number.isInteger(state.pid) && state.pid > 1) {
+    // One-time migration path for daemons started before the authenticated
+    // shutdown route existed. A successful health probe tied this pid and port
+    // to our state record before this function was called.
+    if (!(await terminateProcess(state.pid))) {
+      throw new Error("Legacy Spaces daemon could not be stopped");
+    }
+  } else {
+    throw new Error("Spaces daemon has no safe shutdown handle");
+  }
+
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!(await liveSpacesServer())) return;
+  }
+  throw new Error("Spaces daemon did not stop within 5000ms");
 }
 
 function isSpacesTarget(target, url) {
@@ -213,8 +254,18 @@ async function runSpacesDaemon() {
   // Spaces created from the panel are the user's, not the profile that happened
   // to launch this daemon (see agent-identity.mjs).
   process.env.EGO_LINUX_PANEL = "1";
+  const buildId = await runtimeBuildId();
+  const shutdownToken = randomBytes(24).toString("hex");
+  let requestShutdown;
+  const shutdown = new Promise((resolve) => {
+    requestShutdown = () => resolve("upgrade");
+  });
   const shim = await createEgoShim({ headless: false });
-  const spaces = await startSpacesServer(shim);
+  const spaces = await startSpacesServer(shim, {
+    buildId,
+    shutdownToken,
+    onShutdown: requestShutdown,
+  });
   const url = `http://127.0.0.1:${spaces.port}/`;
 
   // A fresh daemon replaces any stale overview tab, then publishes itself.
@@ -223,22 +274,40 @@ async function runSpacesDaemon() {
   await mkdir(STATE_DIR, { recursive: true });
   await writeFile(
     SPACES_STATE_FILE,
-    JSON.stringify({ port: spaces.port, pid: process.pid, targetId }, null, 2),
+    JSON.stringify(
+      {
+        port: spaces.port,
+        pid: process.pid,
+        targetId,
+        buildId,
+        shutdownToken,
+      },
+      null,
+      2,
+    ),
+    { mode: 0o600 },
   );
+  await chmod(SPACES_STATE_FILE, 0o600).catch(() => {});
 
-  const outcome = await new Promise((resolve) => {
-    process.on("SIGINT", () => resolve("signal"));
-    process.on("SIGTERM", () => resolve("signal"));
+  const signal = new Promise((resolve) => {
+    process.once("SIGINT", () => resolve("signal"));
+    process.once("SIGTERM", () => resolve("signal"));
+  });
 
+  let timer;
+  const browserOrPanel = new Promise((resolve) => {
     // Give Chrome a moment to register the window before deciding it is absent.
     let seenPanel = false;
     const started = Date.now();
 
-    const timer = setInterval(async () => {
+    timer = setInterval(async () => {
       let targets;
       try {
         ({ targetInfos: targets = [] } = await shim.cdp.call(
           "Target.getTargets",
+          {},
+          undefined,
+          { timeoutMs: 3000 },
         ));
       } catch {
         // The browser went away, taking every window — including this panel —
@@ -267,6 +336,8 @@ async function runSpacesDaemon() {
       }
     }, 2500);
   });
+  const outcome = await Promise.race([shutdown, signal, browserOrPanel]);
+  clearInterval(timer);
 
   spaces.close();
   shim.close();
@@ -299,18 +370,24 @@ async function runSpacesDaemon() {
  * avoids a blank backing window plus a separate overview window.
  */
 async function openSpacesUnlocked() {
-  const running = await liveSpacesServer();
+  const buildId = await runtimeBuildId();
+  const running = await liveSpacesServer(buildId);
 
   // A running daemon already owns the panel; reconnect and raise its tab.
-  if (running) {
+  if (running?.current) {
     const shim = await createEgoShim({ headless: false });
     try {
-      await openPanelTab(`http://127.0.0.1:${running}/`, shim);
+      await openPanelTab(`http://127.0.0.1:${running.port}/`, shim);
     } finally {
       shim.close();
     }
-    process.stderr.write(`Spaces panel: http://127.0.0.1:${running}/\n`);
+    process.stderr.write(`Spaces panel: http://127.0.0.1:${running.port}/\n`);
     return 0;
+  }
+
+  if (running && !running.current) {
+    process.stderr.write("updating the Spaces daemon to the current build\n");
+    await stopSpacesDaemon(running);
   }
 
   spawn(
@@ -319,18 +396,19 @@ async function openSpacesUnlocked() {
     detachedSpawnOptions(),
   ).unref();
 
-  let port = null;
+  let current = null;
   const deadline = Date.now() + 30000;
-  while (!port && Date.now() < deadline) {
+  while (!current && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 400));
-    port = await liveSpacesServer();
+    const candidate = await liveSpacesServer(buildId);
+    if (candidate?.current) current = candidate;
   }
-  if (!port) {
+  if (!current) {
     process.stderr.write("the Spaces server did not come up\n");
     return 1;
   }
 
-  process.stderr.write(`Spaces panel: http://127.0.0.1:${port}/\n`);
+  process.stderr.write(`Spaces panel: http://127.0.0.1:${current.port}/\n`);
   return 0;
 }
 
@@ -523,6 +601,15 @@ async function main() {
   try {
     return await runMain({ argv: rest });
   } finally {
+    // The overlay lives in the page, not in this process. Send its departure
+    // render before closing CDP or the last "Codex · reading …" badge will stay
+    // visible after the agent has stopped observing the page.
+    await shim.dismissCursor().catch(() => {});
+    // A script that creates a Task Space but returns or throws before its first
+    // navigation must not strand its targetless state record.
+    // This is creator-scoped inside the shim, so other agents' spaces and every
+    // space that loaded content or moved to user control remain untouched.
+    await shim.cleanupCreatedEmptySpaces().catch(() => {});
     shim.close();
   }
 }

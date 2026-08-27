@@ -653,3 +653,43 @@ test("goto stays quiet when the navigation committed", async () => {
     },
   );
 });
+
+test("goto opens an empty task space directly at the requested URL", async () => {
+  const created = [];
+  const sent = [];
+  const previousTaskSpaceId = state.selectedTaskSpaceId;
+  state.selectedTaskSpaceId = 7;
+  invalidateSession();
+  try {
+    await withEgo(
+      {
+        async listTabs() {
+          return { tabs: [] };
+        },
+        async createTab(url) {
+          created.push(url);
+          return { targetId: "first-real-tab" };
+        },
+        sendCDPMessage(payload) {
+          sent.push(JSON.parse(payload));
+        },
+      },
+      async () => {
+        const result = await goto("https://example.com/requested", {
+          waitUntil: "commit",
+        });
+        assert.deepEqual(created, ["https://example.com/requested"]);
+        assert.deepEqual(result.navigation, { targetId: "first-real-tab" });
+        assert.equal(
+          sent.some((request) => request.method === "Page.navigate"),
+          false,
+          "the destination is used to create the first tab, not applied after a placeholder",
+        );
+      },
+    );
+  } finally {
+    state.selectedTaskSpaceId = previousTaskSpaceId;
+    state.preferredTargetId = null;
+    invalidateSession();
+  }
+});

@@ -58,6 +58,30 @@ type TabTarget = string | { targetId: string };
  * @returns {Promise<{navigation: object, loaded: boolean}>}
  */
 export async function goto(url: string, options: GotoOptions = {}) {
+  // A new Linux task space is created without an about:blank target so Chrome
+  // does not flash a separate ready-page window. Its first navigation
+  // therefore creates the first tab at the final URL instead of navigating a
+  // visible placeholder after the fact.
+  if (state.selectedTaskSpaceId !== null) {
+    const tabs = await listTabs();
+    if (tabs.length === 0) {
+      const targetId = await newTab(url);
+      const loaded =
+        options.waitUntil === "commit"
+          ? false
+          : await waitForDocumentLoad({
+              timeout: options.timeout ?? 20000,
+              until:
+                options.waitUntil === "domcontentloaded"
+                  ? "domcontentloaded"
+                  : "load",
+            });
+      const settle = Number(options.settle ?? 0);
+      if (settle > 0) await state.sleep(settle);
+      return { navigation: { targetId }, loaded };
+    }
+  }
+
   const navigation = await cdp("Page.navigate", { url });
   assertNavigationCommitted(navigation, url);
   const loaded =

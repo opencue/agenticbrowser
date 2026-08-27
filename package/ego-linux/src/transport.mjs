@@ -23,6 +23,87 @@ const OPEN_TIMEOUT_MS = 10000;
 const CALL_TIMEOUT_MS = 30000;
 const INTERNAL_ID_BASE = 1_000_000;
 
+// Fast observation calls should fail fast instead of inheriting the transport's
+// 30 second escape hatch. Callers can still override these per operation.
+const METHOD_TIMEOUT_MS = new Map([
+  ["Target.getTargets", 3000],
+  ["Target.getBrowserContexts", 3000],
+  ["Browser.getWindowForTarget", 3000],
+  ["Browser.getWindowBounds", 3000],
+  ["Browser.getVersion", 3000],
+  ["Page.captureScreenshot", 2000],
+  ["DOMStorage.getDOMStorageItems", 3000],
+  ["Storage.getCookies", 5000],
+]);
+
+// A timed-out command can still arrive in Chrome after the caller gives up.
+// Retry only reads whose late completion cannot duplicate a user-visible act.
+const READ_ONLY_RETRY_METHODS = new Set([
+  "Target.getTargets",
+  "Target.getBrowserContexts",
+  "Browser.getWindowForTarget",
+  "Browser.getWindowBounds",
+  "Browser.getVersion",
+  "Page.captureScreenshot",
+  "DOMStorage.getDOMStorageItems",
+  "Storage.getCookies",
+]);
+
+// The harness needs an attached session to capture passive pixels while a human
+// owns the page. Everything else crosses the ownership boundary: Target.* can
+// open, close, or focus tabs and Browser.* can resize or close the whole browser.
+const USER_CONTROL_ALLOWED_METHODS = new Set([
+  "Page.captureScreenshot",
+  "Browser.getVersion",
+  "Browser.getWindowForTarget",
+  "Browser.getWindowBounds",
+  "Target.getTargets",
+  "Target.getTargetInfo",
+  "Target.getBrowserContexts",
+  "Target.attachToTarget",
+  "Target.detachFromTarget",
+]);
+
+class CdpCallTimeoutError extends Error {
+  constructor(method, timeoutMs) {
+    super(`CDP request timed out after ${timeoutMs}ms: ${method}`);
+    this.name = "CdpCallTimeoutError";
+    this.code = "EGO_CDP_TIMEOUT";
+    this.method = method;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+function callPolicy(method, options = {}) {
+  const configuredTimeout = Number(options.timeoutMs);
+  const timeoutMs =
+    Number.isFinite(configuredTimeout) && configuredTimeout > 0
+      ? Math.round(configuredTimeout)
+      : (METHOD_TIMEOUT_MS.get(method) ?? CALL_TIMEOUT_MS);
+  const configuredRetries = Number(options.retries);
+  const retries =
+    Number.isInteger(configuredRetries) && configuredRetries >= 0
+      ? configuredRetries
+      : READ_ONLY_RETRY_METHODS.has(method)
+        ? 1
+        : 0;
+  return {
+    timeoutMs,
+    retries,
+    retryDelayMs: Number.isFinite(Number(options.retryDelayMs))
+      ? Math.max(0, Number(options.retryDelayMs))
+      : 25,
+    signal: options.signal,
+  };
+}
+
+function abortError() {
+  return Object.assign(new Error("CDP request aborted"), {
+    name: "AbortError",
+    code: "ABORT_ERR",
+  });
+}
+
 export async function connectCdp(wsUrl) {
   const socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
@@ -151,6 +232,7 @@ export async function connectCdp(wsUrl) {
       if (!entry) return;
       internalPending.delete(data.id);
       clearTimeout(entry.timer);
+      entry.signal?.removeEventListener("abort", entry.abortHandler);
       if (data.error) {
         entry.reject(
           new Error(data.error.message || JSON.stringify(data.error)),
@@ -177,6 +259,7 @@ export async function connectCdp(wsUrl) {
     closed = true;
     for (const entry of internalPending.values()) {
       clearTimeout(entry.timer);
+      entry.signal?.removeEventListener("abort", entry.abortHandler);
       entry.reject(new Error("browser connection closed"));
     }
     internalPending.clear();
@@ -226,37 +309,18 @@ export async function connectCdp(wsUrl) {
     }
   }
 
-  function isPageDomainPayload(payload) {
-    try {
-      const message = JSON.parse(payload);
-      const method = typeof message?.method === "string" ? message.method : "";
-      return (
-        method &&
-        !method.startsWith("Target.") &&
-        !method.startsWith("Browser.")
-      );
-    } catch {
-      return false;
-    }
-  }
-
-  // Passive pixels are safe to read while the user owns the page. Keep this
-  // allowlist exact: Page.*, Runtime.*, DOM.*, and Input.* also contain methods
-  // that can navigate, execute code, or mutate the document.
+  // Keep this allowlist exact. Every CDP domain contains commands that can alter
+  // the page, tab, window, browser process, or ownership-visible presentation.
   function isUserControlObservationPayload(payload) {
     try {
-      return JSON.parse(payload)?.method === "Page.captureScreenshot";
+      return USER_CONTROL_ALLOWED_METHODS.has(JSON.parse(payload)?.method);
     } catch {
       return false;
     }
   }
 
   function pageControlError(payload) {
-    if (
-      !pageControlGuard ||
-      !isPageDomainPayload(payload) ||
-      isUserControlObservationPayload(payload)
-    ) {
+    if (!pageControlGuard || isUserControlObservationPayload(payload)) {
       return null;
     }
     return pageControlGuard();
@@ -322,8 +386,7 @@ export async function connectCdp(wsUrl) {
 
     /** Persist logical tab selection outside this short-lived connection. */
     watchActiveTarget(watcher) {
-      activeTargetWatcher =
-        typeof watcher === "function" ? watcher : null;
+      activeTargetWatcher = typeof watcher === "function" ? watcher : null;
     },
 
     /**
@@ -339,9 +402,9 @@ export async function connectCdp(wsUrl) {
      *
      * sendRaw cannot await: browser-runtime expects native send failures through
      * onSendCDPMessageError, not a later Promise. The task-space layer therefore
-     * exposes a sync state-file read, and this transport only consults it for
-     * page-domain traffic. Browser/Target domain calls stay available so the
-     * harness can attach, inspect, and regain control.
+     * exposes a sync state-file read. Only exact passive observation and session
+     * attach/detach methods bypass it; takeover itself uses the shim's internal
+     * CDP path rather than this harness-authored passthrough.
      */
     setPageControlGuard(guard) {
       pageControlGuard = guard;
@@ -400,33 +463,78 @@ export async function connectCdp(wsUrl) {
       navWatcher = handler;
     },
 
-    /** The shim's own request/response calls. */
-    call(method, params = {}, sessionId = undefined) {
+    /**
+     * The shim's own request/response calls.
+     *
+     * The fourth argument is deliberately separate from sessionId so every
+     * existing three-argument call stays source-compatible.
+     */
+    async call(method, params = {}, sessionId = undefined, options = {}) {
       assertOpen();
       if (method === "Target.activateTarget" && params.targetId) {
         activeTargetId = params.targetId;
       }
-      const id = ++nextInternalId;
-      const payload = JSON.stringify({
-        id,
-        method,
-        params,
-        ...(sessionId ? { sessionId } : {}),
-      });
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          internalPending.delete(id);
-          reject(new Error(`CDP request timed out: ${method}`));
-        }, CALL_TIMEOUT_MS);
-        internalPending.set(id, { resolve, reject, timer });
+      const policy = callPolicy(method, options);
+
+      const sendOnce = () =>
+        new Promise((resolve, reject) => {
+          if (policy.signal?.aborted) {
+            reject(abortError());
+            return;
+          }
+          const id = ++nextInternalId;
+          const payload = JSON.stringify({
+            id,
+            method,
+            params,
+            ...(sessionId ? { sessionId } : {}),
+          });
+          const abortHandler = () => {
+            const entry = internalPending.get(id);
+            if (!entry) return;
+            clearTimeout(entry.timer);
+            internalPending.delete(id);
+            reject(abortError());
+          };
+          const timer = setTimeout(() => {
+            internalPending.delete(id);
+            policy.signal?.removeEventListener("abort", abortHandler);
+            reject(new CdpCallTimeoutError(method, policy.timeoutMs));
+          }, policy.timeoutMs);
+          internalPending.set(id, {
+            resolve,
+            reject,
+            timer,
+            signal: policy.signal,
+            abortHandler,
+          });
+          policy.signal?.addEventListener("abort", abortHandler, {
+            once: true,
+          });
+          try {
+            socket.send(payload);
+          } catch (error) {
+            clearTimeout(timer);
+            internalPending.delete(id);
+            policy.signal?.removeEventListener("abort", abortHandler);
+            reject(error);
+          }
+        });
+
+      for (let attempt = 0; ; attempt += 1) {
         try {
-          socket.send(payload);
+          return await sendOnce();
         } catch (error) {
-          clearTimeout(timer);
-          internalPending.delete(id);
-          reject(error);
+          if (error?.code !== "EGO_CDP_TIMEOUT" || attempt >= policy.retries) {
+            throw error;
+          }
+          if (policy.retryDelayMs > 0) {
+            await new Promise((resolve) =>
+              setTimeout(resolve, policy.retryDelayMs),
+            );
+          }
         }
-      });
+      }
     },
 
     /** Route protocol traffic into the harness once its callbacks are installed. */

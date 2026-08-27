@@ -52,6 +52,11 @@ fi
 	die "no Chrome/Chromium/Brave/Edge found on PATH (looked for: $CHROME_CANDIDATES). Install one, or set EGO_LINUX_CHROME to an absolute path."
 log "Using browser: $found_chrome"
 
+if [ -n "${DISPLAY:-}" ] && ! command -v xdotool >/dev/null 2>&1; then
+	log "warning: xdotool is not installed. Background browsing still works, but explicit human-action focus may report raise-failed."
+	log "         Install xdotool to let requestUserAction focus the managed browser without opening a second window."
+fi
+
 # CI=true is required, not cosmetic: the harness's prepare script runs
 # `lefthook install`, which fails on any machine with a global core.hooksPath.
 log "Building the upstream harness in $harness_dir ..."

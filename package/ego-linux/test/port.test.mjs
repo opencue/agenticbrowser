@@ -28,6 +28,12 @@ const TEST_BROWSER_STATE = join(
   "ego-lite-linux",
   "browser.json",
 );
+const TEST_TASK_SPACE_STATE = join(
+  SANDBOX,
+  "state",
+  "ego-lite-linux",
+  "task-spaces.json",
+);
 
 /** Run a script through the real CLI, exactly as an agent would. */
 function runScript(scriptPath, { timeout = 120000 } = {}) {
@@ -383,6 +389,11 @@ describe("ego-browser Linux port", () => {
       /34\. and stays on screen:\s+true/,
       "without stepping off the screen to do it",
     );
+    assert.match(
+      out,
+      /35\. CSP styles active:\s+true/,
+      "the overlay stays styled when the page blocks inline styles",
+    );
   });
 
   it("shares live non-cookie profile storage across task spaces", async () => {
@@ -450,5 +461,43 @@ describe("ego-browser Linux port", () => {
       /RESUMED: Persisted second tab/,
       "a fresh CLI process resumes the tab selected by the previous one",
     );
+  });
+
+  it("closes a task space when its CLI run ends before navigation", async () => {
+    const out = await runScript(join(HERE, "empty-space.js"));
+    assert.match(out, /CREATED EMPTY: \d+/);
+
+    const state = JSON.parse(await readFile(TEST_TASK_SPACE_STATE, "utf8"));
+    assert.equal(
+      state.spaces.some((space) => space.name === "cli empty space"),
+      false,
+      "a successful run must not strand its targetless space record",
+    );
+  });
+
+  it("shows an interactive human-action panel and receives Done", async () => {
+    const out = await runScript(join(HERE, "user-action.js"));
+    assert.match(
+      out,
+      /1\. shown: \{"done":true,"alreadyVisible":false,"targetFound":true\}/,
+      "the panel highlights the requested target",
+    );
+    assert.match(
+      out,
+      /2\. panel: \{"visible":true,"shadowAccessible":false,"actionAccessible":false\}/,
+      "the website can see the host but cannot read or forge the decision state",
+    );
+    assert.match(out, /3\. result: \{"done":true,"result":"done"\}/);
+    assert.match(out, /4\. cleared: true/);
+  });
+
+  it("submits an autofilled login without exposing credential values", async () => {
+    const out = await runScript(join(HERE, "login-preflight.js"));
+    assert.match(
+      out,
+      /1\. preflight: \{"detected":true,"ready":true,"needsUser":false,"fieldCount":2,"filledCount":2,"submitted":true\}/,
+    );
+    assert.match(out, /2\. submitted: true/);
+    assert.doesNotMatch(out, /saved@example|saved-secret/);
   });
 });

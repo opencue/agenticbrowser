@@ -483,6 +483,27 @@ export function createCursorApi(cdp, { listTabs }) {
       return { done: true };
     },
 
+    /** Remove agent presence before the short-lived CLI process disconnects. */
+    async dismiss() {
+      if (!enabled) return { done: false, reason: "cursor disabled" };
+      clearTimeout(releaseTimer);
+      clearTimeout(typingTimer);
+      endRead();
+      state.pressed = false;
+      state.typing = false;
+      state.visible = false;
+      schedule();
+
+      // The transport closes as soon as this resolves. Wait for the hidden
+      // payload to reach the page or the old badge will survive the process that
+      // created it and continue saying the departed agent is still reading.
+      const deadline = Date.now() + 500;
+      while ((dirty || inFlight) && Date.now() < deadline) {
+        await wait(5);
+      }
+      return { done: true };
+    },
+
     /** Hidden while the space belongs to the user (handOffTaskSpace). */
     hide() {
       if (!enabled) return;
@@ -672,7 +693,7 @@ function renderOverlay(payload) {
       // rendering glitch rather than as something showing up.
       "opacity:0;transition:opacity 200ms ease;";
     const shadow = host.attachShadow({ mode: "closed" });
-    shadow.innerHTML =
+    const template =
       "<style>" +
       // The cursor is anchored to the page, not the screen: it marks the thing
       // the agent is working on, so it has to travel with that thing when the
@@ -812,6 +833,28 @@ function renderOverlay(payload) {
       '<span id="text"></span></div>' +
       "</div>" +
       '<div id="glow"></div>';
+
+    // A shadow-root <style> still inherits the page's style-src policy. Pages
+    // that reject inline styles otherwise render the cursor SVGs and badge as
+    // raw document flow. Constructable sheets are not inline style elements,
+    // so prefer one and keep the original template as the older-browser path.
+    const styleEnd = template.indexOf("</style>");
+    if (
+      styleEnd !== -1 &&
+      typeof CSSStyleSheet === "function" &&
+      "adoptedStyleSheets" in shadow
+    ) {
+      try {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(template.slice("<style>".length, styleEnd));
+        shadow.adoptedStyleSheets = [sheet];
+        shadow.innerHTML = template.slice(styleEnd + "</style>".length);
+      } catch {
+        shadow.innerHTML = template;
+      }
+    } else {
+      shadow.innerHTML = template;
+    }
     host.__egoShadow = shadow;
 
     // The page scrolls under the cursor between actions, and no CDP round trip
@@ -851,6 +894,27 @@ function renderOverlay(payload) {
 
   const shadow = host.__egoShadow;
   if (!shadow) return;
+
+  // Repair overlays injected by an older process before this fix. The host can
+  // outlive the heredoc that created it, so a new renderer may inherit its
+  // CSP-blocked <style> until the page navigates.
+  const blockedStyle = shadow.querySelector("style");
+  if (
+    blockedStyle &&
+    shadow.styleSheets.length === 0 &&
+    "adoptedStyleSheets" in shadow &&
+    shadow.adoptedStyleSheets.length === 0 &&
+    typeof CSSStyleSheet === "function"
+  ) {
+    try {
+      const sheet = new CSSStyleSheet();
+      sheet.replaceSync(blockedStyle.textContent || "");
+      shadow.adoptedStyleSheets = [sheet];
+      blockedStyle.remove();
+    } catch {
+      // Cosmetic only, like the render itself.
+    }
+  }
 
   // Looked up before the first sync rather than where they are first drawn:
   // sync() places the badge too, and it runs on the line below.

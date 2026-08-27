@@ -1,11 +1,13 @@
 import { spawn } from "node:child_process";
 import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
+import { createServer } from "node:net";
 import { join } from "node:path";
 
 import { BROWSER_STATE_FILE, PROFILE_DIR, STATE_DIR } from "./paths.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
 import {
+  browserDisplayFlags,
   clearSingletonArtifacts,
   detachedSpawnOptions,
   listProcesses,
@@ -18,7 +20,10 @@ import {
 
 // Chrome writes the negotiated port here once the DevTools endpoint is live.
 const PORT_FILE = "DevToolsActivePort";
-const BROWSER_LAUNCH_LOCK = join(STATE_DIR, "browser-launch.lock");
+// Browser ownership follows the profile, not the caller's state directory.
+// Agents may intentionally redirect XDG_STATE_HOME while sharing the same
+// EGO_LINUX_PROFILE; they must still serialize one Chrome launch.
+const BROWSER_LAUNCH_LOCK = join(PROFILE_DIR, ".browser-launch.lock");
 
 // Shared by the launch args and the orphan reaper that reads them back out of
 // the process table — if the two spellings drifted, the reaper would match
@@ -71,6 +76,43 @@ const LAUNCH_FLAGS = [
   `--class=${WM_CLASS}`,
 ];
 
+// These flags change network routing or weaken browser security outside the
+// harness's CDP boundary. A Chrome started directly against the shared profile
+// must not be adopted when it carries one of them: doing so would make every
+// later agent silently inherit that process's unsafe launch policy.
+const UNSAFE_PROFILE_BROWSER_FLAGS = [
+  "--host-resolver-rules",
+  "--proxy-server",
+  "--proxy-pac-url",
+  "--ignore-certificate-errors",
+  "--disable-web-security",
+  "--allow-running-insecure-content",
+  "--load-extension",
+  "--disable-extensions-except",
+];
+
+/** Launch Chrome without desktop activation inherited from the caller. */
+export function browserLaunchEnvironment(source = process.env) {
+  const env = { ...source };
+  // A Codex terminal carries its launch activation into descendants. GNOME /
+  // Wayland otherwise treats the managed browser as a user-clicked app and may
+  // focus it over the chat where the user is still typing.
+  delete env.DESKTOP_STARTUP_ID;
+  delete env.XDG_ACTIVATION_TOKEN;
+  return env;
+}
+
+/**
+ * Headed Chrome starts its DevTools endpoint without mapping a window. The first
+ * task-space target is then created with background:true/focus:false, so merely
+ * starting the browser cannot interrupt the application the user is typing in.
+ * Headless mode still needs a bootstrap page for callers that do not create a
+ * task space before observing the browser.
+ */
+export function browserStartupFlags({ headless = false } = {}) {
+  return headless ? ["--headless=new", "about:blank"] : ["--no-startup-window"];
+}
+
 /**
  * Is this directory *provably* absent?
  *
@@ -117,6 +159,117 @@ async function writeBrowserState(state) {
   await writeFile(BROWSER_STATE_FILE, JSON.stringify(state, null, 2));
 }
 
+function processFlagValue(argv, prefix) {
+  const token = argv.find((arg) => arg.startsWith(prefix));
+  if (token && !token.includes(" ")) return token.slice(prefix.length);
+
+  // Chromium rewrites /proc/<pid>/cmdline after startup into one space-joined
+  // process title. Preserve support for normal tokenized argv while also
+  // reading flags from that live representation. A value ends at the next flag,
+  // not the next space, so profile paths containing spaces remain intact.
+  const text = argv.filter(Boolean).join(" ");
+  const start = text.indexOf(prefix);
+  if (start < 0) return null;
+  const valueStart = start + prefix.length;
+  const rest = text.slice(valueStart);
+  const nextFlag = rest.search(/\s--[a-zA-Z0-9-]+(?:=|\s|$)/);
+  return (nextFlag < 0 ? rest : rest.slice(0, nextFlag)).trim();
+}
+
+function processHasArg(argv, expected) {
+  if (argv.includes(expected)) return true;
+  const text = argv.filter(Boolean).join(" ");
+  let index = text.indexOf(expected);
+  while (index >= 0) {
+    const before = index === 0 ? " " : text[index - 1];
+    const after = text[index + expected.length] || " ";
+    if (/\s/.test(before) && /\s/.test(after)) return true;
+    index = text.indexOf(expected, index + 1);
+  }
+  return false;
+}
+
+function processHasFlag(argv, flag) {
+  const text = argv.filter(Boolean).join(" ");
+  let index = text.indexOf(flag);
+  while (index >= 0) {
+    const before = index === 0 ? " " : text[index - 1];
+    const after = text[index + flag.length] || " ";
+    if (/\s/.test(before) && (after === "=" || /\s/.test(after))) return true;
+    index = text.indexOf(flag, index + 1);
+  }
+  return false;
+}
+
+/** Unsafe policies carried by a Chrome process that owns the shared profile. */
+export function unsafeBrowserLaunchFlags(argv = []) {
+  const unsafe = UNSAFE_PROFILE_BROWSER_FLAGS.filter((flag) =>
+    processHasFlag(argv, flag),
+  );
+  const debuggingAddress = processFlagValue(
+    argv,
+    "--remote-debugging-address=",
+  );
+  if (
+    debuggingAddress &&
+    !["127.0.0.1", "localhost", "::1"].includes(debuggingAddress)
+  ) {
+    unsafe.push("--remote-debugging-address");
+  }
+  return unsafe;
+}
+
+function isReusableProfileBrowser(argv, profileDir = PROFILE_DIR) {
+  return (
+    processFlagValue(argv, PROFILE_FLAG) === profileDir &&
+    processHasArg(argv, `--class=${WM_CLASS}`) &&
+    processFlagValue(argv, "--type=") === null &&
+    unsafeBrowserLaunchFlags(argv).length === 0
+  );
+}
+
+async function profileBrowser() {
+  const profileFlag = `${PROFILE_FLAG}${PROFILE_DIR}`;
+  const running = await listProcesses({ contains: profileFlag });
+  const owner = await readSingletonOwner(PROFILE_DIR, {
+    marker: `--class=${WM_CLASS}`,
+  });
+  const candidates = running
+    .filter(({ argv }) => isReusableProfileBrowser(argv))
+    .sort((left, right) => {
+      if (left.pid === owner) return -1;
+      if (right.pid === owner) return 1;
+      return left.pid - right.pid;
+    });
+
+  for (const { pid, argv } of candidates) {
+    let port = Number(processFlagValue(argv, "--remote-debugging-port="));
+    if (!Number.isInteger(port) || port <= 0) {
+      try {
+        const [line] = (
+          await readFile(join(PROFILE_DIR, PORT_FILE), "utf8")
+        ).split("\n");
+        port = Number(line.trim());
+      } catch {
+        port = 0;
+      }
+    }
+    if (!Number.isInteger(port) || port <= 0) continue;
+    const wsUrl = await probe(port);
+    if (!wsUrl) continue;
+    return {
+      port,
+      wsUrl,
+      pid,
+      binary: String(argv[0] || "").split(/\s/, 1)[0],
+      headless: processHasArg(argv, "--headless=new"),
+      profileDir: PROFILE_DIR,
+      launched: false,
+    };
+  }
+  return null;
+}
+
 /**
  * Poll for a DevTools endpoint that answers.
  *
@@ -126,17 +279,22 @@ async function writeBrowserState(state) {
  * port. Probing whatever the file said first therefore names a port that never
  * listens — so re-read it on every attempt and keep probing until one answers.
  */
-export async function waitForEndpoint(profileDir, { timeoutMs = 20000 } = {}) {
+export async function waitForEndpoint(
+  profileDir,
+  { timeoutMs = 20000, port: expectedPort = null } = {},
+) {
   const path = join(profileDir, PORT_FILE);
   const deadline = Date.now() + timeoutMs;
-  let lastPort = null;
+  let lastPort = expectedPort;
   while (Date.now() < deadline) {
-    let port = null;
-    try {
-      const [line] = (await readFile(path, "utf8")).split("\n");
-      port = Number(line.trim()) || null;
-    } catch {
-      // not written yet
+    let port = expectedPort;
+    if (!port) {
+      try {
+        const [line] = (await readFile(path, "utf8")).split("\n");
+        port = Number(line.trim()) || null;
+      } catch {
+        // not written yet
+      }
     }
     if (port) {
       lastPort = port;
@@ -152,6 +310,24 @@ export async function waitForEndpoint(profileDir, { timeoutMs = 20000 } = {}) {
   );
 }
 
+/** Ask the kernel for a non-zero loopback port, then release it for Chrome. */
+export function allocateDebugPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.unref();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) reject(error);
+        else if (Number.isInteger(port) && port > 0) resolve(port);
+        else reject(new Error("could not allocate a loopback debugging port"));
+      });
+    });
+  });
+}
+
 /**
  * Reset page zoom in the agent profile.
  *
@@ -161,17 +337,27 @@ export async function waitForEndpoint(profileDir, { timeoutMs = 20000 } = {}) {
  * then hit-test to nothing and pointer input silently does nothing. This profile
  * exists only to drive agents, so zoom is pinned to 100%.
  */
-async function neutralizeZoom(profileDir) {
+export async function neutralizeZoom(profileDir) {
   const path = join(profileDir, "Default", "Preferences");
   try {
     const prefs = JSON.parse(await readFile(path, "utf8"));
     let changed = false;
     for (const scope of ["partition", "profile"]) {
-      for (const key of ["default_zoom_level", "per_host_zoom_levels"]) {
-        if (prefs[scope]?.[key] && Object.keys(prefs[scope][key]).length > 0) {
-          prefs[scope][key] = {};
-          changed = true;
-        }
+      if (
+        prefs[scope]?.default_zoom_level !== undefined &&
+        prefs[scope].default_zoom_level !== 0
+      ) {
+        prefs[scope].default_zoom_level = 0;
+        changed = true;
+      }
+      const perHost = prefs[scope]?.per_host_zoom_levels;
+      if (
+        perHost &&
+        typeof perHost === "object" &&
+        Object.keys(perHost).length
+      ) {
+        prefs[scope].per_host_zoom_levels = {};
+        changed = true;
       }
     }
     // --import-chrome-profile clones the user's real profile, so the agent
@@ -222,10 +408,28 @@ export async function clearStaleCrashMark(profileDir) {
   }
 }
 
-/** Whether a pid is a browser running against our own profile directory. */
-async function ownsOurProfile(pid, profileDir) {
+/** Whether a pid is the managed, root Ego Lite browser for this profile. */
+async function ownsManagedProfile(pid, profileDir = PROFILE_DIR) {
   const argv = await processArgv(pid);
-  return argv?.some((arg) => arg === `${PROFILE_FLAG}${profileDir}`) ?? false;
+  return Boolean(argv && isReusableProfileBrowser(argv, profileDir));
+}
+
+/** Read the live managed process's debugging port, never a stale state-file port. */
+async function managedDebugPort(pid, profileDir = PROFILE_DIR) {
+  const argv = await processArgv(pid);
+  if (!argv || !isReusableProfileBrowser(argv, profileDir)) return null;
+  let port = Number(processFlagValue(argv, "--remote-debugging-port="));
+  if (!Number.isInteger(port) || port <= 0) {
+    try {
+      const [line] = (
+        await readFile(join(profileDir, PORT_FILE), "utf8")
+      ).split("\n");
+      port = Number(line.trim());
+    } catch {
+      port = 0;
+    }
+  }
+  return Number.isInteger(port) && port > 0 ? port : null;
 }
 
 /**
@@ -254,12 +458,11 @@ export async function reapOrphanedBrowsers() {
     running.map(async ({ pid, argv }) => {
       // Renderers and helpers inherit --user-data-dir but carry --type=;
       // signalling the browser process takes its children with it anyway.
-      if (!argv.includes(`--class=${WM_CLASS}`)) return;
-      if (argv.some((arg) => arg.startsWith("--type="))) return;
+      if (!processHasArg(argv, `--class=${WM_CLASS}`)) return;
+      if (processFlagValue(argv, "--type=") !== null) return;
 
-      const flag = argv.find((arg) => arg.startsWith(PROFILE_FLAG));
-      if (!flag) return;
-      const profileDir = flag.slice(PROFILE_FLAG.length);
+      const profileDir = processFlagValue(argv, PROFILE_FLAG);
+      if (!profileDir) return;
       if (profileDir === PROFILE_DIR) return;
       if (!(await definitelyGone(profileDir))) return;
 
@@ -294,43 +497,58 @@ async function clearProfileLock(profileDir) {
     return false;
   }
 
-  if (await ownsOurProfile(pid, profileDir)) {
-    if (await terminateProcess(pid)) {
-      // Give it a moment to release the lock on its own.
-      await new Promise((resolve) => setTimeout(resolve, 500));
-    }
+  if (!processIsAlive(pid)) {
+    await clearSingletonArtifacts(profileDir);
+    return true;
+  }
+  if (!(await ownsManagedProfile(pid, profileDir))) {
+    throw new Error(
+      `Profile lock owner ${pid} is not a managed Ego Lite browser; refusing to edit or unlock ${profileDir}`,
+    );
+  }
+  if (!(await terminateProcess(pid)) || !(await waitForProcessExit(pid))) {
+    throw new Error(`Managed profile owner ${pid} did not stop`);
   }
 
   await clearSingletonArtifacts(profileDir);
   return true;
 }
 
+/** Stop any live owner before editing Chrome's Preferences file. */
+export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
+  await clearProfileLock(profileDir);
+  await neutralizeZoom(profileDir);
+  await clearStaleCrashMark(profileDir);
+}
+
 async function launch({ headless }) {
   const binary = await resolveBrowserBinary();
+  const debugPort = await allocateDebugPort();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
-  await neutralizeZoom(PROFILE_DIR);
-  await clearStaleCrashMark(PROFILE_DIR);
-  await clearProfileLock(PROFILE_DIR);
+  await prepareProfileForLaunch(PROFILE_DIR);
   // A stale port file would be read as this launch's port.
   await rm(join(PROFILE_DIR, PORT_FILE), { force: true });
 
   const args = [
     ...LAUNCH_FLAGS,
+    ...browserDisplayFlags({ headless }),
     `${PROFILE_FLAG}${PROFILE_DIR}`,
-    "--remote-debugging-port=0",
-    ...(headless ? ["--headless=new"] : []),
-    // The harness attaches its CDP session to the active tab and fails with
-    // "no active tab to attach session" when there is none, so the browser has
-    // to come up holding one. --no-startup-window was tried here and breaks
-    // every page operation for that reason.
-    "about:blank",
+    `--remote-debugging-port=${debugPort}`,
+    "--remote-debugging-address=127.0.0.1",
+    ...browserStartupFlags({ headless }),
   ];
-  const child = spawn(binary, args, detachedSpawnOptions());
+  const child = spawn(
+    binary,
+    args,
+    detachedSpawnOptions({ env: browserLaunchEnvironment() }),
+  );
   child.unref();
 
-  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR);
+  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR, {
+    port: debugPort,
+  });
   await writeBrowserState({
     port,
     wsUrl,
@@ -339,7 +557,7 @@ async function launch({ headless }) {
     headless,
     profileDir: PROFILE_DIR,
   });
-  return { port, wsUrl, launched: true };
+  return { port, wsUrl, pid: child.pid, launched: true };
 }
 
 /**
@@ -354,19 +572,25 @@ export async function ensureBrowser({ headless = false } = {}) {
 
   async function runningBrowser() {
     const state = await readBrowserState();
-    if (!state?.port) return null;
-    const wsUrl = await probe(state.port);
-    return wsUrl ? { port: state.port, wsUrl, launched: false } : null;
+    if (state?.port && state?.pid) {
+      const argv = await processArgv(state.pid);
+      if (!argv || !isReusableProfileBrowser(argv)) return profileBrowser();
+      const wsUrl = await probe(state.port);
+      if (wsUrl) return { ...state, wsUrl, launched: false };
+    }
+    const discovered = await profileBrowser();
+    if (!discovered) return null;
+    await writeBrowserState(discovered);
+    return discovered;
   }
 
   const existing = await runningBrowser();
   if (existing) return existing;
 
-  // Several agents commonly start together. Without serializing this gap, each
-  // process observes no published state and invokes Chrome; ProcessSingleton
-  // folds those invocations into one profile but still opens their about:blank
-  // requests as extra windows/tabs. Re-check after acquiring the kernel-owned
-  // lock so only its owner launches and every waiter reuses the published CDP.
+  // Several agents commonly start together, and some redirect their state root
+  // while retaining the shared browser profile. The lock is therefore keyed by
+  // PROFILE_DIR, not STATE_DIR. Re-checking also discovers a live profile owner
+  // whose browser.json lives under another state root.
   const release = await acquireDirectoryLock(BROWSER_LAUNCH_LOCK);
   try {
     const winner = await runningBrowser();
@@ -438,31 +662,62 @@ async function waitForProcessExit(pid, timeoutMs = 5000) {
 /** Terminate the backing browser and forget it. */
 export async function stopBrowser() {
   const state = await readBrowserState();
+  const lockOwner = await readSingletonOwner(PROFILE_DIR, {
+    marker: `--class=${WM_CLASS}`,
+  });
+  const candidatePids = [...new Set([state?.pid, lockOwner])].filter(
+    (pid) => Number.isInteger(pid) && pid > 1,
+  );
+  let pid = null;
+  let port = null;
+  for (const candidate of candidatePids) {
+    const candidatePort = await managedDebugPort(candidate);
+    if (candidatePort || (await ownsManagedProfile(candidate))) {
+      pid = candidate;
+      port = candidatePort;
+      break;
+    }
+  }
+
+  if (!pid) {
+    await rm(BROWSER_STATE_FILE, { force: true });
+    return false;
+  }
   let stopped = false;
 
-  if (state?.port) stopped = await closeBrowserGracefully(state.port);
+  if (port) stopped = await closeBrowserGracefully(port);
   // Answering the request is not the same as acting on it. A browser that
   // stayed up has to be signalled anyway — otherwise --stop removes the state
   // file that is the only handle on it and leaves it running, unreachable.
-  if (stopped && state?.pid && !(await waitForProcessExit(state.pid)))
-    stopped = false;
+  if (stopped && !(await waitForProcessExit(pid))) stopped = false;
 
   // The blunt instrument, only when the browser did not take the polite request.
-  if (!stopped && state?.pid) stopped = await terminateProcess(state.pid);
+  if (!stopped && (await ownsManagedProfile(pid))) {
+    stopped = await terminateProcess(pid);
+    if (stopped) stopped = await waitForProcessExit(pid);
+  }
 
   await rm(BROWSER_STATE_FILE, { force: true });
-  // A force-terminated Chrome does not always release its profile lock, which
-  // would block the next launch. After a graceful close there is nothing left
-  // to clear, and this is a no-op.
-  await clearProfileLock(PROFILE_DIR);
+  // Clear artifacts only after their owner is gone. An unrecognized live owner
+  // is never killed or unlocked by a stale Ego Lite state file.
+  const remainingOwner = await readSingletonOwner(PROFILE_DIR, {
+    marker: `--class=${WM_CLASS}`,
+  });
+  if (remainingOwner === null || !processIsAlive(remainingOwner)) {
+    await clearSingletonArtifacts(PROFILE_DIR);
+  }
   return stopped;
 }
 
 export async function browserStatus() {
   const state = await readBrowserState();
-  if (!state?.port) return { running: false };
-  const wsUrl = await probe(state.port);
+  if (!state?.pid || !(await ownsManagedProfile(state.pid))) {
+    return { ...(state || {}), running: false };
+  }
+  const port = await managedDebugPort(state.pid);
+  if (!port) return { ...state, running: false };
+  const wsUrl = await probe(port);
   return wsUrl
-    ? { running: true, ...state, wsUrl }
-    : { running: false, ...state };
+    ? { ...state, running: true, port, wsUrl }
+    : { ...state, running: false };
 }

@@ -94,4 +94,23 @@ describe("the cursor survives a navigation", () => {
       "Page.enable is not re-sent on every render",
     );
   });
+
+  it("dismisses the overlay when the driving CLI process is done", async () => {
+    const cdp = fakeCdp();
+    const cursor = createCursorApi(cdp, { listTabs });
+
+    cursor.reading();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(
+      renderedPayloads(cdp).at(-1)?.visible,
+      true,
+      "the active process first shows its presence",
+    );
+
+    await cursor.dismiss();
+
+    const last = renderedPayloads(cdp).at(-1);
+    assert.equal(last?.visible, false, "the final render removes agent presence");
+    assert.equal(last?.read, null, "no reading sweep survives process exit");
+  });
 });

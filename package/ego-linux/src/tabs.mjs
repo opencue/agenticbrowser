@@ -62,10 +62,12 @@ export function createTabsApi(
             ? target.browserContextId === scope.browserContextId
             : scope.targetIds.has(target.targetId),
         );
-        // Never hand back an empty list: a space mid-navigation, or one whose
-        // only tab the user just closed, must not look like a browser with no
-        // tabs at all.
-        if (scoped.length > 0) pages = scoped;
+        // A newly created space intentionally has no target until its
+        // first destination is known. Preserve that empty list so page.goto can
+        // create the first visible tab directly at the requested URL. Existing
+        // spaces retain the old fallback while a tracked target is momentarily
+        // absent during navigation.
+        if (scoped.length > 0 || scope.targetIds.size === 0) pages = scoped;
       }
 
       const order = await mruOrder();

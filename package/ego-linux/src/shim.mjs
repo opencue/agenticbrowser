@@ -1,10 +1,15 @@
-import { ensureBrowser } from "./chrome.mjs";
+import { ensureBrowser, WM_CLASS } from "./chrome.mjs";
+import { activateWindowByClass } from "./platform.mjs";
 import { connectCdp } from "./transport.mjs";
 import { createTabsApi } from "./tabs.mjs";
 import { createSnapshotApi } from "./snapshot.mjs";
 import { createTaskSpacesApi } from "./task-spaces.mjs";
 import { createCursorApi } from "./cursor.mjs";
 import { createWindowFit } from "./window-fit.mjs";
+import {
+  createUserActionApi,
+  notifyUserAction,
+} from "./user-action.mjs";
 
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
@@ -15,7 +20,7 @@ import { createWindowFit } from "./window-fit.mjs";
  * per-method fidelity table.
  */
 export async function createEgoShim({ headless = false } = {}) {
-  const { wsUrl, port } = await ensureBrowser({ headless });
+  const { wsUrl, port, pid } = await ensureBrowser({ headless });
   const cdp = await connectCdp(wsUrl);
 
   // Agent selection is private to this CDP connection. A person may be working
@@ -34,6 +39,7 @@ export async function createEgoShim({ headless = false } = {}) {
 
   const taskSpaces = createTaskSpacesApi(cdp, {
     shouldAutoFocus: shouldAutoFocusAgentTab,
+    activateWindow: () => activateWindowByClass({ wmClass: WM_CLASS, pid }),
   });
   cdp.watchActiveTarget((targetId) => {
     if (targetId) void taskSpaces.noteActiveTarget(targetId).catch(() => {});
@@ -50,6 +56,7 @@ export async function createEgoShim({ headless = false } = {}) {
   });
   const snapshot = createSnapshotApi(cdp, { listTabs: tabs.listTabs });
   const cursor = createCursorApi(cdp, { listTabs: tabs.listTabs });
+  const userActions = createUserActionApi(cdp, { listTabs: tabs.listTabs });
 
   // Every pointer event the harness sends moves the overlay, and a press ripples
   // where it landed — so a user watching the window sees the agent work.
@@ -78,10 +85,9 @@ export async function createEgoShim({ headless = false } = {}) {
   });
 
   cdp.watchNavigation(() => {
-    // Shared-profile task spaces start as unfocused blank anchors, which avoids
-    // the "agent opened a blank browser" flash. Navigation and subsequent
-    // observation/input stay bound to the attached background target; there is
-    // no reason to replace the tab a person is using.
+    // New task spaces are targetless until their first navigation. Navigation
+    // and subsequent observation/input stay bound to the attached background
+    // target; there is no reason to replace the tab a person is using.
     void taskSpaces.noteContent().catch(() => {});
     // A navigation destroys the overlay with the document it lives in. This is
     // the earliest point the shim hears about one, and arming here is what lets
@@ -115,9 +121,9 @@ export async function createEgoShim({ headless = false } = {}) {
     // --- Task spaces --------------------------------------------------------
     listTaskSpaces: taskSpaces.listTaskSpaces,
     // Arming on Page.navigate is too late for that same navigation — the claim
-    // and Page.enable race the load and usually lose. Selecting a space is the
-    // first moment a tab is guaranteed to exist, and it always precedes the
-    // goto, so this is where a process's very first load gets covered.
+    // and Page.enable race the load and usually lose. Targetless spaces simply
+    // skip this cosmetic watcher; the navigation callback arms the newly created
+    // destination tab as soon as it exists.
     async createTaskSpace(name) {
       const result = await taskSpaces.createTaskSpace(name);
       void cursor.watchPage().catch(() => {});
@@ -138,9 +144,20 @@ export async function createEgoShim({ headless = false } = {}) {
       cursor.hide();
       return result;
     },
-    presentTaskSpace: taskSpaces.presentTaskSpace,
+    // Public agent calls are focus-protected by default. A same-turn explicit
+    // user request may opt in with { focus: true }; the human Spaces panel uses
+    // the private capability returned below.
+    presentTaskSpace: (id, options) =>
+      taskSpaces.presentTaskSpace(id, {
+        allowFocus: options?.focus === true,
+      }),
+    showUserAction: userActions.show,
+    waitForUserAction: userActions.wait,
+    clearUserAction: userActions.clear,
+    notifyUserAction,
     async takeOverTaskSpace(id) {
       const result = await taskSpaces.takeOverTaskSpace(id);
+      await userActions.clear().catch(() => {});
       cursor.show();
       return result;
     },
@@ -175,5 +192,15 @@ export async function createEgoShim({ headless = false } = {}) {
   };
 
   cdp.bind(ego);
-  return { ego, cdp, close: () => cdp.close(), port, wsUrl };
+  return {
+    ego,
+    cdp,
+    cleanupCreatedEmptySpaces: taskSpaces.cleanupCreatedEmptySpaces,
+    dismissCursor: cursor.dismiss,
+    presentTaskSpaceForPanel: (id) =>
+      taskSpaces.presentTaskSpace(id, { allowFocus: true }),
+    close: () => cdp.close(),
+    port,
+    wsUrl,
+  };
 }
