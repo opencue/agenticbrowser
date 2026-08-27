@@ -13,7 +13,8 @@ ego lite website: https://lite.ego.app/
 
 Requirements: Node.js 22+, npm, and a Linux Chrome/Chromium-family browser.
 Headed human-action focus also uses `xdotool`; ordinary background and headless
-automation do not require it.
+automation do not require it. Returning focus to a native Wayland application
+uses `ydotool` with `ydotoold` running.
 
 From a checkout of this repository, run:
 

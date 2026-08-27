@@ -90,6 +90,93 @@ function runCapturedCommand(command, args, { timeoutMs = 2000 } = {}) {
   });
 }
 
+function validWindowId(value) {
+  const windowId = String(value ?? "").trim();
+  return /^(?:0x[\da-f]+|\d+)$/i.test(windowId) ? windowId : null;
+}
+
+/** The active X11/XWayland window and the process that owns it. */
+export async function getActiveWindow(
+  { env = process.env, platform = process.platform } = {},
+  { run = runCapturedCommand } = {},
+) {
+  if (platform !== "linux" || !env.DISPLAY) return null;
+  const active = await run("xdotool", ["getactivewindow"]);
+  const windowId = active.ok ? validWindowId(active.stdout) : null;
+  if (!windowId) return null;
+  const owner = await run("xdotool", ["getwindowpid", windowId]);
+  const pid = owner.ok ? Number(owner.stdout.trim()) : NaN;
+  if (!Number.isInteger(pid) || pid <= 0) return null;
+  return { windowId, pid };
+}
+
+/**
+ * Capture enough desktop state to undo one background focus steal.
+ *
+ * Native Wayland deliberately does not expose another application's window id.
+ * In that case the compositor's previous-window history is the only safe,
+ * general restoration target, represented by a marker rather than a guessed id.
+ */
+export async function captureDesktopFocus(
+  { env = process.env, platform = process.platform } = {},
+  { run = runCapturedCommand } = {},
+) {
+  const active = await getActiveWindow({ env, platform }, { run });
+  if (active) return { kind: "x11-window", ...active };
+  if (
+    platform === "linux" &&
+    (env.XDG_SESSION_TYPE === "wayland" || env.WAYLAND_DISPLAY)
+  ) {
+    return { kind: "wayland-history", windowId: null, pid: null };
+  }
+  return null;
+}
+
+/** Restore one exact X11/XWayland window captured before background work. */
+export async function activateWindowById(
+  { windowId, env = process.env, platform = process.platform },
+  { run = runCapturedCommand } = {},
+) {
+  if (platform !== "linux" || !env.DISPLAY) return false;
+  const exactWindowId = validWindowId(windowId);
+  if (!exactWindowId) return false;
+  const activation = await run("xdotool", [
+    "windowactivate",
+    "--sync",
+    exactWindowId,
+  ]);
+  return activation.ok;
+}
+
+/** Restore a desktop focus snapshot captured before background work. */
+export async function restoreDesktopFocus(
+  focus,
+  { env = process.env, platform = process.platform } = {},
+  { run = runCapturedCommand } = {},
+) {
+  if (focus?.kind === "x11-window") {
+    return activateWindowById(
+      { windowId: focus.windowId, env, platform },
+      { run },
+    );
+  }
+  if (
+    focus?.kind !== "wayland-history" ||
+    platform !== "linux" ||
+    !(env.XDG_SESSION_TYPE === "wayland" || env.WAYLAND_DISPLAY)
+  ) {
+    return false;
+  }
+
+  // uinput reaches GNOME's global switcher even when the previous application
+  // is native Wayland. It is optional; XTest is a useful XWayland fallback on
+  // compositors that still honour global shortcuts from the active X11 client.
+  const native = await run("ydotool", ["key", "alt+tab"]);
+  if (native.ok) return true;
+  const xwayland = await run("xdotool", ["key", "--clearmodifiers", "alt+Tab"]);
+  return xwayland.ok;
+}
+
 /**
  * Activate the visible X11/XWayland window owned by one browser process.
  *

@@ -5,7 +5,14 @@ import { mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { activateWindowByClass, createPlatform } from "../src/platform.mjs";
+import {
+  activateWindowByClass,
+  activateWindowById,
+  captureDesktopFocus,
+  createPlatform,
+  getActiveWindow,
+  restoreDesktopFocus,
+} from "../src/platform.mjs";
 
 /**
  * A process that sits still and carries the argv a case wants to read back.
@@ -341,6 +348,79 @@ describe("platform: detached spawn options", () => {
 });
 
 describe("platform: explicit X11 window activation", () => {
+  it("reads the active X11 window and its owning pid", async () => {
+    const calls = [];
+    const run = async (_command, args) => {
+      calls.push(args);
+      if (args[0] === "getactivewindow") {
+        return { ok: true, stdout: "77\n", stderr: "" };
+      }
+      return { ok: true, stdout: "4242\n", stderr: "" };
+    };
+
+    assert.deepEqual(
+      await getActiveWindow(
+        { env: { DISPLAY: ":1" }, platform: "linux" },
+        { run },
+      ),
+      { windowId: "77", pid: 4242 },
+    );
+    assert.deepEqual(calls, [["getactivewindow"], ["getwindowpid", "77"]]);
+  });
+
+  it("restores one exact X11 window without searching by class", async () => {
+    const calls = [];
+    const run = async (_command, args) => {
+      calls.push(args);
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    assert.equal(
+      await activateWindowById(
+        { windowId: "77", env: { DISPLAY: ":1" }, platform: "linux" },
+        { run },
+      ),
+      true,
+    );
+    assert.deepEqual(calls, [["windowactivate", "--sync", "77"]]);
+  });
+
+  it("captures native Wayland focus as compositor history", async () => {
+    const run = async () => ({ ok: false, stdout: "", stderr: "no X window" });
+
+    assert.deepEqual(
+      await captureDesktopFocus(
+        {
+          env: { DISPLAY: ":1", WAYLAND_DISPLAY: "wayland-0" },
+          platform: "linux",
+        },
+        { run },
+      ),
+      { kind: "wayland-history", windowId: null, pid: null },
+    );
+  });
+
+  it("uses one compositor-level previous-window shortcut for native Wayland", async () => {
+    const calls = [];
+    const run = async (command, args) => {
+      calls.push([command, ...args]);
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    assert.equal(
+      await restoreDesktopFocus(
+        { kind: "wayland-history", windowId: null, pid: null },
+        {
+          env: { WAYLAND_DISPLAY: "wayland-0" },
+          platform: "linux",
+        },
+        { run },
+      ),
+      true,
+    );
+    assert.deepEqual(calls, [["ydotool", "key", "alt+tab"]]);
+  });
+
   it("activates only a visible window owned by the requested browser pid", async () => {
     const calls = [];
     const run = async (_command, args) => {

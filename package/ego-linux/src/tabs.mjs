@@ -14,7 +14,12 @@
 
 export function createTabsApi(
   cdp,
-  { port, getScope, shouldAutoFocus = async () => true },
+  {
+    port,
+    getScope,
+    shouldAutoFocus = async () => true,
+    guardBackground = async (_reason, operation) => operation(),
+  },
 ) {
   async function mruOrder() {
     if (!port) return null;
@@ -103,11 +108,15 @@ export function createTabsApi(
     // one the tab lands in the default profile, sharing live login/storage state.
     async createTab(url = "about:blank", browserContextId = undefined) {
       const autoFocus = await shouldAutoFocus();
-      const { targetId } = await cdp.call("Target.createTarget", {
-        url,
-        ...(browserContextId ? { browserContextId } : {}),
-        ...(!autoFocus ? { background: true, focus: false } : {}),
-      });
+      const create = () =>
+        cdp.call("Target.createTarget", {
+          url,
+          ...(browserContextId ? { browserContextId } : {}),
+          ...(!autoFocus ? { background: true, focus: false } : {}),
+        });
+      const { targetId } = autoFocus
+        ? await create()
+        : await guardBackground("create-tab", create);
       if (!targetId)
         throw new Error("Target.createTarget returned no targetId");
       // Selection and visibility are separate. The agent must attach to the tab

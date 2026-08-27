@@ -252,6 +252,9 @@ install_linux_port() {
 	if [ -n "${DISPLAY:-}" ] && ! command -v xdotool >/dev/null 2>&1; then
 		log "warning: xdotool is unavailable; explicit human-action focus may fail"
 	fi
+	if { [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && ! command -v ydotool >/dev/null 2>&1; then
+		log "warning: ydotool is unavailable; native Wayland focus restoration may fail"
+	fi
 
 	log "Building ego-browser in $harness_dir ..."
 	(cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
