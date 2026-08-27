@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { createDesktopFocusGuard } from "../src/focus-guard.mjs";
+import { APP_DIR } from "../src/platform.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -183,7 +184,7 @@ describe("desktop focus guard", () => {
         },
       );
 
-      const auditFile = join(sandbox, "ego-lite-linux", "focus-audit.jsonl");
+      const auditFile = join(sandbox, APP_DIR, "focus-audit.jsonl");
       assert.deepEqual(JSON.parse((await readFile(auditFile, "utf8")).trim()), {
         at: "now",
         reason: "create-tab",
