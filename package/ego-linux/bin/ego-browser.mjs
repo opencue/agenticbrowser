@@ -11,12 +11,14 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { chmod, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { browserStatus, stopBrowser } from "../src/chrome.mjs";
+import { cleanupExpiredArtifacts } from "../src/artifact-retention.mjs";
 import { installDesktopEntry } from "../src/desktop.mjs";
+import { runDoctor } from "../src/doctor.mjs";
 import { acquireLaunchLock } from "../src/launch-lock.mjs";
 import {
   CHROME_CONFIG_CANDIDATES,
@@ -26,6 +28,10 @@ import {
   STATE_DIR,
 } from "../src/paths.mjs";
 import { detachedSpawnOptions, terminateProcess } from "../src/platform.mjs";
+import {
+  ensurePrivateStateDir,
+  writePrivateStateFile,
+} from "../src/private-state.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
@@ -42,6 +48,8 @@ const USAGE = `ego-browser (Linux port)
   JS
 
 Linux-only commands:
+  --doctor [--json]         inspect installation and runtime state without
+                            starting or attaching to the browser
   --status                  show the backing browser's connection state
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
@@ -98,6 +106,9 @@ async function liveSpacesServer(expectedBuildId = null) {
   try {
     const state = JSON.parse(await readFile(SPACES_STATE_FILE, "utf8"));
     const response = await fetch(`http://127.0.0.1:${state.port}/api/health`, {
+      headers: state.shutdownToken
+        ? { "x-ego-daemon-token": state.shutdownToken }
+        : {},
       signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return null;
@@ -145,12 +156,27 @@ async function stopSpacesDaemon(state) {
   throw new Error("Spaces daemon did not stop within 5000ms");
 }
 
+function spacesPanelUrl(port, shutdownToken) {
+  if (!shutdownToken) throw new Error("Spaces daemon has no access token");
+  return (
+    `http://127.0.0.1:${port}/` + `#token=${encodeURIComponent(shutdownToken)}`
+  );
+}
+
+function panelDocumentUrl(value) {
+  try {
+    const url = new URL(value);
+    url.hash = "";
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 function isSpacesTarget(target, url) {
   return (
     target.type === "page" &&
-    (target.url === url ||
-      (target.title === "Spaces" &&
-        /^http:\/\/127\.0\.0\.1:\d+\/$/.test(target.url)))
+    panelDocumentUrl(target.url) === panelDocumentUrl(url)
   );
 }
 
@@ -175,7 +201,7 @@ async function openPanelTab(url, shim, { recreate = false } = {}) {
   let targetInfos = await targets();
   let target = recreate
     ? null
-    : targetInfos.find((candidate) => candidate.url === url);
+    : targetInfos.find((candidate) => isSpacesTarget(candidate, url));
   for (const candidate of targetInfos) {
     if (!isSpacesTarget(candidate, url)) continue;
     if (candidate.targetId === target?.targetId) continue;
@@ -266,13 +292,12 @@ async function runSpacesDaemon() {
     shutdownToken,
     onShutdown: requestShutdown,
   });
-  const url = `http://127.0.0.1:${spaces.port}/`;
+  const url = spacesPanelUrl(spaces.port, shutdownToken);
 
   // A fresh daemon replaces any stale overview tab, then publishes itself.
   // Publishing afterwards prevents concurrent launchers from racing the tab.
   const targetId = await openPanelTab(url, shim, { recreate: true });
-  await mkdir(STATE_DIR, { recursive: true });
-  await writeFile(
+  await writePrivateStateFile(
     SPACES_STATE_FILE,
     JSON.stringify(
       {
@@ -285,9 +310,7 @@ async function runSpacesDaemon() {
       null,
       2,
     ),
-    { mode: 0o600 },
   );
-  await chmod(SPACES_STATE_FILE, 0o600).catch(() => {});
 
   const signal = new Promise((resolve) => {
     process.once("SIGINT", () => resolve("signal"));
@@ -321,9 +344,7 @@ async function runSpacesDaemon() {
       // ego.listTabs() is scoped to the agent's selected task space. Once an
       // agent selects one, that list intentionally hides this overview page and
       // made the daemon mistake a live panel for a closed one.
-      const open = targets.some(
-        (target) => target.type === "page" && target.url.startsWith(url),
-      );
+      const open = targets.some((target) => isSpacesTarget(target, url));
       if (open) {
         seenPanel = true;
         return;
@@ -377,7 +398,10 @@ async function openSpacesUnlocked() {
   if (running?.current) {
     const shim = await createEgoShim({ headless: false });
     try {
-      await openPanelTab(`http://127.0.0.1:${running.port}/`, shim);
+      await openPanelTab(
+        spacesPanelUrl(running.port, running.shutdownToken),
+        shim,
+      );
     } finally {
       shim.close();
     }
@@ -413,7 +437,7 @@ async function openSpacesUnlocked() {
 }
 
 async function openSpaces() {
-  await mkdir(STATE_DIR, { recursive: true });
+  await ensurePrivateStateDir();
   const release = await acquireLaunchLock(SPACES_LAUNCH_LOCK);
   try {
     return await openSpacesUnlocked();
@@ -491,6 +515,10 @@ async function main() {
   // The skill documents `ego-browser nodejs <<'EOF'`; accept it as a no-op prefix.
   if (argv[0] === "nodejs") argv.shift();
 
+  // Every CLI use is an opportunity to reap old screenshots, failure reports,
+  // and completed download directories without a resident cleanup process.
+  await cleanupExpiredArtifacts().catch(() => {});
+
   if (argv[0] === "--help" || argv[0] === "-h") {
     process.stdout.write(USAGE);
     return 0;
@@ -498,6 +526,12 @@ async function main() {
   if (argv[0] === "--status") {
     process.stdout.write(`${JSON.stringify(await browserStatus(), null, 2)}\n`);
     return 0;
+  }
+  if (argv[0] === "--doctor") {
+    return runDoctor({
+      json: argv.includes("--json") || argv.includes("-j"),
+      harnessPath: fileURLToPath(HARNESS),
+    });
   }
   if (argv[0] === "--stop") {
     const stopped = await stopBrowser();
@@ -601,10 +635,6 @@ async function main() {
   try {
     return await runMain({ argv: rest });
   } finally {
-    // The overlay lives in the page, not in this process. Send its departure
-    // render before closing CDP or the last "Codex · reading …" badge will stay
-    // visible after the agent has stopped observing the page.
-    await shim.dismissCursor().catch(() => {});
     // A script that creates a Task Space but returns or throws before its first
     // navigation must not strand its targetless state record.
     // This is creator-scoped inside the shim, so other agents' spaces and every

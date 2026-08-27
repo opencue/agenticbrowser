@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { readFile, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { agentIdentity } from "./agent-identity.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
+import {
+  ensurePrivateStateDir,
+  securePrivateStateFile,
+  writePrivateStateFile,
+} from "./private-state.mjs";
 
 /**
  * Task spaces, emulated as tracked sets of tabs.
@@ -219,11 +224,11 @@ export function createTaskSpacesApi(
   }
 
   async function writeState(state) {
-    await mkdir(STATE_DIR, { recursive: true });
     const temporary = `${TASK_SPACE_FILE}.${process.pid}.${Date.now()}.${Math.random()}.tmp`;
     try {
-      await writeFile(temporary, JSON.stringify(state, null, 2));
+      await writePrivateStateFile(temporary, JSON.stringify(state, null, 2));
       await rename(temporary, TASK_SPACE_FILE);
+      await securePrivateStateFile(TASK_SPACE_FILE);
     } finally {
       await rm(temporary, { force: true }).catch(() => {});
     }
@@ -231,7 +236,7 @@ export function createTaskSpacesApi(
 
   /** Hold every read-modify-write cycle across processes, not merely its write. */
   async function withStateLock(operation) {
-    await mkdir(STATE_DIR, { recursive: true });
+    await ensurePrivateStateDir();
     const release = await acquireDirectoryLock(TASK_SPACE_LOCK, {
       pollMs: 5,
     });

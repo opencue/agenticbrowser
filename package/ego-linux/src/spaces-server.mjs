@@ -380,12 +380,15 @@ async function readBody(request) {
 /**
  * Start the overview server.
  * @param {object} shim The live ego shim (ego + cdp).
- * @param {{buildId?:string, shutdownToken?:string, onShutdown?:() => void}} [options]
+ * @param {{buildId?:string, shutdownToken:string, onShutdown?:() => void}} options
  * @returns {Promise<{port:number, close:() => void}>}
  */
 export async function startSpacesServer(shim, options = {}) {
   const { ego, cdp } = shim;
   const { buildId = null, shutdownToken = null, onShutdown = null } = options;
+  if (typeof shutdownToken !== "string" || shutdownToken.length === 0) {
+    throw new Error("Spaces server requires a non-empty daemon token");
+  }
   const events = createEventHub();
   const pool = createCastPool(cdp, () => events.notify());
   let stateWatcher = null;
@@ -431,6 +434,14 @@ export async function startSpacesServer(shim, options = {}) {
       return;
     }
 
+    if (
+      url.pathname.startsWith("/api/") &&
+      request.headers["x-ego-daemon-token"] !== shutdownToken
+    ) {
+      json(response, 403, { error: "invalid daemon token" });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/health") {
       json(response, 200, {
         ok: true,
@@ -451,13 +462,6 @@ export async function startSpacesServer(shim, options = {}) {
     }
 
     if (request.method === "POST" && url.pathname === "/api/shutdown") {
-      if (
-        !shutdownToken ||
-        request.headers["x-ego-daemon-token"] !== shutdownToken
-      ) {
-        json(response, 403, { error: "invalid daemon token" });
-        return;
-      }
       json(response, 202, { stopping: true });
       queueMicrotask(() => onShutdown?.());
       return;

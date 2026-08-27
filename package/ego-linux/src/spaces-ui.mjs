@@ -257,6 +257,13 @@ const summary = document.getElementById("summary");
 let busy = false;
 let refreshInFlight = null;
 
+const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
+if (fragmentToken) {
+  sessionStorage.setItem("ego-spaces-token", fragmentToken);
+  history.replaceState(null, "", location.pathname + location.search);
+}
+const daemonToken = sessionStorage.getItem("ego-spaces-token") || "";
+
 const profileLabel = ${profileLabel.toString()};
 const spacePriority = ${spacePriority.toString()};
 const compareSpaces = ${compareSpaces.toString()};
@@ -264,9 +271,14 @@ const compareSpaceGroups = ${compareSpaceGroups.toString()};
 const activityStatus = ${activityStatus.toString()};
 
 async function api(path, options) {
+  if (!daemonToken) throw new Error("missing Spaces access token");
   const response = await fetch(path, {
     ...options,
-    headers: { "content-type": "application/json" },
+    headers: {
+      ...options?.headers,
+      "content-type": "application/json",
+      "x-ego-daemon-token": daemonToken,
+    },
   });
   if (!response.ok) throw new Error(await response.text());
   return response.json();
@@ -567,9 +579,9 @@ function refresh() {
   return refreshInFlight;
 }
 
-// State-file writes and screencast frames wake the panel through EventSource.
+// State-file writes and screencast frames wake the panel through authenticated SSE.
 // A slow reconciliation remains for missed filesystem events, activity expiry,
-// and older browsers without EventSource support.
+// and stream reconnects.
 const FALLBACK_POLL_MS = 15000;
 let timer = null;
 
@@ -583,17 +595,46 @@ async function tick() {
   schedule();
 }
 
-if ("EventSource" in window) {
-  const events = new EventSource("/api/events");
-  events.addEventListener("refresh", () => {
-    if (!busy && !document.hidden) void refresh();
-  });
+async function watchEvents() {
+  while (daemonToken) {
+    try {
+      const response = await fetch("/api/events", {
+        headers: { "x-ego-daemon-token": daemonToken },
+        cache: "no-store",
+      });
+      if (!response.ok || !response.body) throw new Error("events unavailable");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let pending = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        pending += decoder.decode(value, { stream: true });
+        let boundary;
+        while ((boundary = pending.indexOf("\\n\\n")) >= 0) {
+          const event = pending.slice(0, boundary);
+          pending = pending.slice(boundary + 2);
+          if (/^event:\\s*refresh$/m.test(event) && !busy && !document.hidden) {
+            void refresh();
+          }
+        }
+      }
+    } catch {
+      // The daemon may be upgrading. Polling below remains the recovery path.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
 }
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && !busy) void refresh();
 });
 
-refresh().then(schedule);
+if (daemonToken) {
+  void watchEvents();
+  refresh().then(schedule);
+} else {
+  note.textContent = "Open Spaces through the Ego Lite launcher to authenticate this panel.";
+}
 </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 import { it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -14,8 +14,7 @@ const {
   browserLaunchEnvironment,
   browserStartupFlags,
   unsafeBrowserLaunchFlags,
-} =
-  await import("../src/chrome.mjs");
+} = await import("../src/chrome.mjs");
 const { browserDisplayFlags } = await import("../src/platform.mjs");
 
 it("does not inherit desktop activation into the managed browser", () => {
@@ -155,6 +154,14 @@ it(
         endpoints.every((endpoint) => endpoint.port > 0),
         "the browser uses a non-zero debugging port",
       );
+      if (process.platform !== "win32") {
+        const stateDir = join(env.XDG_STATE_HOME, "ego-lite-linux");
+        assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
+        assert.equal(
+          (await stat(join(stateDir, "browser.json"))).mode & 0o777,
+          0o600,
+        );
+      }
     } finally {
       await runNode(BIN, ["--stop"], env).catch(() => {});
       // Chrome helpers can still be flushing profile files after Browser.close.

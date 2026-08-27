@@ -118,6 +118,7 @@ Commands this port adds (upstream's app has no equivalent):
 
 | Command                               | What it does                                                         |
 | ------------------------------------- | -------------------------------------------------------------------- |
+| `ego-browser --doctor [--json]`       | inspect installation and runtime state without starting the browser  |
 | `ego-browser --status`                | connection state of the backing browser                              |
 | `ego-browser --open`                  | open the shared agent browser window                                 |
 | `ego-browser --spaces`                | open the Spaces overview panel                                       |
@@ -142,7 +143,21 @@ Cards use cached screencast frames and server-sent refresh events. A 15-second
 reconciliation poll remains only as a recovery path for missed filesystem events
 and activity expiry. The panel daemon publishes a hash of the runtime sources;
 running `--spaces` after an update shuts down an older matching daemon through a
-token-protected loopback endpoint and starts the current build.
+token-protected loopback endpoint and starts the current build. Every `/api/`
+route requires the same random daemon token. The launcher passes it to the panel
+in the URL fragment, which is omitted from the initial document request and the
+printed panel URL. The panel then sends it only in an API header and uses an
+authenticated fetch stream instead of headerless `EventSource`.
+
+Runtime control state is private even under a permissive shell umask:
+`~/.local/state/ego-lite-linux` is forced to mode `0700`, while `browser.json`,
+`task-spaces.json`, and `spaces-server.json` are forced to `0600`.
+
+Each CLI invocation also removes expired Ego-generated screenshots, failure
+artifacts, and download directories from the OS temp directory. The default TTL
+is 24 hours. Set `EGO_BROWSER_ARTIFACT_TTL_HOURS` to another non-negative number;
+`0` disables cleanup. Explicit screenshot paths, saved downloads, and custom
+failure-artifact directories are never included in this automatic sweep.
 
 Upstream draws this inside the browser's own chrome, replacing the tab strip.
 That is not reachable from outside a Chromium fork — Chrome 137 removed the

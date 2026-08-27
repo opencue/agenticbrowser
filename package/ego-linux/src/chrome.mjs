@@ -4,8 +4,9 @@ import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
-import { BROWSER_STATE_FILE, PROFILE_DIR, STATE_DIR } from "./paths.mjs";
+import { BROWSER_STATE_FILE, PROFILE_DIR } from "./paths.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
+import { writePrivateStateFile } from "./private-state.mjs";
 import {
   browserDisplayFlags,
   clearSingletonArtifacts,
@@ -155,8 +156,10 @@ async function readBrowserState() {
 }
 
 async function writeBrowserState(state) {
-  await mkdir(STATE_DIR, { recursive: true });
-  await writeFile(BROWSER_STATE_FILE, JSON.stringify(state, null, 2));
+  await writePrivateStateFile(
+    BROWSER_STATE_FILE,
+    JSON.stringify(state, null, 2),
+  );
 }
 
 function processFlagValue(argv, prefix) {

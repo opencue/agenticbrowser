@@ -81,8 +81,13 @@ describe("Spaces overview organization", () => {
     assert.doesNotThrow(() => new Function(script));
   });
 
-  it("uses server-sent updates with only a slow polling fallback", () => {
-    assert.match(SPACES_HTML, /new EventSource\("\/api\/events"\)/);
+  it("authenticates API calls and server-sent updates with the fragment token", () => {
+    assert.match(SPACES_HTML, /location\.hash\.slice\(1\)/);
+    assert.match(SPACES_HTML, /sessionStorage\.setItem\("ego-spaces-token"/);
+    assert.match(SPACES_HTML, /history\.replaceState/);
+    assert.match(SPACES_HTML, /fetch\("\/api\/events"/);
+    assert.match(SPACES_HTML, /"x-ego-daemon-token": daemonToken/);
+    assert.doesNotMatch(SPACES_HTML, /new EventSource/);
     assert.match(SPACES_HTML, /FALLBACK_POLL_MS = 15000/);
     assert.doesNotMatch(SPACES_HTML, /LIVE_POLL_MS|IDLE_POLL_MS/);
   });

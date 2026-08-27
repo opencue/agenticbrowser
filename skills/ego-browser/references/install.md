@@ -78,7 +78,7 @@ What it does:
 1. Checks Linux, Node ≥ 22, and a Linux-side Chrome/Chromium
 2. Runs `npm ci` + `npm run build` for `package/ego-browser`
 3. Symlinks `~/.local/bin/ego-browser` → `package/ego-linux/bin/ego-browser.mjs`
-4. Verifies that the installed command starts
+4. Runs `ego-browser --doctor` without starting or attaching to the browser
 5. Leaves the existing profile and Task Space state untouched
 
 Optional onboarding commands:
@@ -129,6 +129,7 @@ export EGO_LINUX_CHROME=/opt/google/chrome/chrome
 
 ```bash
 command -v ego-browser
+ego-browser --doctor
 ego-browser --status
 ego-browser --spaces
 ```
@@ -136,6 +137,17 @@ ego-browser --spaces
 `--spaces` opens the loopback Task Space dashboard. Normal agent navigation
 stays in background tabs; only dashboard Open, handoff, or `keep: true`
 completion explicitly presents a task page.
+
+The dashboard's complete `/api/` surface requires a random daemon token. The
+launcher passes it in a URL fragment so it is not sent in the initial document
+request, then the panel removes the fragment, keeps the token in per-tab session
+storage, and sends it only in an API header. Linux runtime state is also
+tightened to `0700` directories and `0600` files.
+
+Generated `/tmp/ego-browser-shot-*`, `/tmp/ego-browser-failure-*`, and
+`/tmp/ego-browser-downloads-*` artifacts expire automatically after 24 hours.
+Override the lifetime with `EGO_BROWSER_ARTIFACT_TTL_HOURS`; set it to `0` to
+disable cleanup. User-selected screenshot/download paths are never swept.
 
 If `command -v` fails, put `~/.local/bin` on `PATH` (see below) and retry.
 

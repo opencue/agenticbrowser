@@ -95,7 +95,7 @@ describe("the cursor survives a navigation", () => {
     );
   });
 
-  it("dismisses the overlay when the driving CLI process is done", async () => {
+  it("dismisses the overlay when explicitly requested", async () => {
     const cdp = fakeCdp();
     const cursor = createCursorApi(cdp, { listTabs });
 
@@ -111,6 +111,6 @@ describe("the cursor survives a navigation", () => {
 
     const last = renderedPayloads(cdp).at(-1);
     assert.equal(last?.visible, false, "the final render removes agent presence");
-    assert.equal(last?.read, null, "no reading sweep survives process exit");
+    assert.equal(last?.read, null, "no reading sweep survives dismissal");
   });
 });

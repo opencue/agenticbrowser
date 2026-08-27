@@ -40,7 +40,12 @@ test("the Spaces health handshake identifies its build and authenticates shutdow
   });
   const base = `http://127.0.0.1:${server.port}`;
   try {
-    const health = await fetch(`${base}/api/health`);
+    const refusedHealth = await fetch(`${base}/api/health`);
+    assert.equal(refusedHealth.status, 403);
+
+    const health = await fetch(`${base}/api/health`, {
+      headers: { "x-ego-daemon-token": "secret-under-test" },
+    });
     assert.deepEqual(await health.json(), {
       ok: true,
       buildId: "build-under-test",
@@ -48,6 +53,7 @@ test("the Spaces health handshake identifies its build and authenticates shutdow
 
     const eventsController = new AbortController();
     const events = await fetch(`${base}/api/events`, {
+      headers: { "x-ego-daemon-token": "secret-under-test" },
       signal: eventsController.signal,
     });
     assert.match(events.headers.get("content-type"), /^text\/event-stream/);

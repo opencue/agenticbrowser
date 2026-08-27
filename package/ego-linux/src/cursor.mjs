@@ -483,7 +483,7 @@ export function createCursorApi(cdp, { listTabs }) {
       return { done: true };
     },
 
-    /** Remove agent presence before the short-lived CLI process disconnects. */
+    /** Explicitly remove agent presence from the current page. */
     async dismiss() {
       if (!enabled) return { done: false, reason: "cursor disabled" };
       clearTimeout(releaseTimer);
@@ -494,9 +494,8 @@ export function createCursorApi(cdp, { listTabs }) {
       state.visible = false;
       schedule();
 
-      // The transport closes as soon as this resolves. Wait for the hidden
-      // payload to reach the page or the old badge will survive the process that
-      // created it and continue saying the departed agent is still reading.
+      // Wait for the hidden payload to reach the page before the caller closes
+      // its transport.
       const deadline = Date.now() + 500;
       while ((dirty || inFlight) && Date.now() < deadline) {
         await wait(5);

@@ -170,10 +170,10 @@ describe("ego-lite.iss", () => {
   });
 
   it("only launches flags the CLI actually has", () => {
-    // --doctor exists in the sibling host packages and not in this one; an
-    // installer whose finish-page checkbox errors out is a bad first minute.
+    // An installer whose finish-page checkbox errors out is a bad first minute.
     const supported = new Set([
       "--help",
+      "--doctor",
       "--status",
       "--stop",
       "--import-chrome-profile",

@@ -396,6 +396,18 @@ describe("ego-browser Linux port", () => {
     );
   });
 
+  it("keeps the last cursor visible between CLI processes", async () => {
+    const seeded = await runScript(join(HERE, "cursor-persist-seed.js"));
+    assert.match(seeded, /SEEDED: true/);
+
+    const resumed = await runScript(join(HERE, "cursor-persist-probe.js"));
+    assert.match(
+      resumed,
+      /AFTER RECONNECT: \{"present":true,"visible":true,"label":"Testbot · staying here"\}/,
+      "a fresh heredoc sees the cursor where the previous one left it",
+    );
+  });
+
   it("shares live non-cookie profile storage across task spaces", async () => {
     const out = await runScript(join(HERE, "storage.js"));
 

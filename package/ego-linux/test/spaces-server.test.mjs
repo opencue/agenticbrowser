@@ -9,6 +9,7 @@ import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
 const FIXTURE_URL = `file://${join(HERE, "fixture", "index.html")}`;
+const DAEMON_TOKEN = "spaces-server-test-token";
 
 // Its own profile and state dir, for the reason port.test.mjs has one: `npm test`
 // must not hijack — and on teardown kill — the browser a real session is driving.
@@ -22,14 +23,22 @@ const { createEgoShim } = await import("../src/shim.mjs");
 const { startSpacesServer } = await import("../src/spaces-server.mjs");
 
 const shim = await createEgoShim({ headless: true });
-const server = await startSpacesServer(shim);
+const server = await startSpacesServer(shim, {
+  shutdownToken: DAEMON_TOKEN,
+});
 const BASE = `http://127.0.0.1:${server.port}`;
 
 /** The panel's own window is 1280 wide; an active card is cropped to 16/10. */
 const FOLLOW_CROP = { width: 760, height: 475 };
 
 async function api(path, options) {
-  const response = await fetch(BASE + path, options);
+  const response = await fetch(BASE + path, {
+    ...options,
+    headers: {
+      ...options?.headers,
+      "x-ego-daemon-token": DAEMON_TOKEN,
+    },
+  });
   return { status: response.status, body: await response.json() };
 }
 
@@ -176,6 +185,16 @@ after(async () => {
 });
 
 describe("Spaces overview server", () => {
+  it("refuses every API route without the daemon token", async () => {
+    for (const path of ["/api/health", "/api/spaces", "/api/events"]) {
+      const response = await fetch(BASE + path);
+      assert.equal(response.status, 403, path);
+      assert.deepEqual(await response.json(), {
+        error: "invalid daemon token",
+      });
+    }
+  });
+
   it("answers a health probe, which is how the CLI finds a live daemon", async () => {
     const { status, body } = await api("/api/health");
     assert.equal(status, 200);
@@ -208,7 +227,8 @@ describe("Spaces overview server", () => {
   it("reports what an agent is doing, and where on the card it is working", async () => {
     const releaseFile = join(SANDBOX, "release-busy-space");
     await rm(releaseFile, { force: true });
-    const running = runScript(`
+    const running = runScript(
+      `
       await taskSpaces.useOrCreate("busy space");
       await page.goto(process.env.FIXTURE_URL);
       await page.waitForLoadState();
@@ -223,7 +243,9 @@ describe("Spaces overview server", () => {
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
       }
-    `, { env: { RELEASE_FILE: releaseFile } });
+    `,
+      { env: { RELEASE_FILE: releaseFile } },
+    );
 
     try {
       const space = await waitForActiveSpace("busy space", "counting clicks");
@@ -256,12 +278,18 @@ describe("Spaces overview server", () => {
 
       if (space.thumbnail) {
         const size = jpegSize(space.thumbnail);
-        assert.ok(size && size.width > 0 && size.height > 0, "a frame is served");
+        assert.ok(
+          size && size.width > 0 && size.height > 0,
+          "a frame is served",
+        );
       }
 
       // The trail travels the same way and outlives the activity window, so a
       // space that has gone quiet still says what it did.
-      assert.ok(space.trail?.length, "the card carries a trail of what happened");
+      assert.ok(
+        space.trail?.length,
+        "the card carries a trail of what happened",
+      );
       assert.match(space.trail[0].text, /^clicked /, "newest first");
       assert.ok(space.trail[0].ageMs >= 0, "aged, not timestamped");
     } finally {
@@ -274,9 +302,14 @@ describe("Spaces overview server", () => {
       (candidate) => candidate.name === "busy space",
     );
     assert.equal(
-      stopped?.activity,
-      null,
-      "the card stops reporting activity when the driving process exits",
+      stopped?.activity?.name,
+      "Testbot",
+      "the card keeps the last agent visible between CLI processes",
+    );
+    assert.equal(stopped?.activity?.label, "counting clicks");
+    assert.ok(
+      stopped.activity.ageMs >= 0 && stopped.activity.ageMs < 30000,
+      "the retained activity still ages out through the normal activity window",
     );
   });
 
@@ -348,73 +381,79 @@ describe("Spaces overview server", () => {
 
   it("keeps a recent cursor visible while a stalled screenshot is isolated", async () => {
     const calls = [];
-    const stalledServer = await startSpacesServer({
-      ego: {
-        async listTaskSpaces() {
-          return {
-            taskSpaces: [
-              {
-                id: 1,
-                name: "stalled card",
-                ownership: "agent",
-                targetIds: ["t-stalled"],
-              },
-            ],
-          };
-        },
-      },
-      cdp: {
-        onShimEvent() {},
-        claimSession() {},
-        releaseSession() {},
-        async call(method) {
-          calls.push(method);
-          if (method === "Target.getTargets") {
+    const stalledServer = await startSpacesServer(
+      {
+        ego: {
+          async listTaskSpaces() {
             return {
-              targetInfos: [
+              taskSpaces: [
                 {
-                  type: "page",
-                  targetId: "t-stalled",
-                  title: "Stalled",
-                  url: "https://example.com",
+                  id: 1,
+                  name: "stalled card",
+                  ownership: "agent",
+                  targetIds: ["t-stalled"],
                 },
               ],
             };
-          }
-          if (method === "Target.attachToTarget") {
-            const attaches = calls.filter(
-              (candidate) => candidate === "Target.attachToTarget",
-            ).length;
-            return { sessionId: `s-${attaches}` };
-          }
-          if (method === "Page.captureScreenshot") {
-            return new Promise(() => {});
-          }
-          if (method === "Runtime.evaluate") {
-            return {
-              result: {
-                value: {
-                  name: "Testbot",
-                  label: "still responsive",
-                  ageMs: 45_000,
-                  x: 10,
-                  y: 10,
-                  viewportWidth: 100,
-                  viewportHeight: 100,
-                  trail: [],
+          },
+        },
+        cdp: {
+          onShimEvent() {},
+          claimSession() {},
+          releaseSession() {},
+          async call(method) {
+            calls.push(method);
+            if (method === "Target.getTargets") {
+              return {
+                targetInfos: [
+                  {
+                    type: "page",
+                    targetId: "t-stalled",
+                    title: "Stalled",
+                    url: "https://example.com",
+                  },
+                ],
+              };
+            }
+            if (method === "Target.attachToTarget") {
+              const attaches = calls.filter(
+                (candidate) => candidate === "Target.attachToTarget",
+              ).length;
+              return { sessionId: `s-${attaches}` };
+            }
+            if (method === "Page.captureScreenshot") {
+              return new Promise(() => {});
+            }
+            if (method === "Runtime.evaluate") {
+              return {
+                result: {
+                  value: {
+                    name: "Testbot",
+                    label: "still responsive",
+                    ageMs: 45_000,
+                    x: 10,
+                    y: 10,
+                    viewportWidth: 100,
+                    viewportHeight: 100,
+                    trail: [],
+                  },
                 },
-              },
-            };
-          }
-          return {};
+              };
+            }
+            return {};
+          },
         },
       },
-    });
+      { shutdownToken: DAEMON_TOKEN },
+    );
 
     try {
       const response = await fetch(
         `http://127.0.0.1:${stalledServer.port}/api/spaces`,
-        { signal: AbortSignal.timeout(2500) },
+        {
+          headers: { "x-ego-daemon-token": DAEMON_TOKEN },
+          signal: AbortSignal.timeout(2500),
+        },
       );
       assert.equal(response.status, 200);
       const body = await response.json();
@@ -441,21 +480,27 @@ describe("Spaces overview server", () => {
   });
 
   it("returns a structured 500 when a browser operation fails", async () => {
-    const failingServer = await startSpacesServer({
-      ...shim,
-      ego: {
-        ...shim.ego,
-        async createTaskSpace() {
-          throw new Error("internal browser detail");
+    const failingServer = await startSpacesServer(
+      {
+        ...shim,
+        ego: {
+          ...shim.ego,
+          async createTaskSpace() {
+            throw new Error("internal browser detail");
+          },
         },
       },
-    });
+      { shutdownToken: DAEMON_TOKEN },
+    );
     try {
       const response = await fetch(
         `http://127.0.0.1:${failingServer.port}/api/spaces`,
         {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          headers: {
+            "content-type": "application/json",
+            "x-ego-daemon-token": DAEMON_TOKEN,
+          },
           body: JSON.stringify({ name: "will fail" }),
           signal: AbortSignal.timeout(1000),
         },

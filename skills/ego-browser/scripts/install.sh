@@ -72,7 +72,8 @@ case ":$PATH:" in
 *) log "warning: $BIN_DIR is not on PATH. Add it, or run: export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
 
-"$LINK_PATH" --help >/dev/null 2>&1 || die "installed $LINK_PATH but it failed to run"
+log "Running installation diagnostics ..."
+"$LINK_PATH" --doctor || die "installed $LINK_PATH but its diagnostics failed"
 
 log ""
 log "ego-browser is installed. Optional next steps (both touch user data, so they are not automatic):"
