@@ -195,7 +195,7 @@ the desktop and icon caches. On Windows it writes
 shell's own COM object, which is the only supported way to produce a valid
 `.lnk` without a native dependency, and points it at `assets/ego-lite.ico`.
 
-Launching either runs `--open`, which brings up the shared agent browser window.
+Launching either runs `--spaces`, which opens the Spaces overview panel.
 The icon is upstream's mark with a badge, so a port window is never mistaken for
 an upstream build.
 

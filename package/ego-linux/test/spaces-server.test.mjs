@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+import { APP_DIR, terminateProcess } from "../src/platform.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
 const FIXTURE_URL = `file://${join(HERE, "fixture", "index.html")}`;
@@ -102,6 +104,32 @@ async function visibilityState(targetId) {
   }
 }
 
+/**
+ * Wait for a space, or for the agent script to die trying.
+ *
+ * Racing the two matters more than it looks. The script runs in another
+ * process, and when it fails the space simply never appears -- so waiting alone
+ * reports "timed out waiting for space", which says nothing about why, and the
+ * child's own error is never read because the timeout throws first. On Windows
+ * that cost a full CI round: the real error was in the child, and the log had
+ * only the timeout.
+ */
+async function waitForSpaceOrFailure(name, running, timeoutMs) {
+  const died = running.then(
+    (output) => {
+      throw new Error(
+        `the agent script exited before the space appeared:\n${output}`,
+      );
+    },
+    (error) => {
+      throw error;
+    },
+  );
+  // The race may settle on the space instead, leaving this rejection unclaimed.
+  died.catch(() => {});
+  return Promise.race([waitForSpace(name, timeoutMs), died]);
+}
+
 async function waitForSpace(name, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -160,16 +188,21 @@ function jpegSize(dataUri) {
 }
 
 after(async () => {
+  // close() stops new connections but waits on live ones, and the panel holds a
+  // keep-alive connection for its screencast. Without this the server handle
+  // outlives the suite and node never exits.
+  server.closeAllConnections?.();
   server.close();
   shim.close();
   try {
     const state = JSON.parse(
-      await readFile(
-        join(SANDBOX, "state", "ego-lite-linux", "browser.json"),
-        "utf8",
-      ),
+      await readFile(join(SANDBOX, "state", APP_DIR, "browser.json"), "utf8"),
     );
-    if (state.pid) process.kill(state.pid, "SIGTERM");
+    // Not process.kill: on Windows that terminates only the browser process,
+    // and Chrome's renderer and GPU children survive holding the profile
+    // directory open -- which is what left four orphan chrome processes and a
+    // node that would not exit behind the first Windows CI run.
+    if (state.pid) await terminateProcess(state.pid);
   } catch {
     // nothing running
   }
@@ -588,7 +621,7 @@ describe("Spaces overview server", () => {
         await new Promise((resolve) => setTimeout(resolve, 1200));
       `);
 
-      space = await waitForSpace(name);
+      space = await waitForSpaceOrFailure(name, running);
       const taskId = space.id;
       const { taskSpaces } = await shim.ego.listTaskSpaces();
       const target = taskSpaces.find((candidate) => candidate.id === taskId);

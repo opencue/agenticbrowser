@@ -15,7 +15,7 @@ const {
   browserStartupFlags,
   unsafeBrowserLaunchFlags,
 } = await import("../src/chrome.mjs");
-const { browserDisplayFlags } = await import("../src/platform.mjs");
+const { APP_DIR, browserDisplayFlags } = await import("../src/platform.mjs");
 
 it("does not inherit desktop activation into the managed browser", () => {
   const env = browserLaunchEnvironment({
@@ -155,7 +155,7 @@ it(
         "the browser uses a non-zero debugging port",
       );
       if (process.platform !== "win32") {
-        const stateDir = join(env.XDG_STATE_HOME, "ego-lite-linux");
+        const stateDir = join(env.XDG_STATE_HOME, APP_DIR);
         assert.equal((await stat(stateDir)).mode & 0o777, 0o700);
         assert.equal(
           (await stat(join(stateDir, "browser.json"))).mode & 0o777,

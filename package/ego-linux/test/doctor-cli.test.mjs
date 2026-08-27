@@ -6,6 +6,8 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import { APP_DIR } from "../src/platform.mjs";
+
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BIN = join(HERE, "..", "bin", "ego-browser.mjs");
 
@@ -34,7 +36,7 @@ function runCli(args, env) {
 test("--doctor --json reports diagnostics without starting or attaching to Chrome", async () => {
   const sandbox = await mkdtemp(join(tmpdir(), "ego-doctor-test-"));
   const stateRoot = join(sandbox, "state");
-  const browserState = join(stateRoot, "ego-lite-linux", "browser.json");
+  const browserState = join(stateRoot, APP_DIR, "browser.json");
 
   try {
     const result = await runCli(["--doctor", "--json"], {

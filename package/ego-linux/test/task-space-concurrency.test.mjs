@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { APP_DIR } from "../src/platform.mjs";
+
 const SANDBOX = await mkdtemp(join(tmpdir(), "ego-state-race-test-"));
 process.env.XDG_STATE_HOME = join(SANDBOX, "state");
 process.env.EGO_LINUX_SPACE_IDLE_MIN = "0";
@@ -76,7 +78,7 @@ describe("task-space state transactions", () => {
       Array.from({ length: 50 }, (_, index) => runWorker(index, stateHome)),
     );
 
-    const file = join(stateHome, "ego-lite-linux", "task-spaces.json");
+    const file = join(stateHome, APP_DIR, "task-spaces.json");
     const state = JSON.parse(await readFile(file, "utf8"));
     assert.equal(state.spaces.length, 50);
     assert.equal(new Set(state.spaces.map((space) => space.id)).size, 50);
