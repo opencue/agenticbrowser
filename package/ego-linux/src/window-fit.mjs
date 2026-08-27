@@ -25,7 +25,7 @@ const MIN_WIDTH = 360;
 /** At or above this the emulation is desktop-shaped; the window goes back. */
 const DESKTOP_WIDTH = 1000;
 
-export function createWindowFit(cdp) {
+export function createWindowFit(cdp, { enabled = false } = {}) {
   let applied = null;
   // The size the window had before the first shrink, so leaving a phone
   // viewport can put it back. Without this the window stays phone-shaped for
@@ -60,6 +60,11 @@ export function createWindowFit(cdp) {
      * @param {string|null} targetId The tab the emulation applies to.
      */
     async follow(metrics, targetId) {
+      // Resizing a real top-level Chrome window is not a background operation:
+      // several Linux window managers raise it when Browser.setWindowBounds
+      // changes its size or normalizes its state. Keep this strictly opt-in so
+      // device emulation cannot interrupt whichever application the user is in.
+      if (!enabled) return;
       if (!targetId) return;
       const width = Number(metrics?.width);
       const height = Number(metrics?.height);

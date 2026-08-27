@@ -25,10 +25,26 @@ function fakeCdp() {
   };
 }
 
+const enabledWindowFit = (cdp) => createWindowFit(cdp, { enabled: true });
+
 describe("createWindowFit", () => {
-  it("shrinks the window to a phone viewport", async () => {
+  it("does not touch the desktop window during background automation", async () => {
     const cdp = fakeCdp();
     await createWindowFit(cdp).follow(
+      { width: 390, height: 844, mobile: true },
+      "T1",
+    );
+
+    assert.equal(
+      cdp.calls.length,
+      0,
+      "a background mobile viewport must not resize or restore the real window",
+    );
+  });
+
+  it("shrinks the window to a phone viewport", async () => {
+    const cdp = fakeCdp();
+    await enabledWindowFit(cdp).follow(
       { width: 390, height: 844, mobile: true },
       "T1",
     );
@@ -48,20 +64,20 @@ describe("createWindowFit", () => {
 
   it("leaves a desktop-sized emulation alone", async () => {
     const cdp = fakeCdp();
-    await createWindowFit(cdp).follow({ width: 1280, height: 800 }, "T1");
+    await enabledWindowFit(cdp).follow({ width: 1280, height: 800 }, "T1");
     assert.equal(cdp.bounds(), null, "the window is already that size");
   });
 
   it("does nothing for a cleared override it never shrank", async () => {
     const cdp = fakeCdp();
     // clearDeviceMetricsOverride arrives as a 0x0 set on some paths.
-    await createWindowFit(cdp).follow({ width: 0, height: 0 }, "T1");
+    await enabledWindowFit(cdp).follow({ width: 0, height: 0 }, "T1");
     assert.equal(cdp.bounds(), null, "there is no earlier size to go back to");
   });
 
   it("puts the window back when the emulation is cleared", async () => {
     const cdp = fakeCdp();
-    const fit = createWindowFit(cdp);
+    const fit = enabledWindowFit(cdp);
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 0, height: 0 }, "T1");
 
@@ -79,7 +95,7 @@ describe("createWindowFit", () => {
 
   it("puts the window back when emulation returns to desktop", async () => {
     const cdp = fakeCdp();
-    const fit = createWindowFit(cdp);
+    const fit = enabledWindowFit(cdp);
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 1280, height: 800 }, "T1");
 
@@ -110,7 +126,7 @@ describe("createWindowFit", () => {
         return {};
       },
     };
-    const fit = createWindowFit(flaky);
+    const fit = enabledWindowFit(flaky);
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 390, height: 844 }, "T1");
 
@@ -124,19 +140,19 @@ describe("createWindowFit", () => {
 
   it("refuses a sliver Chrome would clamp anyway", async () => {
     const cdp = fakeCdp();
-    await createWindowFit(cdp).follow({ width: 120, height: 600 }, "T1");
+    await enabledWindowFit(cdp).follow({ width: 120, height: 600 }, "T1");
     assert.equal(cdp.bounds(), null, "too narrow to be worth following");
   });
 
   it("does not resize without a tab to resize", async () => {
     const cdp = fakeCdp();
-    await createWindowFit(cdp).follow({ width: 390, height: 844 }, null);
+    await enabledWindowFit(cdp).follow({ width: 390, height: 844 }, null);
     assert.equal(cdp.calls.length, 0, "nothing to act on");
   });
 
   it("resizes once for a repeated emulation", async () => {
     const cdp = fakeCdp();
-    const fit = createWindowFit(cdp);
+    const fit = enabledWindowFit(cdp);
     await fit.follow({ width: 390, height: 844 }, "T1");
     await fit.follow({ width: 390, height: 844 }, "T1");
 
@@ -153,7 +169,7 @@ describe("createWindowFit", () => {
       },
     };
     await assert.doesNotReject(
-      createWindowFit(angry).follow({ width: 390, height: 844 }, "T1"),
+      enabledWindowFit(angry).follow({ width: 390, height: 844 }, "T1"),
       "resizing is cosmetic; an automation step must not fail on it",
     );
   });

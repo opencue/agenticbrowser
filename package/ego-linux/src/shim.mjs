@@ -77,9 +77,12 @@ export async function createEgoShim({ headless = false } = {}) {
 
   // A space that has ever loaded a real page is never "opened and never used",
   // however blank its tab looks between navigations.
-  // A phone-width emulation in a desktop-width window shows a strip of site
-  // beside a band of empty chrome; the window follows the viewport instead.
-  const windowFit = createWindowFit(cdp);
+  // Top-level window resizing can raise Chrome on Linux, so ordinary background
+  // automation never follows emulated viewport sizes. Keep the old cosmetic
+  // behavior available only as an explicit desktop preference.
+  const windowFit = createWindowFit(cdp, {
+    enabled: process.env.EGO_LINUX_FOLLOW_VIEWPORT === "1",
+  });
   cdp.watchViewport((metrics) => {
     void windowFit.follow(metrics, cdp.attachedHint()).catch(() => {});
   });
