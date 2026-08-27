@@ -746,6 +746,30 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<object>",
     example: "await taskSpaces.handOff(task.id)",
   },
+  "taskSpaces.loginPreflight": {
+    signature:
+      "taskSpaces.loginPreflight(nameOrId, options?) => Promise<object>",
+    description:
+      "Wait briefly for password-manager autofill, return only booleans/counts, and submit a uniquely identifiable ready login form without focusing the browser.",
+    params: [
+      {
+        name: "nameOrId",
+        type: "string | number",
+        required: true,
+        description: "Agent-controlled task space name, taskId, or numeric id.",
+      },
+      {
+        name: "options",
+        type: "{ waitForAutofill?: number, interval?: number, submit?: boolean | string }",
+        description:
+          "Seconds to wait/poll; submit false only inspects, a string selects an explicit CSS submit target.",
+      },
+    ],
+    returns:
+      "Promise<{ detected: boolean, ready: boolean, needsUser: boolean, fieldCount: number, filledCount: number, submitted: boolean }>",
+    example:
+      "const login = await taskSpaces.loginPreflight(task.id); if (login.needsUser) { /* request user action */ }",
+  },
   "taskSpaces.takeOver": {
     signature: "taskSpaces.takeOver(nameOrId?) => Promise<object>",
     description:

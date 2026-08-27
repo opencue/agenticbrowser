@@ -26,6 +26,80 @@ jobs:
       - run: npm test
       - run: npm run validate:site-skills
 
+  test-host:
+    name: Test Chromium host (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      - name: Build the ego-browser harness
+        working-directory: package/ego-browser
+        run: npm ci && npm run build
+      - name: Resolve the installed Chromium-family browser
+        working-directory: package/ego-linux
+        run: node -e "import('./src/platform.mjs').then(p => p.resolveBrowserBinary()).then(console.log)"
+      - name: Test the host runtime
+        working-directory: package/ego-linux
+        run: npm test
+
+  build-windows-installer:
+    runs-on: windows-latest
+    needs: test-host
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: package/ego-browser/package-lock.json
+      - name: Build the harness
+        working-directory: package/ego-browser
+        run: npm ci && npm run build
+      - name: Fetch the Node runtime to bundle
+        shell: pwsh
+        run: |
+          $version = (node --version)
+          $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile node.zip
+          Expand-Archive node.zip -DestinationPath node-dist
+          Copy-Item "node-dist\node-$version-win-x64\node.exe" node.exe
+          .\node.exe --version
+      - name: Stage the installer payload
+        working-directory: package/ego-linux
+        run: node installer/stage.mjs --node ${{ github.workspace }}\node.exe
+      - name: Compile the installer
+        working-directory: package/ego-linux
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "no ISCC.exe at $iscc" }
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          & $iscc /DAppVersion=$version installer\ego-lite.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed with $LASTEXITCODE" }
+      - name: Check and upload the installer
+        shell: pwsh
+        run: |
+          $exe = Get-Item package\ego-linux\installer\dist\ego-lite-setup.exe
+          if ($exe.Length -lt 15MB) { throw "installer is too small to contain the Node runtime" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ego-lite-setup
+          path: package/ego-linux/installer/dist/ego-lite-setup.exe
+          if-no-files-found: error
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: test

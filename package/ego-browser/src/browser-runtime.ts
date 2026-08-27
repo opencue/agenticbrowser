@@ -113,13 +113,27 @@ export async function ensureSession() {
   }
   state.sessionInflight = (async () => {
     try {
-      const result = assertNoEgoError(await browserEgo().listTabs());
+      const ego = browserEgo();
+      const result = assertNoEgoError(await ego.listTabs());
       const tabs = result?.tabs || result?.targetInfos || [];
       const preferred = state.preferredTargetId
         ? tabs.find((t) => t.targetId === state.preferredTargetId)
         : null;
-      const active =
+      let active =
         preferred || tabs.find((t) => t.active) || tabs[tabs.length - 1];
+      if (!active && typeof ego.createTab === "function") {
+        const created = assertNoEgoError(
+          await ego.createTab("about:blank"),
+          "createTab",
+        );
+        if (created?.targetId) {
+          active = {
+            targetId: created.targetId,
+            url: "about:blank",
+            active: true,
+          };
+        }
+      }
       if (!active) {
         throw new Error("no active tab to attach session");
       }

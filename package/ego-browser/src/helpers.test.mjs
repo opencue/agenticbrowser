@@ -10,6 +10,7 @@ import {
   newTaskSpace,
   helperContext,
   listTaskSpaces,
+  loginPreflightTaskSpace,
   useOrCreateTaskSpace,
   switchTaskSpace,
   waitForAgentControl,
@@ -205,6 +206,7 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal(typeof context.browser.closeTab, "function");
   assert.equal(typeof context.taskSpaces.useOrCreate, "function");
   assert.equal(typeof context.taskSpaces.claim, "function");
+  assert.equal(typeof context.taskSpaces.loginPreflight, "function");
   assert.equal(typeof context.site.runTool, "function");
   assert.equal(typeof context.fetch.server, "function");
   assert.equal(typeof context.fetch.browser, "function");
@@ -222,6 +224,54 @@ test("helper surface exposes Playwright-style object facades", () => {
   assert.equal("newTab" in context, false);
   assert.equal("elementEval" in helperExports, false);
   assert.equal("elementEval" in context, false);
+});
+
+test("loginPreflightTaskSpace waits for autofill and submits without exposing values", async () => {
+  const evaluations = [
+    { detected: true, ready: false, fieldCount: 2, filledCount: 1 },
+    { detected: true, ready: true, fieldCount: 2, filledCount: 2 },
+    true,
+  ];
+  const restore = setOverrides({
+    cdpOverride: async (method) => {
+      assert.equal(method, "Runtime.evaluate");
+      return { result: { value: evaluations.shift() } };
+    },
+  });
+  try {
+    await withEgo(
+      {
+        async listTaskSpaces() {
+          return {
+            taskSpaces: [
+              { taskId: "login", id: 9, name: "login", ownership: "agent" },
+            ],
+          };
+        },
+        async useTaskSpace() {
+          return { done: true };
+        },
+      },
+      async () => {
+        assert.deepEqual(
+          await loginPreflightTaskSpace("login", {
+            waitForAutofill: 0.05,
+            interval: 0.001,
+          }),
+          {
+            detected: true,
+            ready: true,
+            needsUser: false,
+            fieldCount: 2,
+            filledCount: 2,
+            submitted: true,
+          },
+        );
+      },
+    );
+  } finally {
+    restore();
+  }
 });
 
 test("page.url reads the current URL asynchronously", async () => {

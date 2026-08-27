@@ -29,7 +29,9 @@ https://github.com/user-attachments/assets/ffe7954b-58ee-411e-b35d-ec30c58a08bc
 
 ## Quick Start
 
-ego lite runs on macOS today. Windows and Linux are on the [roadmap](https://lite.ego.app/roadmap).
+The native ego lite app runs on macOS. This repository also includes a
+source-based Linux and Windows host in [`package/ego-linux`](package/ego-linux/README.md)
+that runs the same `ego-browser` harness against a stock Chromium-family browser.
 
 ### 1. Install
 
@@ -63,6 +65,19 @@ Read `skills/ego-browser/references/install.md` and follow the steps to install 
 ```
 
 On first launch, ego lite asks one question, whether to migrate your Chrome data. Say yes and your agent inherits your existing logins, cookies, extensions, and bookmarks.
+
+**1.4 Linux source port**
+
+From a checkout, with Node.js 22+ and Chrome/Chromium installed:
+
+```bash
+sh skills/ego-browser/scripts/install.sh
+ego-browser --doctor
+```
+
+The port keeps its own persistent browser profile and Task Spaces. It is a stock
+Chromium window rather than the native macOS app shell; see the package README
+for headed/headless operation, the Spaces dashboard, and Windows packaging.
 
 ### 2. Run your first task
 

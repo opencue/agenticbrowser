@@ -100,6 +100,12 @@ export { setInputFiles } from "./driver/files.js";
 export { startScreencast, stopScreencast } from "./driver/screencast.js";
 export { browserFetch, serverFetch } from "./http.js";
 
+type LoginPreflightOptions = {
+  waitForAutofill?: number;
+  interval?: number;
+  submit?: boolean | string;
+};
+
 /**
  * List all task spaces.
  * @returns {Promise<Array<{taskId:string,id:number,name:string,createdBy?:string,ownership?:string,recentTabTitles?:string[]}>>}
@@ -337,6 +343,170 @@ export async function handOffTaskSpace(nameOrId?: string | number) {
   }
   assertNoEgoError(await ego.handOffTaskSpace(), "handOffTaskSpace");
   return { done: true };
+}
+
+/**
+ * Inspect a login form without returning credential values. Waits briefly for
+ * password-manager autofill, then submits a uniquely identifiable login form
+ * when every visible credential field is populated.
+ * @param {string|number} nameOrId Task space id or name.
+ * @param {LoginPreflightOptions} [options] Autofill wait/poll seconds and optional submit selector or false to inspect only.
+ * @returns {Promise<{detected:boolean,ready:boolean,needsUser:boolean,fieldCount:number,filledCount:number,submitted:boolean}>}
+ */
+export async function loginPreflightTaskSpace(
+  nameOrId: string | number,
+  options: LoginPreflightOptions = {},
+) {
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("loginPreflightTaskSpace options must be an object");
+  }
+  const waitForAutofill = options.waitForAutofill ?? 1.5;
+  const interval = options.interval ?? 0.1;
+  if (!Number.isFinite(waitForAutofill) || waitForAutofill < 0) {
+    throw new Error(
+      "loginPreflightTaskSpace waitForAutofill must be non-negative",
+    );
+  }
+  if (!Number.isFinite(interval) || interval <= 0) {
+    throw new Error("loginPreflightTaskSpace interval must be positive");
+  }
+  if (
+    options.submit !== undefined &&
+    typeof options.submit !== "boolean" &&
+    typeof options.submit !== "string"
+  ) {
+    throw new Error(
+      "loginPreflightTaskSpace submit must be boolean or a CSS selector",
+    );
+  }
+  const ego = globalThis.ego;
+  if (!ego || typeof ego.useTaskSpace !== "function") {
+    throw new Error("loginPreflightTaskSpace requires ego.useTaskSpace");
+  }
+  const match = await findTaskSpace(nameOrId);
+  if (!isAgentOwned(match.ownership)) {
+    throw new Error(
+      `loginPreflightTaskSpace requires agent control, got ownership ${JSON.stringify(match.ownership)}`,
+    );
+  }
+  await selectTaskSpace(ego, match, "loginPreflightTaskSpace");
+
+  const deadline = Date.now() + waitForAutofill * 1000;
+  let loginState: any;
+  while (true) {
+    loginState = await evaluate(inspectLoginPage);
+    if (!loginState?.detected || loginState.ready || Date.now() >= deadline) {
+      break;
+    }
+    await waits.waitForTimeout(interval * 1000);
+  }
+  const detected = loginState?.detected === true;
+  const ready = loginState?.ready === true;
+  const fieldCount = Number(loginState?.fieldCount) || 0;
+  const filledCount = Number(loginState?.filledCount) || 0;
+  let submitted = false;
+  if (ready && options.submit !== false) {
+    const selector =
+      typeof options.submit === "string" ? options.submit.trim() : "";
+    submitted = (await evaluate(submitReadyLogin, selector || null)) === true;
+  }
+  return {
+    detected,
+    ready,
+    needsUser: detected && !ready,
+    fieldCount,
+    filledCount,
+    submitted,
+  };
+}
+
+function inspectLoginPage() {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      !element.disabled &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  const inputs = Array.from(document.querySelectorAll("input")).filter(visible);
+  const anchors = inputs.filter((input) => {
+    const autocomplete = String(input.autocomplete || "").toLowerCase();
+    return (
+      input.type === "password" ||
+      autocomplete === "current-password" ||
+      autocomplete === "one-time-code"
+    );
+  });
+  if (anchors.length === 0) {
+    return { detected: false, ready: false, fieldCount: 0, filledCount: 0 };
+  }
+  const form = anchors[0].form;
+  const fields = inputs.filter((input) => {
+    if (form && input.form !== form) return false;
+    const autocomplete = String(input.autocomplete || "").toLowerCase();
+    const identity = `${input.name || ""} ${input.id || ""}`.toLowerCase();
+    return (
+      anchors.includes(input) ||
+      input.type === "email" ||
+      autocomplete === "username" ||
+      autocomplete === "email" ||
+      (/user|email|login/.test(identity) && input.type !== "hidden")
+    );
+  });
+  const filledCount = fields.filter(
+    (input) => String(input.value || "").length > 0,
+  ).length;
+  return {
+    detected: true,
+    ready: fields.length > 0 && filledCount === fields.length,
+    fieldCount: fields.length,
+    filledCount,
+  };
+}
+
+function submitReadyLogin(selector) {
+  const visible = (element) => {
+    const style = getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return (
+      !element.disabled &&
+      style.display !== "none" &&
+      style.visibility !== "hidden" &&
+      rect.width > 0 &&
+      rect.height > 0
+    );
+  };
+  if (selector) {
+    const explicit = document.querySelector(selector);
+    if (!explicit || !visible(explicit)) return false;
+    (explicit as HTMLElement).click();
+    return true;
+  }
+  const anchor = Array.from(document.querySelectorAll("input")).find(
+    (input) => {
+      const autocomplete = String(input.autocomplete || "").toLowerCase();
+      return (
+        visible(input) &&
+        (input.type === "password" ||
+          autocomplete === "current-password" ||
+          autocomplete === "one-time-code")
+      );
+    },
+  );
+  if (!anchor) return false;
+  const root = anchor.form || document;
+  const submits = Array.from(
+    root.querySelectorAll(
+      'button[type="submit"],input[type="submit"],button:not([type])',
+    ),
+  ).filter(visible);
+  if (submits.length !== 1) return false;
+  (submits[0] as HTMLElement).click();
+  return true;
 }
 
 /**
@@ -791,6 +961,7 @@ function createTaskSpacesFacade() {
     claim: claimTaskSpace,
     complete: completeTaskSpace,
     handOff: handOffTaskSpace,
+    loginPreflight: loginPreflightTaskSpace,
     takeOver: takeOverTaskSpace,
     waitForAgentControl,
   };
@@ -813,7 +984,7 @@ const FACADE_HELP: Record<string, string> = {
   browser:
     "browser: tab facade. Use browser.listTabs(), browser.currentTab(), browser.switchTab(target), browser.openOrReuseTab(url, options), and browser.closeTab(target). Treat targetId as short-lived: obtain and validate it in the current script; switchTab/closeTab refresh the tab list before acting.",
   taskSpaces:
-    "taskSpaces: task-space facade. Use taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
+    "taskSpaces: task-space facade. Use taskSpaces.loginPreflight(nameOrId, options) before login handoff, or taskSpaces.useOrCreate(nameOrId), taskSpaces.claim(nameOrId), taskSpaces.switch(nameOrId), taskSpaces.complete(nameOrId, options), taskSpaces.handOff(nameOrId), taskSpaces.takeOver(nameOrId), and taskSpaces.waitForAgentControl(nameOrId, options).",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

@@ -1,0 +1,4 @@
+# Assembled by installer/stage.mjs; rebuilt on every installer build.
+installer/payload/
+# Where ISCC writes ego-lite-setup.exe.
+installer/dist/

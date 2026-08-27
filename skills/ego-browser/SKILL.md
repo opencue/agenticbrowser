@@ -129,7 +129,7 @@ EOF
 - `page`: navigation and state (`goto`, `reload`, `url`, `title`, `info`), semantic locators, waits, `snapshot`, `screenshot`, `screencast`, `evaluate`, `keyboard`, `mouse`, downloads, and event draining.
 - `page.locator(selector)`: chaining and filtering; `first` / `nth` / `last`; click, hover, `dragTo`, `scrollIntoViewIfNeeded`, form, keyboard, upload, state-read, collection, element-evaluate, screenshot, and wait methods.
 - `browser`: `listTabs`, `currentTab`, `switchTab`, `openOrReuseTab`, `closeTab`, `ensureRealTab`, `iframeTarget`.
-- `taskSpaces`: `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `takeOver`, `waitForAgentControl`.
+- `taskSpaces`: `list`, `switch`, `new`, `useOrCreate`, `claim`, `complete`, `handOff`, `loginPreflight`, `takeOver`, `waitForAgentControl`.
 - `fetch.server` performs Node-side requests; `fetch.browser` performs requests in the current page origin. Use `cdp` only as an escape hatch.
 - `console.log` is the output channel. Use `console.log(help('page'))`, `console.log(help('locator'))`, or another `help(name)` call when an exact signature is unclear.
 
@@ -169,7 +169,15 @@ Never hardcode, hand-copy, or rename a `targetId` to `id`. Obtain and use it ins
 
 A "user is controlling", "inactive", or "not assigned" error is a hard stop for the whole task. Do not retry, work around it, or call `taskSpaces.takeOver` automatically. Ask the user and wait.
 
-For login, captcha, or another manual step, finish all safe preparation in the current Bash invocation, call `taskSpaces.handOff([nameOrId])`, check its `done` result, and tell the user exactly what to do. Resume only after explicit confirmation: use `taskSpaces.takeOver(nameOrId)` for a space the agent handed off, or `taskSpaces.claim(id)` for an existing user-owned/inactive space.
+For login, first call `taskSpaces.loginPreflight(nameOrId)`. It waits briefly
+for password-manager autofill and returns only booleans/counts; when every
+visible credential field is ready and the form has one submit control, it can
+submit without exposing credential values or taking focus. If it reports
+`needsUser: true`, finish all other safe preparation, call
+`taskSpaces.handOff([nameOrId])`, check its `done` result, and tell the user
+exactly what to do. Resume only after explicit confirmation: use
+`taskSpaces.takeOver(nameOrId)` for a space the agent handed off, or
+`taskSpaces.claim(id)` for an existing user-owned/inactive space.
 
 `taskSpaces.waitForAgentControl(nameOrId)` only polls; it never takes control. Use it only when the same script initiated the handoff and intentionally remains alive; after it resolves, continue the remaining work in that script.
 

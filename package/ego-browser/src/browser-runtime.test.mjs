@@ -29,6 +29,11 @@ function installAutoEgo(listTabsResult) {
     async listTabs() {
       return tabs;
     },
+    async createTab(url) {
+      const target = { targetId: "auto-created-tab", url, active: true };
+      tabs.tabs.push(target);
+      return { targetId: target.targetId };
+    },
     sendCDPMessage(payload) {
       const parsed = JSON.parse(payload);
       calls.push(parsed);
@@ -712,10 +717,12 @@ test("ensureSession falls back to the last tab when no active tab is found", asy
   }
 });
 
-test("ensureSession throws when no tabs are available", async () => {
-  installAutoEgo({ tabs: [] });
+test("ensureSession lazily creates the first background target when a space is empty", async () => {
+  const calls = installAutoEgo({ tabs: [] });
   try {
-    await assert.rejects(() => ensureSession(), /no active tab/);
+    await ensureSession();
+    const attach = calls.find((call) => call.method === "Target.attachToTarget");
+    assert.equal(attach?.params.targetId, "auto-created-tab");
   } finally {
     cleanup();
   }

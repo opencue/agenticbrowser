@@ -212,8 +212,72 @@ install_ego_lite() {
 	die "cannot find $APP_NAME app or pkg in mounted DMG"
 }
 
+install_linux_port() {
+	BIN_DIR="${EGO_LINUX_BIN_DIR:-$HOME/.local/bin}"
+	LINK_PATH="$BIN_DIR/ego-browser"
+	CHROME_CANDIDATES="google-chrome google-chrome-stable chromium chromium-browser brave-browser microsoft-edge"
+
+	# This script lives at <repo>/skills/ego-browser/scripts/install.sh.
+	script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+	repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
+	harness_dir="$repo_root/package/ego-browser"
+	shim_bin="$repo_root/package/ego-linux/bin/ego-browser.mjs"
+
+	[ -f "$harness_dir/package.json" ] ||
+		die "cannot find the harness at $harness_dir"
+	[ -f "$shim_bin" ] ||
+		die "cannot find the Linux port at $shim_bin"
+	require_command node
+	require_command npm
+
+	node_major=$(node -p 'process.versions.node.split(".")[0]')
+	[ "$node_major" -ge 22 ] ||
+		die "node >= 22 is required; found $(node -v)"
+
+	found_chrome=""
+	if [ -n "${EGO_LINUX_CHROME:-}" ] && [ -x "$EGO_LINUX_CHROME" ]; then
+		found_chrome="$EGO_LINUX_CHROME"
+	else
+		for candidate in $CHROME_CANDIDATES; do
+			if command -v "$candidate" >/dev/null 2>&1; then
+				found_chrome=$(command -v "$candidate")
+				break
+			fi
+		done
+	fi
+	[ -n "$found_chrome" ] ||
+		die "no Chrome/Chromium/Brave/Edge found on PATH; install one or set EGO_LINUX_CHROME"
+	log "Using browser: $found_chrome"
+
+	if [ -n "${DISPLAY:-}" ] && ! command -v xdotool >/dev/null 2>&1; then
+		log "warning: xdotool is unavailable; explicit human-action focus may fail"
+	fi
+
+	log "Building ego-browser in $harness_dir ..."
+	(cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
+		die "ego-browser build failed"
+
+	mkdir -p "$BIN_DIR"
+	ln -sf "$shim_bin" "$LINK_PATH"
+	log "Linked $LINK_PATH -> $shim_bin"
+	case ":$PATH:" in
+	*":$BIN_DIR:"*) ;;
+	*) log "warning: $BIN_DIR is not on PATH; add it before using ego-browser" ;;
+	esac
+
+	"$LINK_PATH" --doctor || die "installed runtime diagnostics failed"
+	log "ego-browser Linux port installed"
+}
+
 main() {
-	[ "$(uname -s)" = "Darwin" ] || die "this script only supports macOS"
+	case "$(uname -s)" in
+	Linux)
+		install_linux_port
+		return
+		;;
+	Darwin) ;;
+	*) die "this script supports macOS and Linux" ;;
+	esac
 
 	# Install first if not present; otherwise use the ego-browser bundled inside the app.
 	installed_app_path=$(find_ego_lite_app || true)
