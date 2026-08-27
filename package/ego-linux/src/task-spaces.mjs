@@ -99,6 +99,7 @@ export function createTaskSpacesApi(
   {
     shouldAutoFocus = async () => true,
     activateWindow = async () => true,
+    guardBackground = async (_reason, operation) => operation(),
   } = {},
 ) {
   /**
@@ -864,21 +865,25 @@ export function createTaskSpacesApi(
     );
     let temporary = false;
     if (!target) {
-      let created;
       const sourceUrl = `${origin}/`;
-      try {
-        created = await cdp.call("Target.createTarget", {
-          url: sourceUrl,
-          background: true,
-          focus: false,
-        });
-      } catch (error) {
-        try {
-          created = await cdp.call("Target.createTarget", { url: sourceUrl });
-        } catch {
-          throw error;
-        }
-      }
+      const created = await guardBackground(
+        "create-storage-source-tab",
+        async () => {
+          try {
+            return await cdp.call("Target.createTarget", {
+              url: sourceUrl,
+              background: true,
+              focus: false,
+            });
+          } catch (error) {
+            try {
+              return await cdp.call("Target.createTarget", { url: sourceUrl });
+            } catch {
+              throw error;
+            }
+          }
+        },
+      );
       target = { targetId: created.targetId };
       temporary = true;
     }
@@ -954,19 +959,21 @@ export function createTaskSpacesApi(
    */
   async function createStorageSeedTarget(browserContextId) {
     const params = { url: "about:blank", browserContextId };
-    try {
-      return await cdp.call("Target.createTarget", {
-        ...params,
-        background: false,
-        focus: false,
-      });
-    } catch (error) {
+    return guardBackground("create-storage-seed-tab", async () => {
       try {
-        return await cdp.call("Target.createTarget", params);
-      } catch {
-        throw error;
+        return await cdp.call("Target.createTarget", {
+          ...params,
+          background: false,
+          focus: false,
+        });
+      } catch (error) {
+        try {
+          return await cdp.call("Target.createTarget", params);
+        } catch {
+          throw error;
+        }
       }
-    }
+    });
   }
 
   /**

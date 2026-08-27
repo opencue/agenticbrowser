@@ -22,10 +22,15 @@ function fakeCdp() {
 describe("agent tab foreground policy", () => {
   it("keeps a new agent tab behind an unrelated user view", async () => {
     const cdp = fakeCdp();
+    const guarded = [];
     const tabs = createTabsApi(cdp, {
       port: null,
       getScope: null,
       shouldAutoFocus: async () => false,
+      guardBackground: async (reason, operation) => {
+        guarded.push(reason);
+        return operation();
+      },
     });
 
     const result = await tabs.createTab("https://example.com");
@@ -48,11 +53,20 @@ describe("agent tab foreground policy", () => {
       !cdp.calls.some((call) => call.method === "Target.activateTarget"),
       "the user's current tab keeps the foreground",
     );
+    assert.deepEqual(guarded, ["create-tab"]);
   });
 
   it("preserves activation for integrations that explicitly opt into it", async () => {
     const cdp = fakeCdp();
-    const tabs = createTabsApi(cdp, { port: null, getScope: null });
+    let guarded = false;
+    const tabs = createTabsApi(cdp, {
+      port: null,
+      getScope: null,
+      guardBackground: async (_reason, operation) => {
+        guarded = true;
+        return operation();
+      },
+    });
 
     await tabs.createTab("https://example.com");
 
@@ -64,5 +78,6 @@ describe("agent tab foreground policy", () => {
       ),
       "ordinary browser sessions still focus the tab they create",
     );
+    assert.equal(guarded, false, "explicit foreground creation is not guarded");
   });
 });

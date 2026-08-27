@@ -56,6 +56,10 @@ if [ -n "${DISPLAY:-}" ] && ! command -v xdotool >/dev/null 2>&1; then
 	log "warning: xdotool is not installed. Background browsing still works, but explicit human-action focus may report raise-failed."
 	log "         Install xdotool to let requestUserAction focus the managed browser without opening a second window."
 fi
+if { [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && ! command -v ydotool >/dev/null 2>&1; then
+	log "warning: ydotool is not installed. Background browsing still works, but GNOME Wayland may not return focus after Chrome raises itself."
+	log "         Install ydotool and run ydotoold to let the focus guard return to a native Wayland application."
+fi
 
 # CI=true is required, not cosmetic: the harness's prepare script runs
 # `lefthook install`, which fails on any machine with a global core.hooksPath.
