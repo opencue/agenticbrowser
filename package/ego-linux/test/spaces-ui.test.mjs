@@ -77,11 +77,19 @@ describe("Spaces overview organization", () => {
     assert.match(SPACES_HTML, /id="inbox"/);
     assert.match(SPACES_HTML, /className = "card compact"/);
     assert.match(SPACES_HTML, /Needs You/);
-    assert.match(SPACES_HTML, /minmax\(min\(100%, 310px\), 1fr\)/);
+    assert.match(SPACES_HTML, /minmax\(min\(100%, 380px\), 1fr\)/);
     assert.doesNotMatch(SPACES_HTML, /agents\.join\(" \+ "\) \|\| "Agent"/);
     const script = SPACES_HTML.match(/<script>([\s\S]*)<\/script>/)?.[1];
     assert.ok(script);
     assert.doesNotThrow(() => new Function(script));
+  });
+
+  it("keeps overview text and compact cards readable at default zoom", () => {
+    assert.match(SPACES_HTML, /--text-base: clamp\(16px,[^;]+18px\)/);
+    assert.match(SPACES_HTML, /font: var\(--text-base\)\/1\.5/);
+    assert.match(SPACES_HTML, /--compact-thumb: clamp\(76px,[^;]+92px\)/);
+    assert.match(SPACES_HTML, /minmax\(min\(100%, 380px\), 1fr\)/);
+    assert.match(SPACES_HTML, /\.grid \{[\s\S]*?align-items: start;[\s\S]*?\}/);
   });
 
   it("authenticates API calls and server-sent updates with the fragment token", () => {

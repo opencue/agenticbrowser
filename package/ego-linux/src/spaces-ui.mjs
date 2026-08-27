@@ -66,6 +66,9 @@ export const SPACES_HTML = `<!doctype html>
     --text: #12151c;
     --muted: #6b7280;
     --accent: #2f6df6;
+    --text-base: clamp(16px, 0.25vw + 13px, 18px);
+    --text-small: clamp(13px, 0.14vw + 11.5px, 14px);
+    --compact-thumb: clamp(76px, 5vw, 92px);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -86,7 +89,7 @@ export const SPACES_HTML = `<!doctype html>
       radial-gradient(900px 420px at 92% 4%, rgba(120, 90, 220, .09), transparent 62%),
       var(--bg);
     color: var(--text);
-    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: var(--text-base)/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-font-smoothing: antialiased;
   }
   header {
@@ -94,11 +97,11 @@ export const SPACES_HTML = `<!doctype html>
     gap: 18px; margin-bottom: 26px;
   }
   .heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-  h1 { font-size: 19px; font-weight: 650; margin: 0; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 13px; }
+  h1 { font-size: clamp(24px, .45vw + 18px, 28px); font-weight: 650; margin: 0; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 15px; }
   .summary {
-    flex: none; color: var(--muted); font-size: 12px;
-    padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
+    flex: none; color: var(--muted); font-size: var(--text-small);
+    padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px;
     background: color-mix(in srgb, var(--card) 72%, transparent);
   }
   .inbox { margin-bottom: 34px; }
@@ -108,31 +111,32 @@ export const SPACES_HTML = `<!doctype html>
     margin-bottom: 12px;
   }
   .inbox-title {
-    font-size: 13px; font-weight: 750; letter-spacing: .08em;
+    font-size: 14px; font-weight: 750; letter-spacing: .08em;
     text-transform: uppercase; color: #c7891f;
   }
   .inbox-list { display: grid; gap: 10px; }
   .request-card {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    gap: 14px 20px; padding: 16px 18px;
+    gap: 16px 24px; padding: 20px 22px;
     border: 1px solid rgba(224, 160, 42, .38); border-radius: 15px;
     background: color-mix(in srgb, var(--card) 92%, #e0a02a 8%);
     box-shadow: 0 8px 28px rgba(10, 14, 25, .08);
   }
   .request-copy { min-width: 0; }
-  .request-title { font-size: 14px; font-weight: 680; }
+  .request-title { font-size: 17px; font-weight: 680; }
   .request-instruction {
-    margin-top: 3px; color: var(--text); overflow-wrap: anywhere;
+    margin-top: 3px; color: var(--text); font-size: 16px; overflow-wrap: anywhere;
   }
-  .request-meta { margin-top: 7px; color: var(--muted); font-size: 11.5px; }
+  .request-meta { margin-top: 7px; color: var(--muted); font-size: var(--text-small); }
   .request-actions { display: flex; align-items: center; gap: 8px; }
   .ctl.done { color: #fff; background: var(--accent); border-color: var(--accent); }
   .ctl.cancel:hover { color: #d3453c; border-color: #d3453c; }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
     gap: 28px 20px;
     justify-content: start;
+    align-items: start;
   }
   /* The outer container stacks sections; only each section's body is a grid. */
   .sections { display: block; }
@@ -144,24 +148,24 @@ export const SPACES_HTML = `<!doctype html>
   }
   .section-title {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 15px; font-weight: 650; letter-spacing: -0.01em;
+    font-size: 18px; font-weight: 650; letter-spacing: -0.01em;
   }
   .section-count {
-    color: var(--muted); font-size: 11.5px;
+    color: var(--muted); font-size: var(--text-small);
     padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
   }
   .card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   .card.compact {
-    display: grid; grid-template-columns: 64px minmax(0, 1fr) auto;
-    align-items: center; gap: 12px; padding: 8px;
+    display: grid; grid-template-columns: var(--compact-thumb) minmax(0, 1fr) auto;
+    align-items: center; gap: 16px; padding: 12px;
     border: 1px solid var(--line); border-radius: 14px; background: var(--card);
   }
   .card.compact .frame {
-    width: 64px; height: 64px; aspect-ratio: auto; border-radius: 10px;
+    width: var(--compact-thumb); height: var(--compact-thumb); aspect-ratio: auto; border-radius: 10px;
     box-shadow: none;
   }
   .card.compact .frame:hover { transform: none; box-shadow: none; }
-  .card.compact .close { opacity: 1; width: 21px; height: 21px; top: 4px; right: 4px; }
+  .card.compact .close { opacity: 1; width: 24px; height: 24px; top: 5px; right: 5px; }
   .card.compact .controls { padding: 0; flex-direction: column; align-items: stretch; }
   .card.compact .trail { display: none; }
   .frame {
@@ -202,7 +206,7 @@ export const SPACES_HTML = `<!doctype html>
     display: flex; align-items: center; gap: 7px;
     padding: 5px 11px 5px 9px; border-radius: 999px;
     background: rgba(24, 24, 27, .92); color: #fff;
-    font-size: 11.5px; font-weight: 500; line-height: 1.35;
+    font-size: var(--text-small); font-weight: 500; line-height: 1.35;
     box-shadow: 0 6px 16px rgba(0, 0, 0, .28);
     pointer-events: none;
   }
@@ -215,20 +219,20 @@ export const SPACES_HTML = `<!doctype html>
     background: #4a9eff; animation: none; opacity: .72;
   }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-  .frame.empty { display: grid; place-items: center; color: var(--muted); font-size: 13px; }
+  .frame.empty { display: grid; place-items: center; color: var(--muted); font-size: 14px; }
   .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0 3px; }
   .meta-top, .page-meta {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     min-width: 0;
   }
   .name, .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .name { font-size: 14px; font-weight: 620; }
-  .page-title { color: var(--muted); font-size: 12px; }
-  .page-context { flex: none; color: var(--muted); font-size: 11.5px; }
+  .name { font-size: 16px; font-weight: 620; }
+  .page-title { color: var(--muted); font-size: 14px; }
+  .page-context { flex: none; color: var(--muted); font-size: var(--text-small); }
   .status {
     flex: none; padding: 3px 8px; border-radius: 999px;
     color: var(--muted); background: rgba(127, 127, 127, .08);
-    font-size: 11px; font-weight: 600;
+    font-size: var(--text-small); font-weight: 600;
   }
   .status.agent { color: #d97757; background: rgba(217, 119, 87, .12); }
   .status.agentDelegatedToUser { color: #c7891f; background: rgba(224, 160, 42, .12); }
@@ -254,8 +258,8 @@ export const SPACES_HTML = `<!doctype html>
   .add:hover { border-color: var(--accent); color: var(--accent); background: var(--card); }
   .controls { display: flex; gap: 8px; padding: 0 3px; }
   .ctl {
-    font: inherit; font-size: 12px; line-height: 1;
-    padding: 6px 12px; border-radius: 999px;
+    min-height: 34px; font: inherit; font-size: 14px; line-height: 1;
+    padding: 8px 14px; border-radius: 999px;
     border: 1px solid var(--line); background: var(--card); color: var(--muted);
     cursor: pointer;
     transition: color .14s ease, border-color .14s ease, background .14s ease;
@@ -264,13 +268,13 @@ export const SPACES_HTML = `<!doctype html>
   .ctl.primary { color: var(--accent); border-color: rgba(47, 109, 246, .45); }
   .note {
     margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
-    color: var(--muted); font-size: 12px; max-width: 62ch;
+    color: var(--muted); font-size: 14px; max-width: 62ch;
   }
   /* What the space actually did, so a card that has gone quiet still says
      something. Reads newest first, like a log. */
   .trail { display: flex; flex-direction: column; gap: 2px; padding: 2px 3px 0; }
   .trail div {
-    display: flex; gap: 7px; color: var(--muted); font-size: 11.5px;
+    display: flex; gap: 7px; color: var(--muted); font-size: var(--text-small);
     overflow: hidden; white-space: nowrap;
   }
   .trail div span:first-child { overflow: hidden; text-overflow: ellipsis; }
@@ -279,12 +283,12 @@ export const SPACES_HTML = `<!doctype html>
   .empty-state { color: var(--muted); padding: 40px 0; }
   @media (max-width: 700px) {
     body { padding: 24px 18px 36px; }
-    header { align-items: flex-start; }
+    header { align-items: flex-start; flex-direction: column; gap: 10px; }
     .sub { display: none; }
     .request-card { grid-template-columns: 1fr; }
     .request-actions { justify-content: flex-end; flex-wrap: wrap; }
-    .card.compact { grid-template-columns: 54px minmax(0, 1fr); }
-    .card.compact .frame { width: 54px; height: 54px; }
+    .card.compact { grid-template-columns: 72px minmax(0, 1fr); }
+    .card.compact .frame { width: 72px; height: 72px; }
     .card.compact .controls { grid-column: 1 / -1; flex-direction: row; }
   }
 </style>
