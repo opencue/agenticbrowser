@@ -65,20 +65,39 @@ describe("packIco", () => {
       ],
     );
     // The offsets have to point at the images, or Windows draws nothing.
-    assert.equal(ico.subarray(entries[0].offset, entries[0].offset + entries[0].bytes).toString(), "first-image");
-    assert.equal(ico.subarray(entries[1].offset, entries[1].offset + entries[1].bytes).toString(), "second-image-longer");
-    assert.equal(ico.length, 6 + 32 + a.length + b.length, "no padding, no gaps");
+    assert.equal(
+      ico
+        .subarray(entries[0].offset, entries[0].offset + entries[0].bytes)
+        .toString(),
+      "first-image",
+    );
+    assert.equal(
+      ico
+        .subarray(entries[1].offset, entries[1].offset + entries[1].bytes)
+        .toString(),
+      "second-image-longer",
+    );
+    assert.equal(
+      ico.length,
+      6 + 32 + a.length + b.length,
+      "no padding, no gaps",
+    );
   });
 
   it("spells 256 as zero, because the field is one byte", () => {
     const [entry] = parseIco(packIco([{ size: 256, png: Buffer.from("x") }]));
     assert.equal(entry.width, 256, "reads back as 256");
     // And the byte on disk really is 0, not 255 clamped.
-    assert.equal(packIco([{ size: 256, png: Buffer.from("x") }]).readUInt8(6), 0);
+    assert.equal(
+      packIco([{ size: 256, png: Buffer.from("x") }]).readUInt8(6),
+      0,
+    );
   });
 
   it("declares 32-bit truecolour for every entry", () => {
-    for (const entry of parseIco(packIco([{ size: 48, png: Buffer.from("x") }]))) {
+    for (const entry of parseIco(
+      packIco([{ size: 48, png: Buffer.from("x") }]),
+    )) {
       assert.equal(entry.planes, 1);
       assert.equal(entry.bitCount, 32);
     }

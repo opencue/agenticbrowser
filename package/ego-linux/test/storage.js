@@ -5,10 +5,10 @@ const value = "from-first-space";
 const first = await taskSpaces.useOrCreate("storage parity one");
 await page.goto(fixture);
 await page.waitForLoadState();
-await page.evaluate(
-  ({ key, value }) => localStorage.setItem(key, value),
-  { key, value },
-);
+await page.evaluate(({ key, value }) => localStorage.setItem(key, value), {
+  key,
+  value,
+});
 console.log(
   "1. first read:   " +
     (await page.evaluate((key) => localStorage.getItem(key), key)),

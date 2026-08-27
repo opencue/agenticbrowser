@@ -1,6 +1,11 @@
 import { join } from "node:path";
 
-import { APP_DIR, dataRoot, stateRoot, stockBrowserProfileDirs } from "./platform.mjs";
+import {
+  APP_DIR,
+  dataRoot,
+  stateRoot,
+  stockBrowserProfileDirs,
+} from "./platform.mjs";
 
 /** Persistent browser profile — the local stand-in for the ego lite app's profile. */
 export const DATA_DIR = join(dataRoot(), APP_DIR);

@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
-import { readFile, rename, rm } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { agentIdentity } from "./agent-identity.mjs";
+import { replaceFile } from "./atomic-write.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
 import { STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 import {
   ensurePrivateStateDir,
   securePrivateStateFile,
-  writePrivateStateFile,
 } from "./private-state.mjs";
 
 /**
@@ -224,14 +224,14 @@ export function createTaskSpacesApi(
   }
 
   async function writeState(state) {
-    const temporary = `${TASK_SPACE_FILE}.${process.pid}.${Date.now()}.${Math.random()}.tmp`;
-    try {
-      await writePrivateStateFile(temporary, JSON.stringify(state, null, 2));
-      await rename(temporary, TASK_SPACE_FILE);
-      await securePrivateStateFile(TASK_SPACE_FILE);
-    } finally {
-      await rm(temporary, { force: true }).catch(() => {});
-    }
+    // Same temp-and-rename this used inline, moved into one place so the
+    // Windows half comes with it: there, a rename over a file another process
+    // is reading fails with EPERM until that reader lets go, so replaceFile
+    // retries rather than surfacing a moment as an error.
+    await replaceFile(TASK_SPACE_FILE, JSON.stringify(state, null, 2), {
+      mode: 0o600,
+    });
+    await securePrivateStateFile(TASK_SPACE_FILE);
   }
 
   /** Hold every read-modify-write cycle across processes, not merely its write. */

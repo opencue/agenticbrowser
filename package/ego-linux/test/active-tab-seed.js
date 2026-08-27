@@ -5,4 +5,9 @@ const second = await browser.openOrReuseTab(
 );
 await browser.switchTab(second.targetId);
 await page.waitForTimeout(50);
-console.log(JSON.stringify({ taskId: task.id, active: (await browser.currentTab()).title }));
+console.log(
+  JSON.stringify({
+    taskId: task.id,
+    active: (await browser.currentTab()).title,
+  }),
+);

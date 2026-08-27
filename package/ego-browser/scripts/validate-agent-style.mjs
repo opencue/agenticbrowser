@@ -20,7 +20,8 @@ const paths = [
 
 const legacyOneRoundTaskSpacePatterns = [
   {
-    pattern: /const task = await taskSpaces\.useOrCreate\('inspect example page'\)/,
+    pattern:
+      /const task = await taskSpaces\.useOrCreate\('inspect example page'\)/,
     message: "quick start should use taskSpaces.run(...) for one-round tasks",
   },
   {
