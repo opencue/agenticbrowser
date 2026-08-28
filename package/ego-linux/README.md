@@ -128,6 +128,7 @@ Commands this port adds (upstream's app has no equivalent):
 | Command                               | What it does                                                         |
 | ------------------------------------- | -------------------------------------------------------------------- |
 | `ego-browser --doctor [--json]`       | inspect installation and runtime state without starting the browser  |
+| `ego-browser --cleanup-session`       | close the current agent session's spaces and development servers     |
 | `ego-browser --status`                | connection state of the backing browser                              |
 | `ego-browser --open`                  | open the shared agent browser window                                 |
 | `ego-browser --spaces`                | open the Spaces overview panel                                       |

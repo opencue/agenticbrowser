@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { browserStatus, stopBrowser } from "../src/chrome.mjs";
+import { agentIdentity } from "../src/agent-identity.mjs";
 import { cleanupExpiredArtifacts } from "../src/artifact-retention.mjs";
 import { installDesktopEntry } from "../src/desktop.mjs";
 import { runDoctor } from "../src/doctor.mjs";
@@ -34,6 +35,7 @@ import {
 } from "../src/private-state.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
 import { createEgoShim } from "../src/shim.mjs";
+import { stopSessionDevServers } from "../src/session-cleanup.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
 const HARNESS = new URL("../../ego-browser/dist/out/index.js", import.meta.url);
@@ -55,6 +57,8 @@ Linux-only commands:
   --doctor [--json]         inspect installation and runtime state without
                             starting or attaching to the browser
   --status                  show the backing browser's connection state
+  --cleanup-session         close this agent session's spaces and stop its
+                            recognised Next, Vite, and React dev servers
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
   --prune-spaces            close spaces that hold nothing but about:blank
@@ -530,6 +534,56 @@ async function main() {
   if (argv[0] === "--status") {
     process.stdout.write(`${JSON.stringify(await browserStatus(), null, 2)}\n`);
     return 0;
+  }
+  if (argv[0] === "--cleanup-session") {
+    const session = agentIdentity().session;
+    if (!session) {
+      process.stdout.write(
+        `${JSON.stringify({
+          session: null,
+          spacesClosed: 0,
+          spacesSkipped: 0,
+          serversMatched: 0,
+          serversSignaled: 0,
+          serversStopped: 0,
+          serverPids: [],
+          serversRemaining: [],
+          skipped: "no-session",
+        })}\n`,
+      );
+      return 0;
+    }
+
+    let spaces = { closed: 0, skipped: 0 };
+    let spaceError = null;
+    try {
+      const status = await browserStatus();
+      if (status.running) {
+        const shim = await createEgoShim({ headless: status.headless === true });
+        try {
+          spaces = await shim.cleanupAgentSessionSpaces(session);
+        } finally {
+          shim.close();
+        }
+      }
+    } catch (error) {
+      spaceError = String(error?.message || error);
+    }
+    const servers = await stopSessionDevServers(session);
+    process.stdout.write(
+      `${JSON.stringify({
+        session,
+        spacesClosed: spaces.closed,
+        spacesSkipped: spaces.skipped,
+        serversMatched: servers.matched,
+        serversSignaled: servers.signaled,
+        serversStopped: servers.stopped,
+        serverPids: servers.pids,
+        serversRemaining: servers.remaining,
+        ...(spaceError ? { spaceError } : {}),
+      })}\n`,
+    );
+    return !spaceError && servers.remaining.length === 0 ? 0 : 1;
   }
   if (argv[0] === "--doctor") {
     return runDoctor({

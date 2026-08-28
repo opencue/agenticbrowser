@@ -1174,6 +1174,41 @@ export function createTaskSpacesApi(
       });
     },
 
+    /** Close every still-agent-owned space created by one exact session. */
+    async cleanupAgentSessionSpaces(session) {
+      if (typeof session !== "string" || !session) {
+        return { closed: 0, skipped: 0, reason: "no-session" };
+      }
+      return withStateLock(async (state) => {
+        const sameSession = state.spaces.filter(
+          (space) => space.session === session,
+        );
+        const doomed = sameSession.filter(
+          (space) =>
+            space.createdBy === "agent" && space.ownership === "agent",
+        );
+        const skipped = sameSession.length - doomed.length;
+        if (doomed.length === 0) return { closed: 0, skipped };
+
+        for (const space of doomed) {
+          for (const targetId of space.targetIds || []) {
+            await cdp.call("Target.closeTarget", { targetId }).catch(() => {});
+          }
+          if (space.browserContextId) {
+            await disposeContext(space.browserContextId);
+          }
+        }
+
+        const gone = new Set(doomed.map((space) => space.id));
+        state.spaces = state.spaces.filter((space) => !gone.has(space.id));
+        if (gone.has(state.selectedId)) state.selectedId = null;
+        if (gone.has(pinnedSpaceId)) pinnedSpaceId = null;
+        for (const id of gone) createdSpaceIds.delete(id);
+        await writeState(state);
+        return { closed: doomed.length, skipped };
+      });
+    },
+
     async useTaskSpace(id) {
       return withStateLock(async (state) => {
         const space = await requireSpace(state, id, "useTaskSpace");

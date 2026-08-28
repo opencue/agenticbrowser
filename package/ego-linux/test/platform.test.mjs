@@ -26,8 +26,9 @@ const STANDIN = join(SANDBOX, "standin.mjs");
 await writeFile(STANDIN, "setTimeout(() => {}, 60_000);\n");
 after(() => rm(SANDBOX, { recursive: true, force: true }));
 
-async function standIn(...args) {
+async function standInWith({ args = [], env = process.env } = {}) {
   const child = spawn(process.execPath, [STANDIN, ...args], {
+    env,
     stdio: "ignore",
   });
   await new Promise((resolve, reject) => {
@@ -35,6 +36,10 @@ async function standIn(...args) {
     child.once("error", reject);
   });
   return child;
+}
+
+async function standIn(...args) {
+  return standInWith({ args });
 }
 
 /** Wait for a child to be gone, without hanging if it already is. */
@@ -257,6 +262,33 @@ describe("platform: process control", () => {
     assert.equal(await platform.terminateProcess(-5), false);
     assert.equal(await platform.terminateProcess(1.5), false);
   });
+
+  it(
+    "finds only processes carrying an exact session environment value",
+    { skip: process.platform === "win32" && "procfs ownership proof is POSIX-only" },
+    async () => {
+      const marker = `ego-session-${process.pid}-${Date.now()}`;
+      const child = await standInWith({
+        args: ["--ego-session-owned"],
+        env: { ...process.env, CODEX_THREAD_ID: marker },
+      });
+
+      try {
+        const found = await here().listProcessesByEnvironment({
+          names: ["CODEX_THREAD_ID", "OMX_SESSION_ID"],
+          value: marker,
+        });
+        assert.deepEqual(
+          found.map((entry) => entry.pid),
+          [child.pid],
+        );
+        assert.ok(found[0].argv.includes("--ego-session-owned"));
+      } finally {
+        child.kill("SIGKILL");
+        await reaped(child);
+      }
+    },
+  );
 
   it("terminates a real process and reports it, on whatever this machine is", async () => {
     const platform = here();

@@ -633,6 +633,62 @@ export function createPlatform({
     return found.filter(Boolean);
   }
 
+  /**
+   * Processes carrying one exact environment value, with their argv.
+   *
+   * On Linux `/proc/<pid>/environ` is the ownership proof: matching argv or a
+   * listening port would let one agent stop another person's server. Windows
+   * does not expose another process's environment through Win32_Process, so it
+   * safely reports no matches rather than weakening that proof.
+   */
+  async function listProcessesByEnvironment({ names, value }) {
+    const wantedNames = Array.isArray(names)
+      ? names.filter((name) => typeof name === "string" && name.length > 0)
+      : [];
+    if (
+      isWindows ||
+      wantedNames.length === 0 ||
+      typeof value !== "string" ||
+      !value
+    ) {
+      return [];
+    }
+
+    let entries;
+    try {
+      entries = await readdir("/proc");
+    } catch {
+      return [];
+    }
+    const expected = new Set(wantedNames.map((name) => `${name}=${value}`));
+    const found = await Promise.all(
+      entries
+        .filter((entry) => /^\d+$/.test(entry))
+        .map(async (pid) => {
+          let environment;
+          try {
+            environment = await readFile(`/proc/${pid}/environ`, "utf8");
+          } catch {
+            return null;
+          }
+          if (!environment.split("\0").some((entry) => expected.has(entry))) {
+            return null;
+          }
+          let commandLine;
+          try {
+            commandLine = await readFile(`/proc/${pid}/cmdline`, "utf8");
+          } catch {
+            return null;
+          }
+          return {
+            pid: Number(pid),
+            argv: commandLine.split("\0").filter(Boolean),
+          };
+        }),
+    );
+    return found.filter(Boolean);
+  }
+
   /** One process's argv, or null if it is gone or not ours to read. */
   async function processArgv(pid) {
     if (isWindows) {
@@ -803,6 +859,7 @@ export function createPlatform({
     browserBinaryCandidates,
     resolveBrowserBinary,
     listProcesses,
+    listProcessesByEnvironment,
     processArgv,
     processAncestry,
     terminateProcess,
@@ -828,6 +885,7 @@ export const stockBrowserProfileDirs = native.stockBrowserProfileDirs;
 export const browserBinaryCandidates = native.browserBinaryCandidates;
 export const resolveBrowserBinary = native.resolveBrowserBinary;
 export const listProcesses = native.listProcesses;
+export const listProcessesByEnvironment = native.listProcessesByEnvironment;
 export const processArgv = native.processArgv;
 export const processAncestry = native.processAncestry;
 export const terminateProcess = native.terminateProcess;

@@ -241,6 +241,7 @@ export async function createEgoShim({ headless = false } = {}) {
     ego,
     cdp,
     cleanupCreatedEmptySpaces: taskSpaces.cleanupCreatedEmptySpaces,
+    cleanupAgentSessionSpaces: taskSpaces.cleanupAgentSessionSpaces,
     dismissCursor: cursor.dismiss,
     collaborationStore,
     presentTaskSpaceForPanel: (id) =>
