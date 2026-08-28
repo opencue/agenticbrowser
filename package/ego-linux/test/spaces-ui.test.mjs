@@ -92,6 +92,16 @@ describe("Spaces overview organization", () => {
     assert.match(SPACES_HTML, /\.grid \{[\s\S]*?align-items: start;[\s\S]*?\}/);
   });
 
+  it("ships a cohesive, motion-safe operations cockpit surface", () => {
+    assert.match(SPACES_HTML, /class="app-shell"/);
+    assert.match(SPACES_HTML, /--surface-soft:/);
+    assert.match(SPACES_HTML, /\.heading::before/);
+    assert.match(SPACES_HTML, /\.request-card::before/);
+    assert.match(SPACES_HTML, /\.card\.compact:hover/);
+    assert.match(SPACES_HTML, /\.add \{[\s\S]*?aspect-ratio: auto;/);
+    assert.match(SPACES_HTML, /@media \(prefers-reduced-motion: reduce\)/);
+  });
+
   it("authenticates API calls and server-sent updates with the fragment token", () => {
     assert.match(SPACES_HTML, /location\.hash\.slice\(1\)/);
     assert.match(SPACES_HTML, /sessionStorage\.setItem\("ego-spaces-token"/);
