@@ -273,7 +273,7 @@ export function createUserActionApi(
   };
 }
 
-/** Best-effort desktop fallback when Chromium could not be presented. */
+/** Best-effort desktop signal for a pending manual browser action. */
 export function notifyUserAction(
   { instruction, reason } = {},
   { spawnProcess = spawn } = {},

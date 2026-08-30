@@ -66,9 +66,10 @@ On a Wayland desktop, headed agent Chrome defaults to XWayland. It starts with
 application the user is typing in. If Chromium still raises itself, an
 operation-scoped focus guard restores the exact prior X11 window or returns once
 through the Wayland compositor history, then records the verified result in the
-private `focus-audit.jsonl` state file. A `requestUserAction()` call focuses only
-when it carries a concrete non-empty instruction, and can activate the exact
-managed-browser PID without opening a second window. Its Done/Cancel state lives
+private `focus-audit.jsonl` state file. A `requestUserAction()` call never focuses;
+manual-action prompts stay in the background and send a desktop notification.
+Focus is available only through a separate, explicit user-authorized
+`bringToFront(..., { focus: true })` request. The prompt's Done/Cancel state lives
 in a named isolated CDP world behind a closed shadow root, so page JavaScript can
 remove the panel but cannot forge a human decision. The same request is persisted
 privately and appears in the Spaces **Needs You** Inbox, where Open does not answer

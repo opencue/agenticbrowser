@@ -54,7 +54,7 @@ log "Using browser: $found_chrome"
 
 if [ -n "${DISPLAY:-}" ] && ! command -v xdotool >/dev/null 2>&1; then
 	log "warning: xdotool is not installed. Background browsing still works, but explicit human-action focus may report raise-failed."
-	log "         Install xdotool to let requestUserAction focus the managed browser without opening a second window."
+	log "         Install xdotool to let an explicitly requested bringToFront focus the managed browser without opening a second window."
 fi
 if { [ "${XDG_SESSION_TYPE:-}" = "wayland" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; } && ! command -v ydotool >/dev/null 2>&1; then
 	log "warning: ydotool is not installed. Background browsing still works, but GNOME Wayland may not return focus after Chrome raises itself."

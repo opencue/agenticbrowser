@@ -839,7 +839,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     signature:
       "taskSpaces.requestUserAction(nameOrId, options?) => Promise<object>",
     description:
-      "Hand off for a manual browser action. Bare calls never focus; a concrete instruction shows a one-shot Done/Cancel panel, persists it in the Linux Spaces Needs You Inbox, highlights the target, and waits by default.",
+      "Hand off for a manual browser action without taking desktop focus. A concrete instruction shows a one-shot Done/Cancel panel, persists it in the Linux Spaces Needs You Inbox, highlights the target, sends a desktop notification, and waits by default.",
     params: [
       {
         name: "nameOrId",
@@ -851,7 +851,7 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         name: "options",
         type: "{ instruction?: string, target?: string | { selector?: string, text?: string }, actionKey?: string, doneLabel?: string, cancelLabel?: string, wait?: boolean, timeout?: number, interval?: number }",
         description:
-          "A non-empty instruction authorizes one focus event. Done resumes automatically; Cancel keeps user control.",
+          "A non-empty instruction notifies the user without focusing. Done resumes automatically; Cancel keeps user control.",
       },
     ],
     returns: "Promise<object>",

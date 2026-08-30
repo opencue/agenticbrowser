@@ -72,7 +72,7 @@ the facades treat user-owned spaces differently:
 | `taskSpaces.complete(…, { keep: true })`           | skipped — resolves `{ done: false, skipped: 'user-owned' }`                                                               |
 | `taskSpaces.complete(…, { keep: false })`          | claims it, then closes it                                                                                                 |
 | `taskSpaces.bringToFront(nameOrId, options?)`      | checks its window without focusing by default; `{ focus: true }` is allowed only after an explicit same-turn user request |
-| `taskSpaces.requestUserAction(nameOrId, options?)` | preserves ownership; bare calls do not focus, while a concrete instruction focuses once and shows Done/Cancel             |
+| `taskSpaces.requestUserAction(nameOrId, options?)` | preserves ownership; a concrete instruction shows Done/Cancel and sends one notification without focusing                 |
 | `taskSpaces.loginPreflight(nameOrId, options?)`    | rejects — autofill inspection/submission requires agent control                                                           |
 | `taskSpaces.handleChallenge(nameOrId, options?)`   | rejects — background challenge inspection requires agent control                                                          |
 | `taskSpaces.takeOver(nameOrId)`                    | claims it, selects it, then takes over                                                                                    |
@@ -221,23 +221,23 @@ missing credential, CAPTCHA, passkey/hardware interaction, or genuinely human
 verification page blocks progress. It checks common Cloudflare, hCaptcha, and
 reCAPTCHA surfaces without focusing, gives automatic verification a short chance
 to finish, recognizes populated Turnstile, hCaptcha, and reCAPTCHA response fields,
-then uses one stable action key to focus and show the Done/Cancel panel only while
-the challenge remains. Done returns control and resumes the agent.
+then uses one stable action key to show the Done/Cancel panel and notify the user
+without focusing while the challenge remains. Done returns control and resumes the agent.
 
 **Requesting user action**: When the task genuinely requires user intervention,
 call
 `await taskSpaces.requestUserAction(task.id, { instruction, target?, actionKey?,
 doneLabel?, cancelLabel? })`. Pass a concrete, non-empty instruction: it is the
-capability that allows this one automatic focus event. The helper hands off an
+content shown in the panel and desktop notification. The helper hands off an
 agent-controlled space or preserves a user-owned space, displays an in-page
 action card whose controls and decision state live in an isolated browser world,
 highlights the optional selector/text target, and waits by default. Page scripts
 can remove the card but cannot inspect its closed shadow root or forge Done.
 Done explicitly returns control and resumes the agent; Cancel leaves the user in
 control. A repeat with the same action key refreshes the panel without focusing
-again. A bare legacy call only hands off/checks visibility and never focuses.
-If focused presentation fails, Linux sends a best-effort desktop notification
-and the helper throws rather than pretending the page is visible.
+or notifying again. A bare legacy call only hands off/checks visibility. If the
+page is not available on screen, Linux sends the notification with the failure
+reason and the helper throws rather than pretending the page is visible.
 
 The lower-level `taskSpaces.handOff(nameOrId)` transfers control and checks the
 window without activating a tab, restoring a minimized window, or raising the
@@ -292,8 +292,8 @@ need to confirm that its window is available, call
 compatibility; without options it never brings the window forward. When the user
 explicitly asks to show/raise/focus the existing Ego Lite window, call
 `await taskSpaces.bringToFront(nameOrId, { focus: true })`. The higher-level
-An instructed `requestUserAction(...)` applies the focused path automatically;
-a bare call remains background-only.
+`requestUserAction(...)` path remains background-only even with an instruction;
+it uses the action panel, Inbox, and desktop notification instead.
 Do not call `taskSpaces.useOrCreate(nameOrId)` merely to present it: read-only
 selection is background-only and intentionally does not replace the user's
 current view.

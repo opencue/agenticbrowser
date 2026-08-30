@@ -368,6 +368,10 @@ test("help exposes nested taskSpaces.requestUserAction guidance", () => {
     context.help(),
     /taskSpaces\.requestUserAction\(nameOrId, options\)/,
   );
+  assert.match(
+    context.help("taskSpaces.requestUserAction"),
+    /always hands off without focusing/,
+  );
 });
 
 test("taskSpaces.isHardStopError identifies errors that must not be retried", () => {
@@ -2381,7 +2385,7 @@ test("requestUserActionTaskSpace checks a bare user-owned space without focusing
   ]);
 });
 
-test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the agent", async () => {
+test("requestUserActionTaskSpace notifies without focusing, waits for Done, and resumes the agent", async () => {
   const calls = [];
   let ownership = "agent";
   await withEgo(
@@ -2416,6 +2420,10 @@ test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the a
         calls.push(["presentTaskSpace", id, options]);
         return { done: true, visible: true };
       },
+      async notifyUserAction(payload) {
+        calls.push(["notifyUserAction", payload]);
+        return { done: true };
+      },
       async waitForUserAction(options) {
         calls.push(["waitForUserAction", options]);
         return { done: true, result: "done" };
@@ -2444,7 +2452,7 @@ test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the a
         visible: true,
         presentation: "hand-off",
         actionKey: "approve-login",
-        focused: true,
+        focused: false,
         userResult: "done",
         resumed: true,
       });
@@ -2456,7 +2464,14 @@ test("requestUserActionTaskSpace focuses once, waits for Done, and resumes the a
   );
   assert.ok(
     calls.some(
-      (call) => call[0] === "presentTaskSpace" && call[2]?.focus === true,
+      (call) => call[0] === "presentTaskSpace" && call[2] === undefined,
+    ),
+  );
+  assert.ok(
+    calls.some(
+      (call) =>
+        call[0] === "notifyUserAction" &&
+        call[1]?.instruction === "Approve the login, then press Kész.",
     ),
   );
   assert.ok(calls.some((call) => call[0] === "waitForUserAction"));
@@ -2584,7 +2599,7 @@ test("requestUserActionTaskSpace rejects a page that is not visible", async () =
   );
 });
 
-test("requestUserActionTaskSpace notifies when focused presentation fails", async () => {
+test("requestUserActionTaskSpace notifies when background presentation is unavailable", async () => {
   const notifications = [];
   await withEgo(
     {
@@ -2766,7 +2781,7 @@ test("handleChallengeTaskSpace hands a persistent Cloudflare challenge to the us
             presentation: "hand-off",
             actionKey:
               "human-challenge:cloudflare:turnstile:https://www.npmjs.com",
-            focused: true,
+            focused: false,
             userResult: "done",
             resumed: true,
           },

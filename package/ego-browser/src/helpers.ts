@@ -541,12 +541,11 @@ export async function bringToFrontTaskSpace(
 /**
  * Prepare a task space immediately before asking the user for a manual action.
  * Agent-controlled spaces are handed off; user-owned spaces keep their ownership.
- * A non-empty `instruction` is the capability that permits focus: bare legacy
- * calls remain focus-protected, so an accidental or speculative handoff cannot
- * interrupt the user's current application. With an instruction, Linux shows an
- * in-page Done/Cancel panel, persists the blocker in the Linux Spaces Inbox,
- * highlights `target`, focuses once per action key, and can wait for the decision
- * and resume automatically.
+ * Manual-action requests never take desktop focus. With an instruction, Linux
+ * shows an in-page Done/Cancel panel, persists the blocker in the Linux Spaces
+ * Inbox, highlights `target`, sends one desktop notification per action key, and
+ * can wait for the decision and resume automatically. Explicit user-authorized
+ * focus stays on `taskSpaces.bringToFront(..., { focus: true })`.
  * @param {string|number} nameOrId Task space id or name.
  * @param {RequestUserActionOptions} [options] Human instruction, target, labels, and wait settings. Supplying instruction defaults wait to true.
  * @returns {Promise<object>}
@@ -646,14 +645,12 @@ export async function requestUserActionTaskSpace(
     );
   }
 
-  // A concrete instruction authorizes presentation; the persisted in-page
-  // action key makes retries idempotent. Bare calls and repeated blockers only
-  // check availability and never take focus.
-  const focused = Boolean(instruction) && panel?.alreadyVisible !== true;
+  // A manual-action request is not user authorization to replace the active
+  // desktop window. Keep presentation focus-protected and use the persisted
+  // action key to avoid repeating the notification on retries.
+  const notify = Boolean(instruction) && panel?.alreadyVisible !== true;
   const result = assertNoEgoError(
-    focused
-      ? await ego.presentTaskSpace(id, { focus: true })
-      : await ego.presentTaskSpace(id),
+    await ego.presentTaskSpace(id),
     "requestUserActionTaskSpace",
   );
 
@@ -669,6 +666,11 @@ export async function requestUserActionTaskSpace(
       `requestUserActionTaskSpace: the page is not visible (${reason}); do not ask the user to act until presentation succeeds`,
     );
   }
+  if (notify && typeof ego.notifyUserAction === "function") {
+    await Promise.resolve(ego.notifyUserAction({ instruction })).catch(
+      () => {},
+    );
+  }
 
   const base = {
     done: true as const,
@@ -677,7 +679,7 @@ export async function requestUserActionTaskSpace(
     ...(instruction
       ? {
           actionKey,
-          focused,
+          focused: false,
           ...(panel?.requestId ? { requestId: panel.requestId } : {}),
         }
       : {}),
@@ -2037,11 +2039,11 @@ const FACADE_HELP: Record<string, string> = {
   "taskSpaces.bringToFront":
     "taskSpaces.bringToFront(nameOrId, { focus?: boolean }?) => Promise<object>: check that the task space's browser window is open without selecting it for automation, claiming it, or changing ownership. Default focus:false never raises it. Pass focus:true only when the user's latest instruction explicitly asks to show/raise the browser.",
   "taskSpaces.requestUserAction":
-    "taskSpaces.requestUserAction(nameOrId, { instruction?, target?, actionKey?, doneLabel?, cancelLabel?, wait?, timeout?, interval? }?) => Promise<object>: bare calls hand off without focusing. A non-empty instruction shows a Done/Cancel panel, persists the blocker in the Linux Spaces Needs You Inbox, highlights target, focuses once per action key, and will require visible: true before waiting by default; Done automatically resumes agent control, Cancel leaves user control in place.",
+    "taskSpaces.requestUserAction(nameOrId, { instruction?, target?, actionKey?, doneLabel?, cancelLabel?, wait?, timeout?, interval? }?) => Promise<object>: always hands off without focusing. A non-empty instruction shows a Done/Cancel panel, persists the blocker in the Linux Spaces Needs You Inbox, highlights target, sends one desktop notification per action key, and will require visible: true before waiting by default; Done automatically resumes agent control, Cancel leaves user control in place. Use taskSpaces.bringToFront(..., { focus: true }) only after an explicit user request to show the browser.",
   "taskSpaces.loginPreflight":
     "taskSpaces.loginPreflight(nameOrId, { waitForAutofill?, interval?, submit? }?) => Promise<object>: under agent control, wait briefly for password-manager autofill and return only booleans/counts. When every visible login credential is populated, submit the unique login form (or an explicit CSS selector) without focusing or asking permission.",
   "taskSpaces.handleChallenge":
-    "taskSpaces.handleChallenge(nameOrId, { waitForAutomatic?, interval?, instruction?, doneLabel?, cancelLabel?, timeout? }?) => Promise<object>: detect common visible Cloudflare, hCaptcha, and reCAPTCHA challenges without focusing; wait briefly for automatic completion, then show and focus the one-shot Done/Cancel action panel only if the challenge persists.",
+    "taskSpaces.handleChallenge(nameOrId, { waitForAutomatic?, interval?, instruction?, doneLabel?, cancelLabel?, timeout? }?) => Promise<object>: detect common visible Cloudflare, hCaptcha, and reCAPTCHA challenges without focusing; wait briefly for automatic completion, then show the one-shot Done/Cancel action panel and notify the user without taking focus if the challenge persists.",
   "taskSpaces.takeOver":
     "taskSpaces.takeOver(nameOrId?) => Promise<void>: after explicit user confirmation, take control back. When nameOrId points at a user-owned space, it claims that space before selecting it and calling the native take-over overlay.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
