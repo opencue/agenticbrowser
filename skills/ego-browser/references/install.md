@@ -4,12 +4,13 @@ Read this file only when ego lite isn't installed yet, or when the user asks to 
 
 The ego-browser skill depends on a working `ego-browser` command on `PATH`. On
 **macOS**, that command comes from the Citro **ego lite** app (DMG + onboarding).
-On **Linux / WSL**, this fork's supported runtime is `package/ego-linux`. The
-installer preserves its long-lived `~/.local/share/ego-lite-linux` profile and
-links both normal browser work and the Spaces dashboard to that one runtime.
-The experimental `package/ego-linux-host` package has a different profile and
-task-space store; never substitute it during an active task. Both drive stock
-Chrome/Chromium and neither supplies the native Citro/macOS Ego Lite shell.
+On **Linux / WSL and native Windows**, this fork's supported runtime is
+`package/ego-linux`. The installer preserves the platform's profile and links
+both normal browser work and the Spaces dashboard to that one runtime.
+The experimental `package/ego-linux-host` and `package/ego-windows-host`
+packages have different profiles and task-space stores; never substitute either
+during an active task. All drive stock Chrome/Chromium and none supplies the
+native Citro/macOS Ego Lite shell.
 
 ego lite website (macOS product): https://lite.ego.app/
 
@@ -19,9 +20,18 @@ an unofficial fork of `citrolabs/ego-lite`, published on branch `linux-port`
 (checked out locally as `main`, which tracks it). On this machine the checkout
 is at `~/Documents/ego-lite-linux`. Full details: `package/ego-linux/README.md`.
 
-## Verify the installed Linux runtime before opening or troubleshooting it
+## Verify an existing runtime before opening or troubleshooting it
 
 Run these checks before making a claim about which Ego window the user has:
+
+On Windows:
+
+```powershell
+(Get-Command ego-browser -ErrorAction SilentlyContinue).Source
+ego-browser --doctor
+```
+
+On Linux:
 
 ```bash
 command -v ego-browser
@@ -39,6 +49,57 @@ pgrep -a -f 'package/ego-linux/bin/ego-browser.mjs|ego-lite-linux/profile' | hea
   `--spaces`; this is the Task Space dashboard, not a second browser runtime.
 - A launcher/icon/window class is only desktop identity. The visible surface is
   still Chrome/Chromium; never claim a native Ego application window exists.
+
+---
+
+## Install steps (Windows, native — no WSL)
+
+**Do not install WSL for ego-browser.** Do not run `install.sh` from PowerShell.
+The supported Windows runtime uses the installed Edge/Chrome directly and keeps
+its state under `%LOCALAPPDATA%\ego-lite`.
+
+### Install from a checkout
+
+Requirements:
+
+- Windows 10/11
+- Node.js 22 or newer with npm
+- Microsoft Edge (included with Windows), Chrome, Brave, or Chromium
+
+From the repository root in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\skills\ego-browser\scripts\install-windows.ps1
+```
+
+The script builds `package/ego-browser`, creates a native `ego-browser.cmd`
+for `package/ego-linux`, adds its per-user directory to `PATH`, and runs
+`ego-browser --doctor`. It does not enable WSL, require administrator access,
+replace the user's normal browser profile, or start the agent browser.
+
+After it completes, open a new PowerShell and verify:
+
+```powershell
+(Get-Command ego-browser).Source
+ego-browser --doctor
+ego-browser --status
+```
+
+Run browser scripts through a PowerShell here-string, not a Bash heredoc:
+
+```powershell
+@'
+console.log('ego-browser ready')
+'@ | ego-browser nodejs
+```
+
+### Install a packaged release
+
+Tagged releases attach `ego-lite-setup.exe` and its SHA-256 file. The setup is
+per-user, bundles Node, adds `ego-browser` to `PATH`, and creates the normal
+Windows uninstaller. Download both files from the repository's Releases page,
+verify the checksum, then run the setup. The installer is not code-signed, so
+Windows SmartScreen can show an Unknown publisher warning.
 
 ---
 
@@ -207,6 +268,9 @@ EOF
 
 Printing `ego-browser ready` means the environment is ready.
 
+On Windows, use `(Get-Command ego-browser).Source`, then pipe the same JavaScript
+through the PowerShell here-string shown in the Windows section.
+
 On Linux, you can also inspect the backing browser without a full heredoc:
 
 ```bash
@@ -222,7 +286,13 @@ Once the environment is ready, return to the user's original task and continue w
 - **Linux / WSL**: confirm `command -v`/`readlink` resolves to
   `package/ego-linux`, and that the desktop entry names the same CLI with
   `--spaces`. Do not point either surface at the experimental host profile.
-- **Not macOS**: the DMG script supports macOS only (`uname -s` is `Darwin`). On Linux use the matching port instructions above. On other platforms, check https://lite.ego.app/ or build from this monorepo.
+- **Native Windows**: never install WSL as an ego-browser prerequisite. Run
+  `install-windows.ps1`, open a new PowerShell so it receives the updated user
+  `PATH`, and verify `(Get-Command ego-browser).Source` plus
+  `ego-browser --doctor`.
+- **Not macOS**: the DMG script supports macOS only (`uname -s` is `Darwin`).
+  On Linux or Windows use the matching native port instructions above. On other
+  platforms, check https://lite.ego.app/ or build from this monorepo.
 - **Linux versus macOS Citro shell**: neither Linux implementation installs the
   proprietary `ego lite.app`. A Linux launcher, icon, window class, profile, and
   task-space store can provide separate desktop identity, but the visible shell
@@ -231,4 +301,6 @@ Once the environment is ready, return to the user's original task and continue w
 - **No display (WSL without WSLg)**: use `EGO_LINUX_HEADLESS=1`, or enable WSLg / a display server.
 - **Download failed (macOS)**: the DMG script retries 3 times automatically; if it still fails, it's usually a network issue — have the user check their network and retry.
 - **Gatekeeper still blocks it (macOS)**: the script already tries to strip quarantine; if the first launch is still blocked, have the user allow ego lite manually under System Settings → Privacy & Security.
-- **Command still unavailable**: confirm `~/.local/bin` is on the PATH (see above). On macOS, reopen ego lite, finish onboarding, and retry. On Linux, re-run `scripts/install.sh` or re-create the symlink to `package/ego-linux/bin/ego-browser.mjs`.
+- **Command still unavailable**: on Windows, open a new PowerShell or rerun
+  `install-windows.ps1`; on Linux, confirm `~/.local/bin` is on `PATH` and rerun
+  `scripts/install.sh`; on macOS, reopen ego lite and finish onboarding.

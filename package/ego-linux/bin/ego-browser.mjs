@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * ego-browser, Linux edition.
+ * ego-browser, stock-Chromium port for Linux and Windows.
  *
  * Same CLI shape as the macOS app's `ego-browser`: a heredoc of JS on stdin,
  * executed with every ego-browser helper preloaded. The difference is what backs
@@ -46,14 +46,14 @@ const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 // Keep a local kill switch for diagnosis without maintaining a second build.
 process.env.EGO_LINUX_COLLABORATION_INBOX ??= "1";
 
-const USAGE = `ego-browser (Linux port)
+const USAGE = `ego-browser (Linux and Windows port)
 
   ego-browser <<'JS'
   await page.goto('https://example.com')
   console.log(await page.snapshot())
   JS
 
-Linux-only commands:
+Port commands:
   --doctor [--json]         inspect installation and runtime state without
                             starting or attaching to the browser
   --status                  show the backing browser's connection state

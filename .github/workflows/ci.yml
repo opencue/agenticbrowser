@@ -89,9 +89,11 @@ jobs:
       - name: Let npm run POSIX package scripts
         run: npm config set script-shell bash
 
-      - name: Build the harness the port runs
-        working-directory: package/ego-browser
-        run: npm ci && npm run build
+      - name: Install the native Windows CLI from this checkout
+        shell: pwsh
+        run: |
+          .\skills\ego-browser\scripts\install-windows.ps1 -NoDoctor
+          & "$env:LOCALAPPDATA\Programs\ego-lite\bin\ego-browser.cmd" --doctor --json
       # Ask the port's own resolver, not a hard-coded path: if Chrome moves on
       # the runner image, this fails here saying which paths were tried instead
       # of failing deep inside a browser test.
@@ -175,16 +177,18 @@ jobs:
           $exe = Get-Item package\ego-linux\installer\dist\ego-lite-setup.exe
           Write-Host "$($exe.Name): $([math]::Round($exe.Length / 1MB, 1)) MB"
           if ($exe.Length -lt 15MB) { throw "the installer is too small to contain the Node runtime" }
+          $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($exe.Name)" | Set-Content "$($exe.FullName).sha256" -Encoding ascii
 
       - uses: actions/upload-artifact@v4
         with:
           name: ego-lite-setup
-          path: package/ego-linux/installer/dist/ego-lite-setup.exe
+          path: package/ego-linux/installer/dist/ego-lite-setup.exe*
           if-no-files-found: error
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [test, test-windows, build-windows-installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -201,6 +205,10 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: package/ego-browser/package-lock.json
+      - uses: actions/download-artifact@v4
+        with:
+          name: ego-lite-setup
+          path: ${{ runner.temp }}/windows-installer
       - run: npm ci
       - run: npm run build
       - name: Resolve release channel
@@ -259,6 +267,8 @@ jobs:
           previous_tag="${{ steps.release.outputs.previous_tag }}"
           commit_sha="$(git rev-parse HEAD)"
           artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
+          windows_installer="${RUNNER_TEMP}/windows-installer/ego-lite-setup.exe"
+          windows_checksum="${windows_installer}.sha256"
           notes_file="$(mktemp)"
           release_args=()
           notes_args=()
@@ -293,12 +303,13 @@ jobs:
               --title "$title" \
               --notes-file "$notes_file" \
               "${release_args[@]}"
-            gh release upload "$release_tag" "$artifact" --clobber
+            gh release upload "$release_tag" \
+              "$artifact" "$windows_installer" "$windows_checksum" --clobber
           else
             gh release create "$release_tag" \
               --title "$title" \
               --notes-file "$notes_file" \
               --verify-tag \
               "${release_args[@]}" \
-              "$artifact"
+              "$artifact" "$windows_installer" "$windows_checksum"
           fi

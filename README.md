@@ -2,10 +2,11 @@
 
 <img src="docs/assets/banner.png" alt="ego lite" width="100%" />
 
-**agentic browser — ego lite for Linux, the fastest browser for AI agents, backed by a stock Chromium**
+**agentic browser — ego lite for Linux and Windows, backed by a stock Chromium**
 
 <p>
   <a href="#install"><img src="https://img.shields.io/badge/Install-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Install on Linux" /></a>
+  <a href="#install-on-windows"><img src="https://img.shields.io/badge/Install-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Install on Windows" /></a>
   <a href="https://github.com/citrolabs/ego-lite"><img src="https://img.shields.io/badge/Upstream-citrolabs%2Fego--lite-000000?style=for-the-badge&logo=github&logoColor=white" alt="Upstream repository" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%E2%89%A5%2022-3DA639?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 22 or newer" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="License MIT" /></a>
@@ -13,7 +14,7 @@
 
 </div>
 
-> ### Unofficial Linux fork — renamed to `agenticbrowser`
+> ### Unofficial Linux and Windows port — renamed to `agenticbrowser`
 >
 > This is **[`opencue/agenticbrowser`](https://github.com/opencue/agenticbrowser)**,
 > an unofficial community fork of
@@ -32,14 +33,13 @@
 > the `.desktop` entry, the icon and the window class are unchanged, so the
 > rename does not orphan anyone's existing install.
 >
-> **We build one thing: the agentic browser, on Linux, on top of ego lite.**
+> **We build one thing: the agentic browser, on Linux and Windows, on top of ego lite.**
 > Upstream's `ego-browser` harness is vendored unmodified; everything we write
-> lives in the Linux layer beneath it. We do not develop, test, or ship for
-> macOS or Windows.
+> lives in the stock-Chromium platform layer beneath it. Windows has a native
+> runtime and installer; WSL is not required. We do not ship the macOS app.
 >
 > **On macOS, use the official app instead** — download it from
-> [lite.ego.app](https://lite.ego.app/). This port exists only because the app is
-> not available for Linux.
+> [lite.ego.app](https://lite.ego.app/).
 >
 > **Do not report Linux issues upstream.** Anything you can only reproduce here
 > belongs in this fork's tracker; anything reproducible on the official macOS
@@ -52,10 +52,10 @@ tool calls.
 
 Upstream ships that as a macOS app: a `.dmg`, with the `ego-browser` harness
 talking to it through native bindings the app injects as `globalThis.ego`.
-**This fork supplies that same object on Linux**, backed by a stock Chromium over
+**This fork supplies that same object on Linux and Windows**, backed by a stock Chromium over
 the Chrome DevTools Protocol. The harness itself is untouched — every helper,
 locator, driver and output format in `package/ego-browser/` is upstream code
-running as-is. The Linux layer is `package/ego-linux/`.
+running as-is. The cross-platform layer is `package/ego-linux/`.
 
 ---
 
@@ -63,14 +63,31 @@ running as-is. The Linux layer is `package/ego-linux/`.
 
 | | |
 |---|---|
-| **OS** | Linux. The installer refuses to run anywhere else. |
-| **Node** | 22 or newer. |
-| **Browser** | Any of `google-chrome`, `google-chrome-stable`, `chromium`, `chromium-browser`, `brave-browser`, `microsoft-edge` on `PATH` — or set `EGO_LINUX_CHROME` to an absolute path. |
+| **OS** | Linux, or native Windows 10/11. WSL is optional, not required. |
+| **Node** | 22 or newer for checkout installs; the packaged Windows setup bundles it. |
+| **Browser** | Chrome, Chromium, Brave, or Edge. Windows searches standard install paths; Linux searches `PATH` or `EGO_LINUX_CHROME`. |
 
 You do **not** need a special browser build. The port drives whatever Chromium
 you already have.
 
 ## Install
+
+### Install on Windows
+
+From a checkout, run the native PowerShell installer. Do **not** enable WSL:
+
+```powershell
+git clone https://github.com/opencue/agenticbrowser.git
+cd agenticbrowser
+powershell -ExecutionPolicy Bypass -File .\skills\ego-browser\scripts\install-windows.ps1
+```
+
+It builds the harness, installs a per-user `ego-browser.cmd`, updates the user
+`PATH`, and runs diagnostics without opening the browser. Open a new PowerShell
+after it finishes. Tagged GitHub releases also attach a bundled
+`ego-lite-setup.exe` for machines without Node.
+
+### Install on Linux
 
 ```bash
 git clone https://github.com/opencue/agenticbrowser.git
