@@ -37,10 +37,7 @@ describe("native Windows installation guidance", () => {
       workflow,
       /release:\s*[\s\S]*needs:\s*\[[^\]]*build-windows-installer/,
     );
-    assert.match(
-      workflow,
-      /release:\s*[\s\S]*needs:\s*\[[^\]]*test-windows/,
-    );
+    assert.match(workflow, /release:\s*[\s\S]*needs:\s*\[[^\]]*test-windows/);
     assert.match(workflow, /actions\/download-artifact@v4/);
     assert.match(workflow, /ego-lite-setup\.exe/);
     assert.match(workflow, /install-windows\.ps1/);

@@ -559,7 +559,9 @@ async function main() {
     try {
       const status = await browserStatus();
       if (status.running) {
-        const shim = await createEgoShim({ headless: status.headless === true });
+        const shim = await createEgoShim({
+          headless: status.headless === true,
+        });
         try {
           spaces = await shim.cleanupAgentSessionSpaces(session);
         } finally {
