@@ -89,11 +89,15 @@ describe("replacing a state file", () => {
     assert.equal(await readFile(file, "utf8"), "fresh");
   });
 
-  it("applies scratch-file permissions to the replacement", async () => {
-    const file = join(SANDBOX, "private.json");
-    await replaceFile(file, "private", { mode: 0o600 });
-    assert.equal((await stat(file)).mode & 0o777, 0o600);
-  });
+  it(
+    "applies scratch-file permissions to the replacement",
+    { skip: process.platform === "win32" },
+    async () => {
+      const file = join(SANDBOX, "private.json");
+      await replaceFile(file, "private", { mode: 0o600 });
+      assert.equal((await stat(file)).mode & 0o777, 0o600);
+    },
+  );
 
   it("leaves no scratch file behind, on the way through or on failure", async () => {
     const dir = join(SANDBOX, "leftovers");

@@ -46,8 +46,10 @@ test("persists one private, idempotent pending request per action key and space"
     false,
     "selectors are not persisted",
   );
-  assert.equal(modeOf(await stat(STATE_DIR)), 0o700);
-  assert.equal(modeOf(await stat(COLLABORATION_REQUEST_FILE)), 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(modeOf(await stat(STATE_DIR)), 0o700);
+    assert.equal(modeOf(await stat(COLLABORATION_REQUEST_FILE)), 0o600);
+  }
 
   const duplicate = await store.create(
     manualAction({ agentSession: "retry-session" }),

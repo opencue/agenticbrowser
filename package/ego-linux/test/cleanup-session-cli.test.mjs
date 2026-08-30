@@ -67,7 +67,11 @@ test("--cleanup-session is a safe no-op without an agent session", async () => {
   }
 });
 
-test("--cleanup-session stops an exact-session Next development server", async () => {
+test("--cleanup-session stops an exact-session Next development server", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("procfs ownership proof is POSIX-only");
+    return;
+  }
   const sandbox = await mkdtemp(join(tmpdir(), "ego-cleanup-server-cli-"));
   const standIn = join(sandbox, "standin.mjs");
   const marker = `cleanup-cli-${process.pid}-${Date.now()}`;

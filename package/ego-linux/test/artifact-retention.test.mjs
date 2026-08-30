@@ -125,7 +125,7 @@ test("disabled cleanup leaves expired artifacts in place", async () => {
   }
 });
 
-test("every Linux CLI invocation runs artifact cleanup", async () => {
+test("every CLI invocation runs artifact cleanup", async () => {
   const root = await mkdtemp(join(tmpdir(), "ego-artifact-cli-"));
   const shot = join(root, "ego-browser-shot-9-900-1.png");
   try {
@@ -135,6 +135,8 @@ test("every Linux CLI invocation runs artifact cleanup", async () => {
     await runCli(["--status"], {
       ...process.env,
       TMPDIR: root,
+      TEMP: root,
+      TMP: root,
       XDG_STATE_HOME: join(root, "state"),
       EGO_LINUX_PROFILE: join(root, "profile"),
     });
