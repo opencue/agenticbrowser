@@ -297,6 +297,37 @@ const POWERSHELL_ARGS = [
   "-Command",
 ];
 
+/** Read a browser version without launching its GUI. */
+export async function browserExecutableVersion(
+  binary,
+  { platform = process.platform, run = runCapturedCommand } = {},
+) {
+  let command = binary;
+  let args = ["--version"];
+  if (platform === "win32") {
+    const literalPath = binary.replaceAll("'", "''");
+    command = "powershell.exe";
+    args = [
+      ...POWERSHELL_ARGS,
+      `$info = (Get-Item -LiteralPath '${literalPath}').VersionInfo; ` +
+        `if ($info.ProductVersion) { $info.ProductVersion } else { $info.FileVersion }`,
+    ];
+  }
+
+  const result = await run(command, args, { timeoutMs: 5000 });
+  if (!result.ok) {
+    const detail = String(result.stderr || result.reason || "").trim();
+    throw new Error(
+      `browser version check failed for ${binary}${detail ? `: ${detail}` : ""}`,
+    );
+  }
+  return (
+    String(result.stdout || result.stderr)
+      .trim()
+      .split(/\r?\n/, 1)[0] || "unknown"
+  );
+}
+
 /**
  * Run a PowerShell script for its effect, and say whether it succeeded.
  *

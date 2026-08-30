@@ -8,6 +8,7 @@ import { join } from "node:path";
 import {
   activateWindowByClass,
   activateWindowById,
+  browserExecutableVersion,
   captureDesktopFocus,
   createPlatform,
   getActiveWindow,
@@ -186,6 +187,29 @@ describe("platform: finding a browser", () => {
     );
   });
 
+  it("reads a Windows browser version from file metadata without launching it", async () => {
+    let invocation;
+    const version = await browserExecutableVersion(
+      "C:\\Program Files\\Google's Chrome\\chrome.exe",
+      {
+        platform: "win32",
+        run: async (command, args, options) => {
+          invocation = { command, args, options };
+          return {
+            ok: true,
+            stdout: "140.0.7339.80\r\n",
+            stderr: "",
+          };
+        },
+      },
+    );
+
+    assert.equal(version, "140.0.7339.80");
+    assert.equal(invocation.command, "powershell.exe");
+    assert.match(invocation.args.at(-1), /Google''s Chrome/);
+    assert.equal(invocation.options.timeoutMs, 5000);
+  });
+
   it("points at the Windows profile directories logins can be imported from", () => {
     const dirs = windows().stockBrowserProfileDirs();
     assert.ok(
@@ -265,7 +289,10 @@ describe("platform: process control", () => {
 
   it(
     "finds only processes carrying an exact session environment value",
-    { skip: process.platform === "win32" && "procfs ownership proof is POSIX-only" },
+    {
+      skip:
+        process.platform === "win32" && "procfs ownership proof is POSIX-only",
+    },
     async () => {
       const marker = `ego-session-${process.pid}-${Date.now()}`;
       const child = await standInWith({

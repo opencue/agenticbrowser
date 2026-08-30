@@ -1,23 +1,15 @@
-import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
-import { promisify } from "node:util";
 
 import { browserStatus } from "./chrome.mjs";
 import { PROFILE_DIR, STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
-import { IS_WINDOWS, resolveBrowserBinary } from "./platform.mjs";
-
-const execFileAsync = promisify(execFile);
+import {
+  browserExecutableVersion,
+  IS_WINDOWS,
+  resolveBrowserBinary,
+} from "./platform.mjs";
 
 function enabled(value) {
   return !["", "0", "false", "no"].includes(String(value ?? "").toLowerCase());
-}
-
-async function browserVersion(binary) {
-  const { stdout, stderr } = await execFileAsync(binary, ["--version"], {
-    timeout: 5000,
-    windowsHide: true,
-  });
-  return String(stdout || stderr).trim().split(/\r?\n/, 1)[0] || "unknown";
 }
 
 async function exists(path) {
@@ -63,7 +55,7 @@ export async function collectDoctor({
   env = process.env,
   getBrowserStatus = browserStatus,
   findBrowser = resolveBrowserBinary,
-  getBrowserVersion = browserVersion,
+  getBrowserVersion = browserExecutableVersion,
 } = {}) {
   const issues = [];
   let binary = null;
@@ -86,7 +78,8 @@ export async function collectDoctor({
   if (!harnessBuilt) issues.push(`harness build missing: ${harnessPath}`);
 
   const nodeMajor = Number(process.versions.node.split(".", 1)[0]);
-  if (nodeMajor < 22) issues.push(`Node.js 22+ required; found ${process.version}`);
+  if (nodeMajor < 22)
+    issues.push(`Node.js 22+ required; found ${process.version}`);
 
   const runtime = {
     running: status.running === true,
@@ -136,8 +129,14 @@ function humanReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-export async function runDoctor({ json = false, stdout = process.stdout, ...options } = {}) {
+export async function runDoctor({
+  json = false,
+  stdout = process.stdout,
+  ...options
+} = {}) {
   const report = await collectDoctor(options);
-  stdout.write(json ? `${JSON.stringify(report, null, 2)}\n` : humanReport(report));
+  stdout.write(
+    json ? `${JSON.stringify(report, null, 2)}\n` : humanReport(report),
+  );
   return report.ok ? 0 : 1;
 }
