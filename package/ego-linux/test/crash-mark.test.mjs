@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { clearStaleCrashMark, neutralizeZoom } from "../src/chrome.mjs";
+import {
+  clearStaleCrashMark,
+  neutralizeZoom,
+  suppressPasswordSavePrompts,
+} from "../src/chrome.mjs";
 
 /**
  * Build a profile directory whose Preferences carry the given profile block.
@@ -27,6 +31,15 @@ async function profileWith(profileBlock) {
     );
   }
   return dir;
+}
+
+async function withProfile(operation) {
+  const dir = await profileWith(undefined);
+  try {
+    return await operation(dir);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 async function exitTypeOf(dir) {
@@ -141,5 +154,38 @@ describe("neutralizeZoom", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("suppressPasswordSavePrompts", () => {
+  it("creates the preference for a fresh managed profile", async () => {
+    await withProfile(async (dir) => {
+      assert.equal(await suppressPasswordSavePrompts(dir), true);
+      const prefs = JSON.parse(
+        await readFile(join(dir, "Default", "Preferences"), "utf8"),
+      );
+      assert.equal(prefs.credentials_enable_service, false);
+    });
+  });
+
+  it("preserves existing preferences and is idempotent", async () => {
+    await withProfile(async (dir) => {
+      const path = join(dir, "Default", "Preferences");
+      await mkdir(join(dir, "Default"), { recursive: true });
+      await writeFile(
+        path,
+        JSON.stringify({
+          credentials_enable_service: true,
+          profile: { name: "existing" },
+        }),
+      );
+
+      assert.equal(await suppressPasswordSavePrompts(dir), true);
+      assert.equal(await suppressPasswordSavePrompts(dir), false);
+      assert.deepEqual(JSON.parse(await readFile(path, "utf8")), {
+        credentials_enable_service: false,
+        profile: { name: "existing" },
+      });
+    });
   });
 });

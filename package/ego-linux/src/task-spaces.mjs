@@ -283,6 +283,47 @@ export function createTaskSpacesApi(
   }
 
   /**
+   * Remove the exact blank tab created by `ego-browser --open` once a real
+   * agent tab exists. Closing that creator-stamped anchor lets Chrome hide its
+   * last window when the final task space closes, while a later task can map a
+   * fresh window simply by creating its first target.
+   *
+   * The target is left alone if a person navigated it away from about:blank.
+   * Never infer ownership from a blank URL: only the persisted target id is
+   * eligible, so an unrelated user-created blank tab cannot be swept here.
+   */
+  async function closeUnusedWindowAnchor(state) {
+    const targetId = state.windowAnchorTargetId;
+    if (typeof targetId !== "string" || !targetId) return false;
+    if (
+      state.spaces.some((space) =>
+        (space.targetIds || []).includes(targetId),
+      )
+    ) {
+      delete state.windowAnchorTargetId;
+      return false;
+    }
+
+    let target;
+    try {
+      target = (await livePageTargets()).get(targetId);
+    } catch {
+      return false;
+    }
+    if (!target || !isBlankUrl(target.url)) {
+      delete state.windowAnchorTargetId;
+      return false;
+    }
+    try {
+      await cdp.call("Target.closeTarget", { targetId });
+      delete state.windowAnchorTargetId;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Re-adopt a space's pages after the browser restarted.
    *
    * A space is identified by target ids, and those die with the browser. A
@@ -1033,6 +1074,16 @@ export function createTaskSpacesApi(
   return {
     selectedContextId,
 
+    /** Remember only the blank target this launcher invocation created. */
+    async rememberWindowAnchor(targetId) {
+      if (typeof targetId !== "string" || !targetId) return false;
+      return withStateLock(async (state) => {
+        state.windowAnchorTargetId = targetId;
+        await writeState(state);
+        return true;
+      });
+    },
+
     /**
      * Remember that the selected space received a real page.
      *
@@ -1415,6 +1466,7 @@ export function createTaskSpacesApi(
           if (!space.lastContentAt && url && !isBlankUrl(url)) {
             space.lastContentAt = Date.now();
           }
+          await closeUnusedWindowAnchor(state);
           await writeState(state);
         }
         return result;

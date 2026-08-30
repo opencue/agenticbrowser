@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { connectCdp } from "../src/transport.mjs";
+import {
+  connectCdp,
+  normalizeHeadedDesktopViewport,
+} from "../src/transport.mjs";
 
 class FakeWebSocket {
   static CONNECTING = 0;
@@ -72,6 +75,49 @@ async function withFakeSocket(run) {
     globalThis.WebSocket = original;
   }
 }
+
+test("headed desktop emulation keeps the target on its native viewport", () => {
+  const desktop = JSON.stringify({
+    id: 7,
+    sessionId: "page-session",
+    method: "Emulation.setDeviceMetricsOverride",
+    params: {
+      width: 1600,
+      height: 900,
+      deviceScaleFactor: 1,
+      mobile: false,
+    },
+  });
+
+  assert.deepEqual(
+    JSON.parse(normalizeHeadedDesktopViewport(desktop, true)),
+    {
+      id: 7,
+      sessionId: "page-session",
+      method: "Emulation.clearDeviceMetricsOverride",
+      params: {},
+    },
+  );
+});
+
+test("mobile and headless viewport emulation stay explicit", () => {
+  const mobile = JSON.stringify({
+    id: 8,
+    method: "Emulation.setDeviceMetricsOverride",
+    params: { width: 390, height: 844, mobile: true },
+  });
+  const headlessDesktop = JSON.stringify({
+    id: 9,
+    method: "Emulation.setDeviceMetricsOverride",
+    params: { width: 1600, height: 900, mobile: false },
+  });
+
+  assert.equal(normalizeHeadedDesktopViewport(mobile, true), mobile);
+  assert.equal(
+    normalizeHeadedDesktopViewport(headlessDesktop, false),
+    headlessDesktop,
+  );
+});
 
 test("read-only CDP calls retry once after their operation timeout", async () => {
   const originalSetTimeout = globalThis.setTimeout;

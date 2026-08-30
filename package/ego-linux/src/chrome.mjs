@@ -380,6 +380,32 @@ export async function neutralizeZoom(profileDir) {
 }
 
 /**
+ * Keep automated sign-ins from opening Chrome's native save-password bubble.
+ *
+ * Chromium defines `credentials_enable_service=false` as "do not offer to save
+ * credentials" while continuing to fill passwords already in the profile.
+ * That is the right split for the managed agent profile: imported/autofilled
+ * logins remain useful, but repeated test logins no longer flash a transient
+ * browser-chrome popup over the page.
+ */
+export async function suppressPasswordSavePrompts(profileDir) {
+  const defaultDir = join(profileDir, "Default");
+  const path = join(defaultDir, "Preferences");
+  let prefs;
+  try {
+    prefs = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") return false;
+    prefs = {};
+    await mkdir(defaultDir, { recursive: true });
+  }
+  if (prefs.credentials_enable_service === false) return false;
+  prefs.credentials_enable_service = false;
+  await writeFile(path, JSON.stringify(prefs));
+  return true;
+}
+
+/**
  * Clear a stale crash mark before launching.
  *
  * Chrome stamps `profile.exit_type` "Crashed" while it runs and rewrites it to
@@ -521,6 +547,7 @@ async function clearProfileLock(profileDir) {
 export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
   await clearProfileLock(profileDir);
   await neutralizeZoom(profileDir);
+  await suppressPasswordSavePrompts(profileDir);
   await clearStaleCrashMark(profileDir);
 }
 

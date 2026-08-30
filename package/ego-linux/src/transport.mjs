@@ -22,6 +22,42 @@
 const OPEN_TIMEOUT_MS = 10000;
 const CALL_TIMEOUT_MS = 30000;
 const INTERNAL_ID_BASE = 1_000_000;
+const DESKTOP_VIEWPORT_MIN_WIDTH = 1000;
+
+/**
+ * A fixed desktop viewport inside a visible Chrome window creates a smaller
+ * renderer surface with grey bands around it. Once Chrome has put a target in
+ * that state, clearing the override is not reliable on Linux; prevent the
+ * headed desktop override from reaching the target in the first place.
+ * Mobile emulation and deterministic headless dimensions remain untouched.
+ */
+export function normalizeHeadedDesktopViewport(payload, enabled) {
+  if (!enabled || !payload.includes("Emulation.setDeviceMetricsOverride")) {
+    return payload;
+  }
+  try {
+    const message = JSON.parse(payload);
+    const width = Number(message.params?.width);
+    const height = Number(message.params?.height);
+    if (
+      message.method !== "Emulation.setDeviceMetricsOverride" ||
+      message.params?.mobile === true ||
+      !Number.isFinite(width) ||
+      !Number.isFinite(height) ||
+      width < DESKTOP_VIEWPORT_MIN_WIDTH ||
+      height <= 0
+    ) {
+      return payload;
+    }
+    return JSON.stringify({
+      ...message,
+      method: "Emulation.clearDeviceMetricsOverride",
+      params: {},
+    });
+  } catch {
+    return payload;
+  }
+}
 
 // Fast observation calls should fail fast instead of inheriting the transport's
 // 30 second escape hatch. Callers can still override these per operation.
@@ -104,7 +140,10 @@ function abortError() {
   });
 }
 
-export async function connectCdp(wsUrl) {
+export async function connectCdp(
+  wsUrl,
+  { nativeDesktopViewport = false } = {},
+) {
   const socket = new WebSocket(wsUrl);
   socket.binaryType = "arraybuffer";
 
@@ -364,9 +403,13 @@ export async function connectCdp(wsUrl) {
         runtime?.onSendCDPMessageError?.(blocked.error, blocked.error_code);
         return;
       }
-      noteActivation(payload);
-      if (acknowledgeBackgroundActivation(payload)) return;
-      socket.send(aimDownloadsAtCurrentSpace(payload));
+      const normalized = normalizeHeadedDesktopViewport(
+        payload,
+        nativeDesktopViewport,
+      );
+      noteActivation(normalized);
+      if (acknowledgeBackgroundActivation(normalized)) return;
+      socket.send(aimDownloadsAtCurrentSpace(normalized));
     },
 
     /** Keep harness-authored tab switches logical until the user asks to see one. */

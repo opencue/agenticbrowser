@@ -638,7 +638,13 @@ async function main() {
       // A browser with no page target shows no window; give it one.
       let targetId =
         tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
-      if (!targetId) ({ targetId } = await shim.ego.createTab("about:blank"));
+      if (!targetId) {
+        ({ targetId } = await shim.ego.createTab("about:blank"));
+        // This exact creator-stamped blank may be removed after the first real
+        // agent tab appears. The browser process stays alive; only its idle
+        // window disappears, and a future target maps it again automatically.
+        await shim.rememberWindowAnchor(targetId);
+      }
 
       // The window usually already exists — it is just behind everything else.
       // Clicking a launcher icon has to raise it, not quietly confirm it is

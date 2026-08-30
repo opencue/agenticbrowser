@@ -36,7 +36,9 @@ export async function createEgoShim({ headless = false } = {}) {
   if (launched) {
     await desktopFocus.restoreAfter("launch-browser", startupFocus);
   }
-  const cdp = await connectCdp(wsUrl);
+  const cdp = await connectCdp(wsUrl, {
+    nativeDesktopViewport: !headless,
+  });
 
   // Agent selection is private to this CDP connection. A person may be working
   // in any other task-space tab — not only the Spaces overview — while several
@@ -240,6 +242,7 @@ export async function createEgoShim({ headless = false } = {}) {
   return {
     ego,
     cdp,
+    rememberWindowAnchor: taskSpaces.rememberWindowAnchor,
     cleanupCreatedEmptySpaces: taskSpaces.cleanupCreatedEmptySpaces,
     cleanupAgentSessionSpaces: taskSpaces.cleanupAgentSessionSpaces,
     dismissCursor: cursor.dismiss,

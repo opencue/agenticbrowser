@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -102,6 +102,36 @@ function fakeSyncedStorageCdp() {
   };
 }
 
+function fakeLauncherAnchorCdp(anchorUrl) {
+  const calls = [];
+  return {
+    calls,
+    async call(method, params) {
+      calls.push({ method, params });
+      if (method === "Target.createTarget") {
+        return { targetId: "agent-target" };
+      }
+      if (method === "Target.getTargets") {
+        return {
+          targetInfos: [
+            {
+              type: "page",
+              targetId: "launcher-anchor",
+              url: anchorUrl,
+            },
+            {
+              type: "page",
+              targetId: "agent-target",
+              url: "https://example.com/work",
+            },
+          ],
+        };
+      }
+      return {};
+    },
+  };
+}
+
 const tabsApi = (cdp) => ({
   async createTab(url, browserContextId) {
     return cdp.call("Target.createTarget", { url, browserContextId });
@@ -128,6 +158,63 @@ const baseSpace = {
 };
 
 describe("the space's blank anchor tab is used, not stranded", () => {
+  it("closes the launcher-created blank after the first real agent tab opens", async () => {
+    await seed({
+      ...baseSpace,
+      browserContextId: null,
+      targetIds: [],
+      pendingFirstTab: true,
+    });
+    const cdp = fakeLauncherAnchorCdp("about:blank");
+    const api = createTaskSpacesApi(cdp);
+    await api.rememberWindowAnchor("launcher-anchor");
+
+    await api.createTabInSelectedSpace(
+      tabsApi(cdp),
+      "https://example.com/work",
+    );
+
+    assert.ok(
+      cdp.calls.some(
+        (call) =>
+          call.method === "Target.closeTarget" &&
+          call.params.targetId === "launcher-anchor",
+      ),
+      "the temporary visible anchor no longer keeps an idle window mapped",
+    );
+    const state = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
+    assert.equal(state.windowAnchorTargetId, undefined);
+    assert.deepEqual(state.spaces[0].targetIds, ["agent-target"]);
+  });
+
+  it("keeps a launcher-created tab after the user navigates it", async () => {
+    await seed({
+      ...baseSpace,
+      browserContextId: null,
+      targetIds: [],
+      pendingFirstTab: true,
+    });
+    const cdp = fakeLauncherAnchorCdp("https://example.com/user-page");
+    const api = createTaskSpacesApi(cdp);
+    await api.rememberWindowAnchor("launcher-anchor");
+
+    await api.createTabInSelectedSpace(
+      tabsApi(cdp),
+      "https://example.com/work",
+    );
+
+    assert.ok(
+      !cdp.calls.some(
+        (call) =>
+          call.method === "Target.closeTarget" &&
+          call.params.targetId === "launcher-anchor",
+      ),
+      "a person-owned page is never inferred to be disposable",
+    );
+    const state = JSON.parse(await readFile(TASK_SPACE_FILE, "utf8"));
+    assert.equal(state.windowAnchorTargetId, undefined);
+  });
+
   it("defers the shared profile's first tab until the destination is known", async () => {
     const previous = process.env.EGO_LINUX_TASK_SPACE_STORAGE;
     delete process.env.EGO_LINUX_TASK_SPACE_STORAGE;
