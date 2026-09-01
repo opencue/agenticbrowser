@@ -62,16 +62,25 @@ test("runEgoBrowserScript reports non-zero exits as completed failures", async (
   assert.equal(result.terminationReason, "completed");
 });
 
-test("runEgoBrowserScript distinguishes an externally terminated child", async () => {
-  const result = await runEgoBrowserScript(
-    { script: "signal", timeoutMs: 1000 },
-    runnerOptions(),
-  );
+test(
+  "runEgoBrowserScript distinguishes an externally terminated child",
+  {
+    skip:
+      process.platform === "win32"
+        ? "Windows reports a self-SIGTERM as exit code 1 instead of a signal"
+        : false,
+  },
+  async () => {
+    const result = await runEgoBrowserScript(
+      { script: "signal", timeoutMs: 1000 },
+      runnerOptions(),
+    );
 
-  assert.equal(result.exitCode, null);
-  assert.equal(result.terminationReason, "terminated");
-  assert.match(result.stderr, /terminated before reporting an exit code/i);
-});
+    assert.equal(result.exitCode, null);
+    assert.equal(result.terminationReason, "terminated");
+    assert.match(result.stderr, /terminated before reporting an exit code/i);
+  },
+);
 
 test("runEgoBrowserScript terminates timeouts and output floods", async (t) => {
   await t.test("timeout", async () => {
