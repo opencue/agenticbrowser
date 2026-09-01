@@ -165,7 +165,7 @@ async function waitForActiveSpace(name, label, timeoutMs = 5000) {
  */
 function jpegSize(dataUri) {
   const buffer = Buffer.from(String(dataUri).split(",")[1], "base64");
-  for (let i = 2; i < buffer.length - 9;) {
+  for (let i = 2; i < buffer.length - 9; ) {
     if (buffer[i] !== 0xff) {
       i += 1;
       continue;

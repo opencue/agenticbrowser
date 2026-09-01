@@ -158,7 +158,7 @@ export function createUserActionApi(
       const existing = await probe().catch(() => null);
       const existingMatches = Boolean(
         existing?.key === normalized.key &&
-          (!normalized.requestId || existing.requestId === normalized.requestId),
+        (!normalized.requestId || existing.requestId === normalized.requestId),
       );
       if (request && existingMatches && existing?.result) {
         request = await collaborationStore.respond(request.id, {
@@ -166,9 +166,7 @@ export function createUserActionApi(
           result: existing.result,
         });
       }
-      const alreadyVisible = Boolean(
-        existing?.visible && existingMatches,
-      );
+      const alreadyVisible = Boolean(existing?.visible && existingMatches);
       activeAction = normalized;
       const rendered = await render(normalized);
       return {
