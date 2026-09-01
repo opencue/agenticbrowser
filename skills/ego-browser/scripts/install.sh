@@ -9,6 +9,7 @@ set -eu
 
 BIN_DIR="${EGO_LINUX_BIN_DIR:-$HOME/.local/bin}"
 LINK_PATH="$BIN_DIR/ego-browser"
+MCP_LINK_PATH="$BIN_DIR/ego-browser-mcp"
 # Keep in sync with CHROME_CANDIDATES in package/ego-linux/src/chrome.mjs.
 CHROME_CANDIDATES="google-chrome google-chrome-stable chromium chromium-browser brave-browser microsoft-edge"
 
@@ -25,12 +26,16 @@ die() {
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
 harness_dir="$repo_root/package/ego-browser"
+port_dir="$repo_root/package/ego-linux"
 shim_bin="$repo_root/package/ego-linux/bin/ego-browser.mjs"
+mcp_bin="$repo_root/package/ego-linux/bin/ego-browser-mcp.mjs"
 
 [ -f "$harness_dir/package.json" ] ||
 	die "cannot find the harness at $harness_dir — run this from a checkout of the fork"
 [ -f "$shim_bin" ] ||
 	die "cannot find the Linux shim at $shim_bin — this checkout looks like upstream, not the Linux fork"
+[ -f "$mcp_bin" ] ||
+	die "cannot find the MCP server at $mcp_bin — this checkout is incomplete"
 
 command -v node >/dev/null 2>&1 || die "node is required (>= 22) but was not found on PATH"
 node_major=$(node -p 'process.versions.node.split(".")[0]')
@@ -66,10 +71,15 @@ fi
 log "Building the upstream harness in $harness_dir ..."
 (cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
 	die "harness build failed"
+log "Installing MCP runtime dependencies in $port_dir ..."
+(cd "$port_dir" && CI=true npm ci --omit=dev --ignore-scripts) ||
+	die "MCP dependency install failed"
 
 mkdir -p "$BIN_DIR"
 ln -sf "$shim_bin" "$LINK_PATH"
 log "Linked $LINK_PATH -> $shim_bin"
+ln -sf "$mcp_bin" "$MCP_LINK_PATH"
+log "Linked $MCP_LINK_PATH -> $mcp_bin"
 
 case ":$PATH:" in
 *":$BIN_DIR:"*) ;;
@@ -80,6 +90,7 @@ log "Running installation diagnostics ..."
 "$LINK_PATH" --doctor || die "installed $LINK_PATH but its diagnostics failed"
 
 log ""
-log "ego-browser is installed. Optional next steps (both touch user data, so they are not automatic):"
+log "ego-browser and ego-browser-mcp are installed. Optional onboarding commands (not run automatically):"
 log "  ego-browser --import-chrome-profile    inherit your real logins"
 log "  ego-browser --install-desktop-entry    add an app launcher icon"
+log "MCP hosts can launch: ego-browser-mcp"

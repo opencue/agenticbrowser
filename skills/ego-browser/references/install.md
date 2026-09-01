@@ -72,8 +72,9 @@ From the repository root in PowerShell:
 powershell -ExecutionPolicy Bypass -File .\skills\ego-browser\scripts\install-windows.ps1
 ```
 
-The script builds `package/ego-browser`, creates a native `ego-browser.cmd`
-for `package/ego-linux`, adds its per-user directory to `PATH`, and runs
+The script builds `package/ego-browser`, installs the MCP runtime dependencies,
+creates native `ego-browser.cmd` and `ego-browser-mcp.cmd` commands for
+`package/ego-linux`, adds their per-user directory to `PATH`, and runs
 `ego-browser --doctor`. It does not enable WSL, require administrator access,
 replace the user's normal browser profile, or start the agent browser.
 
@@ -81,6 +82,7 @@ After it completes, open a new PowerShell and verify:
 
 ```powershell
 (Get-Command ego-browser).Source
+(Get-Command ego-browser-mcp).Source
 ego-browser --doctor
 ego-browser --status
 ```
@@ -141,9 +143,10 @@ What it does:
 
 1. Checks Linux, Node ≥ 22, and a Linux-side Chrome/Chromium
 2. Runs `npm ci` + `npm run build` for `package/ego-browser`
-3. Symlinks `~/.local/bin/ego-browser` → `package/ego-linux/bin/ego-browser.mjs`
-4. Runs `ego-browser --doctor` without starting or attaching to the browser
-5. Leaves the existing profile and Task Space state untouched
+3. Installs production MCP dependencies for `package/ego-linux`
+4. Symlinks `ego-browser` and `ego-browser-mcp` under `~/.local/bin`
+5. Runs `ego-browser --doctor` without starting or attaching to the browser
+6. Leaves the existing profile and Task Space state untouched
 
 Optional onboarding commands:
 
@@ -193,6 +196,7 @@ export EGO_LINUX_CHROME=/opt/google/chrome/chrome
 
 ```bash
 command -v ego-browser
+command -v ego-browser-mcp
 ego-browser --doctor
 ego-browser --status
 ego-browser --spaces

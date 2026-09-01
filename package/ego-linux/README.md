@@ -87,8 +87,8 @@ Cloudflare verification loops even in a normal headed window. The explicit
 non-zero port keeps the same local CDP transport without that false signal.
 
 ```bash
-cd package/ego-browser && CI=true npm ci && npm run build   # build the upstream harness
-cd ../ego-linux && npm test                                  # verify the port (headless)
+cd package/ego-browser && CI=true npm ci && npm run build # build the upstream harness
+cd ../ego-linux && npm ci && npm test                     # install MCP SDK + verify the port
 ```
 
 `CI=true` is required, not cosmetic: the harness's `prepare` script runs
@@ -100,6 +100,7 @@ Put the CLI on your PATH:
 
 ```bash
 ln -s "$PWD/bin/ego-browser.mjs" ~/.local/bin/ego-browser
+ln -s "$PWD/bin/ego-browser-mcp.mjs" ~/.local/bin/ego-browser-mcp
 ```
 
 On Windows the installer above does this for you. From a checkout, a `.cmd`
@@ -109,6 +110,7 @@ Developer Mode, and the shebang means nothing there:
 ```powershell
 $bin = "$env:LOCALAPPDATA\Microsoft\WindowsApps"
 Set-Content "$bin\ego-browser.cmd" "@node `"$PWD\bin\ego-browser.mjs`" %*"
+Set-Content "$bin\ego-browser-mcp.cmd" "@node `"$PWD\bin\ego-browser-mcp.mjs`" %*"
 ```
 
 ## Use
@@ -123,6 +125,29 @@ await taskSpaces.run('research task', async () => {
 })
 JS
 ```
+
+MCP hosts can launch the alternate stdio entry point:
+
+```text
+ego-browser-mcp
+```
+
+It uses the TypeScript MCP SDK v2, negotiates the modern `2026-07-28`
+protocol, and exposes one composable tool: `ego_browser_run`. Pass the complete
+ego-browser JavaScript program as `script`; optionally pass `timeoutMs` from
+1,000 to 600,000. The default is 120,000 ms.
+
+```json
+{
+  "script": "await page.goto('https://example.com'); console.log(await page.snapshot())"
+}
+```
+
+The MCP server keeps protocol stdout isolated by executing each script through
+the existing CLI in a child process. Calls on one connection are serialized,
+client cancellation terminates the owned child, and combined captured output is
+limited to 1 MiB. The existing heredoc command remains the lower-overhead path
+for shell-capable agents.
 
 Commands this port adds (upstream's app has no equivalent):
 

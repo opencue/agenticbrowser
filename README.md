@@ -61,10 +61,10 @@ running as-is. The cross-platform layer is `package/ego-linux/`.
 
 ## Requirements
 
-| | |
-|---|---|
-| **OS** | Linux, or native Windows 10/11. WSL is optional, not required. |
-| **Node** | 22 or newer for checkout installs; the packaged Windows setup bundles it. |
+|             |                                                                                                                         |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------- |
+| **OS**      | Linux, or native Windows 10/11. WSL is optional, not required.                                                          |
+| **Node**    | 22 or newer for checkout installs; the packaged Windows setup bundles it.                                               |
 | **Browser** | Chrome, Chromium, Brave, or Edge. Windows searches standard install paths; Linux searches `PATH` or `EGO_LINUX_CHROME`. |
 
 You do **not** need a special browser build. The port drives whatever Chromium
@@ -82,9 +82,9 @@ cd agenticbrowser
 powershell -ExecutionPolicy Bypass -File .\skills\ego-browser\scripts\install-windows.ps1
 ```
 
-It builds the harness, installs a per-user `ego-browser.cmd`, updates the user
-`PATH`, and runs diagnostics without opening the browser. Open a new PowerShell
-after it finishes. Tagged GitHub releases also attach a bundled
+It builds the harness, installs per-user `ego-browser.cmd` and
+`ego-browser-mcp.cmd` commands, updates the user `PATH`, and runs diagnostics
+without opening the browser. Open a new PowerShell after it finishes. Tagged GitHub releases also attach a bundled
 `ego-lite-setup.exe` for machines without Node.
 
 ### Install on Linux
@@ -95,17 +95,19 @@ cd agenticbrowser
 sh skills/ego-browser/scripts/install.sh
 ```
 
-That checks your Node and browser, builds the unmodified upstream harness, links
-the shim to `~/.local/bin/ego-browser`, and runs it once to prove it works. Set
-`EGO_LINUX_BIN_DIR` to link it somewhere else.
+That checks your Node and browser, builds the unmodified upstream harness,
+installs the MCP runtime dependencies, links `ego-browser` and
+`ego-browser-mcp` under `~/.local/bin`, and runs diagnostics. Set
+`EGO_LINUX_BIN_DIR` to link them somewhere else.
 
 <details>
 <summary>Doing it by hand</summary>
 
 ```bash
 cd package/ego-browser && CI=true npm ci && CI=true npm run build
-cd ../ego-linux && npm test          # verify the port: headless, throwaway profile
+cd ../ego-linux && npm ci && npm test # verify the port: headless, throwaway profile
 ln -s "$PWD/bin/ego-browser.mjs" ~/.local/bin/ego-browser
+ln -s "$PWD/bin/ego-browser-mcp.mjs" ~/.local/bin/ego-browser-mcp
 ```
 
 `CI=true` is required, not cosmetic. The harness's `prepare` script runs
@@ -195,14 +197,14 @@ A new space starts owned by `agent`. The harness selects a space with
 `useTaskSpace()`, after which `handOff` / `takeOver` / `complete` act on the
 selected one and take no arguments:
 
-| Call | Owner afterwards | What it means |
-|---|---|---|
-| `createTaskSpace(name)` | `agent` | New space with its own tab, selected immediately. |
-| `handOffTaskSpace()` | `agentDelegatedToUser` | Passed to you to finish by hand. |
-| `takeOverTaskSpace()` | `agent` | The agent takes it back and returns to the space's page. |
-| `claimTaskSpace(id)` | `agent` | Claim a named space. |
-| `completeTaskSpace()` | `user` | Done, but the tabs stay open and become yours. |
-| `closeTaskSpace()` | — | Closes the space's tabs and removes it. |
+| Call                    | Owner afterwards       | What it means                                            |
+| ----------------------- | ---------------------- | -------------------------------------------------------- |
+| `createTaskSpace(name)` | `agent`                | New space with its own tab, selected immediately.        |
+| `handOffTaskSpace()`    | `agentDelegatedToUser` | Passed to you to finish by hand.                         |
+| `takeOverTaskSpace()`   | `agent`                | The agent takes it back and returns to the space's page. |
+| `claimTaskSpace(id)`    | `agent`                | Claim a named space.                                     |
+| `completeTaskSpace()`   | `user`                 | Done, but the tabs stay open and become yours.           |
+| `closeTaskSpace()`      | —                      | Closes the space's tabs and removes it.                  |
 
 Spaces whose tabs you close by hand are reconciled away on the next call, so the
 state file never accumulates ghosts.
@@ -226,6 +228,49 @@ relying on a `#!/usr/bin/env node` shebang, because a desktop session's `PATH` i
 not your shell's — a node from nvm, fnm or asdf is invisible to it, and the icon
 would fail silently with no terminal to show the error. **Re-run this after
 switching Node versions.**
+
+## MCP host integration
+
+The checkout also ships a local stdio MCP server based on the modular
+`@modelcontextprotocol/server` v2 SDK. It negotiates the modern `2026-07-28`
+protocol with current clients and keeps the SDK's legacy fallback for hosts that
+have not upgraded yet.
+
+Point an MCP host at this command with no arguments:
+
+```text
+ego-browser-mcp
+```
+
+For Codex, add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.ego-browser]
+command = "ego-browser-mcp"
+```
+
+For Claude Code:
+
+```bash
+claude mcp add ego-browser -- ego-browser-mcp
+```
+
+The server exposes one tool, `ego_browser_run`. Its `script` argument is the
+same JavaScript you would send through a heredoc, with `page`, `browser`,
+`taskSpaces`, and site helpers preloaded. `timeoutMs` is optional and defaults
+to 120 seconds:
+
+```json
+{
+  "script": "await page.goto('https://example.com'); console.log(await page.snapshot())",
+  "timeoutMs": 120000
+}
+```
+
+Each call runs through the existing CLI in an owned child process. MCP protocol
+stdout stays separate from script output, calls on one connection are
+serialized, cancellation terminates the child, and captured output is bounded
+to 1 MiB.
 
 ---
 
@@ -268,15 +313,15 @@ then aborts with "Failed to create a ProcessSingleton".
 
 ## Command reference
 
-| Command | What it does |
-|---|---|
-| `ego-browser --status` | Connection state of the backing browser, as JSON. |
-| `ego-browser --open` | Open or raise the shared agent browser window. |
-| `ego-browser --stop` | Terminate the backing browser and clear its profile lock. |
+| Command                               | What it does                                                          |
+| ------------------------------------- | --------------------------------------------------------------------- |
+| `ego-browser --status`                | Connection state of the backing browser, as JSON.                     |
+| `ego-browser --open`                  | Open or raise the shared agent browser window.                        |
+| `ego-browser --stop`                  | Terminate the backing browser and clear its profile lock.             |
 | `ego-browser --import-chrome-profile` | Copy your real Chrome profile in, so agent tasks inherit your logins. |
-| `ego-browser --install-desktop-entry` | Add it to your app launcher, with an icon. |
-| `ego-browser --headless` | Run the backing browser headless. Only affects the first launch. |
-| `ego-browser --help` | Usage. |
+| `ego-browser --install-desktop-entry` | Add it to your app launcher, with an icon.                            |
+| `ego-browser --headless`              | Run the backing browser headless. Only affects the first launch.      |
+| `ego-browser --help`                  | Usage.                                                                |
 
 ### Where things live
 
@@ -284,48 +329,48 @@ These keep the `ego-lite-linux` name even though the repository is now
 `agenticbrowser`. Renaming them would orphan the profile, state and launcher
 entry of every existing install, so they stay as they are.
 
-| Path | What |
-|---|---|
-| `~/.local/share/ego-lite-linux/profile` | The agent's browser profile — where the imported Chrome data goes. |
-| `~/.local/state/ego-lite-linux/` | `browser.json` and `task-spaces.json`, the state shared across invocations. |
-| `~/.local/share/applications/ego-lite-linux.desktop` | The app launcher entry. |
+| Path                                                            | What                                                                                                     |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `~/.local/share/ego-lite-linux/profile`                         | The agent's browser profile — where the imported Chrome data goes.                                       |
+| `~/.local/state/ego-lite-linux/`                                | `browser.json` and `task-spaces.json`, the state shared across invocations.                              |
+| `~/.local/share/applications/ego-lite-linux.desktop`            | The app launcher entry.                                                                                  |
 | `~/.local/share/icons/hicolor/scalable/apps/ego-lite-linux.svg` | Its icon — upstream's mark with a badge, so a Linux-port window is never mistaken for an upstream build. |
 
 Both roots follow `XDG_DATA_HOME` / `XDG_STATE_HOME` when those are set.
 
 ### Environment overrides
 
-| Variable | Effect |
-|---|---|
-| `EGO_LINUX_CHROME` | Which browser binary to launch. |
-| `EGO_LINUX_PROFILE` | Which profile directory to use. |
+| Variable            | Effect                                                                   |
+| ------------------- | ------------------------------------------------------------------------ |
+| `EGO_LINUX_CHROME`  | Which browser binary to launch.                                          |
+| `EGO_LINUX_PROFILE` | Which profile directory to use.                                          |
 | `EGO_LINUX_CDP_URL` | Attach to an already-running DevTools endpoint instead of launching one. |
-| `EGO_LINUX_BIN_DIR` | Where `install.sh` links the CLI. Defaults to `~/.local/bin`. |
+| `EGO_LINUX_BIN_DIR` | Where `install.sh` links the CLI. Defaults to `~/.local/bin`.            |
 
 ## Troubleshooting
 
-| Symptom | Cause and fix |
-|---|---|
-| `Failed to create a ProcessSingleton` | A browser died without releasing `SingletonLock`. The launcher clears it automatically; if it persists, run `ego-browser --stop`. |
-| Clicking the launcher icon does nothing | Usually a Node version switch — the entry pins an absolute node path. Re-run `ego-browser --install-desktop-entry`. |
-| `no Chrome/Chromium binary found` | None of the candidates are on `PATH`. Set `EGO_LINUX_CHROME` to an absolute path. |
-| No window appears | The backing browser is headless from an earlier `--headless` run. `ego-browser --open` swaps it for a visible one. |
-| `npm ci` fails in `package/ego-browser` | A global `core.hooksPath` breaks `lefthook install`. Use `CI=true npm ci`. |
+| Symptom                                 | Cause and fix                                                                                                                     |
+| --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `Failed to create a ProcessSingleton`   | A browser died without releasing `SingletonLock`. The launcher clears it automatically; if it persists, run `ego-browser --stop`. |
+| Clicking the launcher icon does nothing | Usually a Node version switch — the entry pins an absolute node path. Re-run `ego-browser --install-desktop-entry`.               |
+| `no Chrome/Chromium binary found`       | None of the candidates are on `PATH`. Set `EGO_LINUX_CHROME` to an absolute path.                                                 |
+| No window appears                       | The backing browser is headless from an earlier `--headless` run. `ego-browser --open` swaps it for a visible one.                |
+| `npm ci` fails in `package/ego-browser` | A global `core.hooksPath` breaks `lefthook install`. Use `CI=true npm ci`.                                                        |
 
 ## What differs from the native app
 
 The harness uses 15 native methods plus 2 callbacks. All are implemented. What
 differs is narrow, and structural rather than unfinished:
 
-| Native surface | Backed by | Fidelity |
-|---|---|---|
-| `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses — a passthrough, not a translation. |
-| `listTabs`, `createTab` | `Target.getTargets` / `Target.createTarget` | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools endpoint's most-recently-used ordering stands in. |
-| `getBrowserVersion` | `Browser.getVersion` | Exact. |
-| `upgradeBrowser` | no-op | App lifecycle; your own Chrome updates itself. |
-| `animationHighlightMouseToPosition`, `setAgentTaskState` | DOM overlay injected into the page | Equivalent, but drawn inside the page instead of above the web view. |
-| `snapshot` | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** `@N` resolves against genuine `backendNodeId`s; roles, names and `loc=` locators are computed here and validated by upstream's own resolver. |
-| the 9 task-space methods | tracked tab sets in the live agent profile | Shared live login/storage state, selected-space tab lists, and user-control hard stops. |
+| Native surface                                            | Backed by                                             | Fidelity                                                                                                                                                                      |
+| --------------------------------------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `sendCDPMessage`, `onCDPMessage`, `onSendCDPMessageError` | WebSocket to Chrome's browser endpoint                | **Exact.** Chrome's flat CDP wire format is byte-identical to what the harness sends and parses — a passthrough, not a translation.                                           |
+| `listTabs`, `createTab`                                   | `Target.getTargets` / `Target.createTarget`           | **Exact**, except `active`: CDP cannot report which tab is focused, so the DevTools endpoint's most-recently-used ordering stands in.                                         |
+| `getBrowserVersion`                                       | `Browser.getVersion`                                  | Exact.                                                                                                                                                                        |
+| `upgradeBrowser`                                          | no-op                                                 | App lifecycle; your own Chrome updates itself.                                                                                                                                |
+| `animationHighlightMouseToPosition`, `setAgentTaskState`  | DOM overlay injected into the page                    | Equivalent, but drawn inside the page instead of above the web view.                                                                                                          |
+| `snapshot`                                                | `DOMSnapshot.captureSnapshot` + role/name computation | **Refs exact, content rebuilt.** `@N` resolves against genuine `backendNodeId`s; roles, names and `loc=` locators are computed here and validated by upstream's own resolver. |
+| the 9 task-space methods                                  | tracked tab sets in the live agent profile            | Shared live login/storage state, selected-space tab lists, and user-control hard stops.                                                                                       |
 
 ### Task spaces share live login state
 
@@ -371,28 +416,23 @@ limitation that stock Chromium does not share.
 
 > **Known flake: canvas drawing under load.** The three canvas cases
 > intermittently count one stroke too many. This is a timing race in the
-> *upstream* harness, not in the shim, and it can bite any drag-heavy work:
+> _upstream_ harness, not in the shim, and it can bite any drag-heavy work:
 > `driver/pointer.ts` `finishDragProbe` waits 50 ms for a trusted `mouseup` and
 > re-synthesises the whole drag in JavaScript if it has not seen one. When the
 > real events land late, the page gets both.
 
-## Design note: this port ships no MCP server
+## MCP design: one tool, one browser program
 
-A recurring request is to wrap `ego-browser` as an MCP server. This fork
-deliberately does not, and the reason is the same one that makes ego-browser
-worth porting at all.
+This port keeps the heredoc CLI as its default interface and also supports MCP
+hosts. It deliberately does not mirror every browser helper as a separate MCP
+tool. Doing so would turn one composable program back into a long
+`navigate` → look → `click` → look chain and pay a model/tool round trip at
+every step.
 
-The value here is that **one heredoc replaces many tool-call round trips**. An
-agent writes a single JS block that navigates, waits, snapshots, clicks, and
-reports — one model turn, one process. An MCP server re-decomposes that into
-`navigate` → look → `click` → look → `snapshot` → look: the exact per-call
-overhead the design exists to avoid, paid on every step, in tokens and latency.
-Wrapping it would make the port measurably worse at its one job.
-
-The honest case for an MCP is an agent with no shell tool at all. If that is
-your situation, the shim in `package/ego-linux/src/` is the layer to build on —
-but expect to give up the token advantage, and benchmark it against the heredoc
-path before committing.
+`ego_browser_run` therefore accepts the complete JavaScript program as one MCP
+call and executes it through the same CLI path. Hosts with shell access keep the
+shortest path; MCP-only hosts get the same helper surface and output semantics
+without changing the browser runtime.
 
 ---
 
@@ -414,28 +454,28 @@ designed from the start for the two of you to share.
 
 ### Highlights of ego lite
 
-| Feature | What it does |
-|---|---|
-| **Code base, not CLI base, for faster runs with fewer tokens on complex tasks** | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish up to 2.5× faster with higher task success rates and far fewer tool calls per task. |
-| **A dedicated Space for every agent** | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want. |
-| **Your agents multitask in Spaces, parallel workspaces inside the same browser** | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it. |
-| **The strongest page Snapshot on the market** | Thanks to kernel-level customization, ego lite produces the highest-quality page snapshots, the view text models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down. |
-| **Any agent can drive it through `ego-browser`** | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass. |
+| Feature                                                                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Code base, not CLI base, for faster runs with fewer tokens on complex tasks**  | The capabilities ego lite exposes to the agent are wrapped as JavaScript functions the agent calls directly. The agent gets to do what it does best: write code, composing a multi-step task into a single output instead of getting stuck in a "call two commands, look at the result, call two more commands" loop. Compared to the conventional CLI approach, complex workflows finish up to 2.5× faster with higher task success rates and far fewer tool calls per task. |
+| **A dedicated Space for every agent**                                            | ego lite gives each agent its own fully isolated Space. You browse up front, your agent works in the background, and they don't get in each other's way. You can see which Space has an agent running at any moment, and take it over or stop it whenever you want.                                                                                                                                                                                                           |
+| **Your agents multitask in Spaces, parallel workspaces inside the same browser** | Each Space gets its own AI agent or its own task, all running at the same time. Claude Code enriching 10 leads in 10 parallel Spaces. Codex scraping 5 competitor sites in 5 more. They don't collide or steal your tabs. Your mouse stays where you left it.                                                                                                                                                                                                                 |
+| **The strongest page Snapshot on the market**                                    | Thanks to kernel-level customization, ego lite produces the highest-quality page snapshots, the view text models rely on to "see" and act on a webpage. It reliably handles tough cases like deeply nested iframes, exactly where other approaches consistently break down.                                                                                                                                                                                                   |
+| **Any agent can drive it through `ego-browser`**                                 | `ego-browser` is the connection layer between any agent CLI (Claude Code, Codex, Cursor, or a custom one) and ego lite. It exposes the browser as a set of in-page JavaScript tools: snapshot, fill, click, wait, navigate, capture. The agent writes a JavaScript snippet calling those tools, and `ego-browser` runs it on the page in one pass.                                                                                                                            |
 
 ### ego lite vs existing products
 
-| Capability | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Multitask in parallel | ✓ | — | — | — | — |
-| Reusable skills | ✓ | — | — | — | — |
-| Inherits Chrome's data | ✓ | — | — | ✓ | ✓ |
-| Same browser, separate workspace | ✓ | — | — | — | — |
-| Compressed semantic input | ✓ | — | ✓ | — | — |
-| Controllable by external agents | ✓ | ✓ | ✓ | — | — |
-| Data stored locally | ✓ | ✓ | ✓ | — | — |
-| No login friction | ✓ | — | — | ✓ | ✓ |
-| Daily-use browser | ✓ | — | — | ✓ | ✓ |
-| Free | ✓ | ✓ | ✓ | — | — |
+| Capability                       | ego lite | Browser-Use | agent-browser (Vercel) | ChatGPT Atlas | Perplexity Comet |
+| -------------------------------- | :------: | :---------: | :--------------------: | :-----------: | :--------------: |
+| Multitask in parallel            |    ✓     |      —      |           —            |       —       |        —         |
+| Reusable skills                  |    ✓     |      —      |           —            |       —       |        —         |
+| Inherits Chrome's data           |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Same browser, separate workspace |    ✓     |      —      |           —            |       —       |        —         |
+| Compressed semantic input        |    ✓     |      —      |           ✓            |       —       |        —         |
+| Controllable by external agents  |    ✓     |      ✓      |           ✓            |       —       |        —         |
+| Data stored locally              |    ✓     |      ✓      |           ✓            |       —       |        —         |
+| No login friction                |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Daily-use browser                |    ✓     |      —      |           —            |       ✓       |        ✓         |
+| Free                             |    ✓     |      ✓      |           ✓            |       —       |        —         |
 
 Upstream benchmarked ego lite against Vercel's agent-browser on four complex
 browser automation tasks, finishing each up to 2.5× faster with substantially

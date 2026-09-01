@@ -2,10 +2,11 @@
   "name": "ego-browser-linux",
   "version": "0.1.0",
   "private": true,
-  "description": "Linux backing layer for the ego-browser harness: backs globalThis.ego with a plain Chromium over CDP.",
+  "description": "Linux and Windows backing layer plus MCP v2 server for the ego-browser harness.",
   "type": "module",
   "bin": {
-    "ego-browser-linux": "./bin/ego-browser.mjs"
+    "ego-browser-linux": "./bin/ego-browser.mjs",
+    "ego-browser-mcp": "./bin/ego-browser-mcp.mjs"
   },
   "scripts": {
     "test": "node --test --test-timeout=180000 \"test/*.test.mjs\""
@@ -13,5 +14,12 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.2.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0"
+  }
 }

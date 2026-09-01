@@ -63,9 +63,16 @@ describe("the installer payload", () => {
   it("ships the CLI, the port's modules and the harness the port runs", () => {
     for (const required of [
       "ego-browser.cmd",
+      "ego-browser-mcp.cmd",
       "package/ego-linux/bin/ego-browser.mjs",
+      "package/ego-linux/bin/ego-browser-mcp.mjs",
+      "package/ego-linux/src/mcp-server.mjs",
       "package/ego-linux/src/platform.mjs",
       "package/ego-linux/package.json",
+      "package/ego-linux/package-lock.json",
+      "package/ego-linux/node_modules/@modelcontextprotocol/server/package.json",
+      "package/ego-linux/node_modules/@modelcontextprotocol/core/package.json",
+      "package/ego-linux/node_modules/zod/package.json",
       "package/ego-linux/assets/ego-lite.ico",
       "package/ego-browser/dist/out/index.js",
     ]) {
@@ -126,6 +133,20 @@ describe("the PATH shim", () => {
     assert.match(shim, /"%~dp0node\\node\.exe"/);
     assert.match(shim, /"%~dp0package\\ego-linux\\bin\\ego-browser\.mjs"/);
     assert.match(shim, /%\*/, "arguments have to reach the CLI");
+  });
+
+  it("runs the MCP server through the bundled runtime and shipped dependencies", async () => {
+    const shim = await readFile(
+      join(staged.payload, "ego-browser-mcp.cmd"),
+      "utf8",
+    );
+    assert.match(shim, /"%~dp0node\\node\.exe"/);
+    assert.match(shim, /"%~dp0package\\ego-linux\\bin\\ego-browser-mcp\.mjs"/);
+    assert.ok(
+      !staged.files.includes(
+        "package/ego-linux/node_modules/@modelcontextprotocol/client/package.json",
+      ),
+    );
   });
 
   it("is CRLF, which is what cmd.exe requires", async () => {
