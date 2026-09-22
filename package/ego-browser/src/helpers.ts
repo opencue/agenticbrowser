@@ -15,6 +15,7 @@ import * as keyboard from "./driver/keyboard.js";
 import * as locator from "./driver/locator.js";
 import * as nav from "./driver/nav.js";
 import * as observe from "./driver/observe.js";
+import * as fast from "./driver/fast.js";
 import * as debugDriver from "./driver/debug.js";
 import * as waits from "./driver/waits.js";
 import * as files from "./driver/files.js";
@@ -1894,6 +1895,8 @@ function createPageFacade() {
     snapshotRaw: observe.snapshotRaw,
     elementCenter: observe.elementCenter,
     drainEvents: observe.drainEvents,
+    fastObserve: fast.fastObserve,
+    fastAct: fast.fastAct,
     screencast: {
       start: screencast.startScreencast,
       stop: screencast.stopScreencast,
