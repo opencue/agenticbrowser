@@ -464,7 +464,8 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
         description: "{ retries?: number } while the page is navigating.",
       },
     ],
-    returns: "Promise<{ url, title, text, table, actions, omitted_actions }>",
+    returns:
+      "Promise<{ url, title, text, table, actions, omitted_actions, w, h, scroll, marker, page_key, guards }> — pass the whole object to page.fastAct",
     example: "const obs = await page.fastObserve(); console.log(obs.table)",
   },
   "page.fastAct": {

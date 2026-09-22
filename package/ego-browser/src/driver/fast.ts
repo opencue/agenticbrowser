@@ -253,7 +253,7 @@ function formatTable(actions: FastAction[]) {
  * file, and hidden inputs are never listed. Shadow roots and iframes are not
  * read.
  * @param {{retries?: number}} [options] retries while the page is navigating (default 10).
- * @returns {Promise<{url: string, title: string, text: string, table: string, actions: object[], omitted_actions: number}>}
+ * @returns {Promise<{url: string, title: string, text: string, table: string, actions: object[], omitted_actions: number, w: number, h: number, scroll: object, marker: any, page_key: any, guards: object}>} Pass the whole object to page.fastAct; the marker/page_key/guards fields are its freshness proof.
  */
 export async function fastObserve(
   options: { retries?: number } = {},
@@ -330,8 +330,8 @@ export async function fastAct(
   if (action.kind === "scroll") {
     await cdp("Input.dispatchMouseEvent", {
       type: "mouseWheel",
-      x: Math.round(observation.w as number) / 2 || 400,
-      y: Math.round(observation.h as number) / 2 || 300,
+      x: Math.round((observation.w as number) / 2) || 400,
+      y: Math.round((observation.h as number) / 2) || 300,
       deltaX: 0,
       deltaY: action.delta,
     });
