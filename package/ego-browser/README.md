@@ -75,6 +75,7 @@ src/
   driver/
     pointer.ts           click, hover, drag, wheel, scrollIntoViewIfNeeded
     observe.ts           snapshot, screenshot, elementCenter
+    fast.ts              fastObserve/fastAct indexed loop (from jev-ultrafast)
     keyboard.ts          focus, insertText, press, pressSequentially, fill, check, uncheck, setChecked, selectOption, dispatchEvent
     locator.ts           first/nth/last selectors, getBy* text-style locators, textContent, innerText, inputValue, isChecked, getAttribute, count, allInnerTexts, allTextContents, evaluate, evaluateAll, extractAll
     nav.ts               tabs, goto, openOrReuseTab, closeTab

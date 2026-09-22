@@ -103,14 +103,14 @@ defined`. Do not invent aliases: use `page.goto(...)` for navigation,
 waits, `page.url()` for the current URL, and `page.evaluate(...)` for page-side
 JS.
 
-| Global       | Members                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `page`       | `goto`, `reload`, `info`, `url`, `title`, `snapshot`, `snapshotRaw`, `screenshot`, `debug`, `trace`, `evaluate`, `locator`, `getByRole`, `getByText`, `getByLabel`, `getByPlaceholder`, `getByAltText`, `getByTitle`, `getByTestId`, `waitForTimeout`, `waitForLoadState`, `waitForSelector`, `waitForFunction`, `waitForURL`, `waitForRequest`, `waitForResponse`, `waitForEvent`, `setDefaultTimeout`, `elementCenter`, `drainEvents`, `screencast`, `keyboard`, `mouse` |
-| `browser`    | `listTabs`, `currentTab`, `switchTab`, `openOrReuseTab`, `closeTab`, `ensureRealTab`, `iframeTarget`                                                                                                                                                                                                                                                                                                                                                                       |
-| `taskSpaces` | `execute`, `run`, `useOrCreate`, `list`, `switch`, `new`, `claim`, `complete`, `handOff`, `bringToFront`, `requestUserAction`, `loginPreflight`, `handleChallenge`, `takeOver`, `waitForAgentControl`, `isHardStopError`                                                                                                                                                                                                                                                   |
-| `site`       | `skills`, `skillsForUrl`, `runTool`, `runBrowserTool`, `learnContext`                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `fetch`      | `fetch.server(url, options)` (Node-side), `fetch.browser(url, options)` (page origin)                                                                                                                                                                                                                                                                                                                                                                                      |
-| `cdp`        | `cdp(method, params?, sessionId?, timeoutMs?)` — raw CDP for anything the facades don't cover                                                                                                                                                                                                                                                                                                                                                                              |
+| Global       | Members                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `page`       | `goto`, `reload`, `info`, `url`, `title`, `snapshot`, `snapshotRaw`, `screenshot`, `debug`, `trace`, `evaluate`, `locator`, `getByRole`, `getByText`, `getByLabel`, `getByPlaceholder`, `getByAltText`, `getByTitle`, `getByTestId`, `waitForTimeout`, `waitForLoadState`, `waitForSelector`, `waitForFunction`, `waitForURL`, `waitForRequest`, `waitForResponse`, `waitForEvent`, `setDefaultTimeout`, `elementCenter`, `drainEvents`, `fastObserve`, `fastAct`, `screencast`, `keyboard`, `mouse` |
+| `browser`    | `listTabs`, `currentTab`, `switchTab`, `openOrReuseTab`, `closeTab`, `ensureRealTab`, `iframeTarget`                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `taskSpaces` | `execute`, `run`, `useOrCreate`, `list`, `switch`, `new`, `claim`, `complete`, `handOff`, `bringToFront`, `requestUserAction`, `loginPreflight`, `handleChallenge`, `takeOver`, `waitForAgentControl`, `isHardStopError`                                                                                                                                                                                                                                                                             |
+| `site`       | `skills`, `skillsForUrl`, `runTool`, `runBrowserTool`, `learnContext`                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `fetch`      | `fetch.server(url, options)` (Node-side), `fetch.browser(url, options)` (page origin)                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `cdp`        | `cdp(method, params?, sessionId?, timeoutMs?)` — raw CDP for anything the facades don't cover                                                                                                                                                                                                                                                                                                                                                                                                        |
 
 Notes:
 
@@ -181,6 +181,28 @@ await page.keyboard.insertText("pasted text");
 
 `page.mouse` has `click`, `dblclick`, `move`, `down`, `up`, `wheel`, `drag`;
 `page.keyboard` has `press`, `down`, `up`, `insertText`, `type`.
+
+### Fast indexed loop (fastObserve / fastAct)
+
+For tight observe → act loops, `page.fastObserve()` reads visible controls,
+their names/values, and the visible viewport text in **one** browser call and
+returns an indexed action table. `page.fastAct(obs, id, text?)` executes one
+entry, but only after re-checking that the page and target are unchanged and
+the target is not covered; otherwise it throws `StalePageError` — observe again
+and re-decide instead of retrying. Password, file, and hidden inputs are never
+listed; shadow roots and iframes are not read (use `page.snapshot()` there).
+
+```js
+let obs = await page.fastObserve();
+console.log(obs.table); // [e2]  fill searchbox  Search Wikipedia  · empty
+await page.fastAct(obs, "e2", "Gödel's incompleteness theorems");
+obs = await page.fastObserve(); // always re-observe after acting
+await page.fastAct(obs, obs.actions.find((a) => a.label === "Search").id);
+```
+
+Action kinds: `fill` (needs `text`, replaces the value), `click`, `select`
+(one entry per native `<select>` option), `scroll` (`scroll_down` /
+`scroll_up`), and `wait`. Ported from browser-use/jev-ultrafast (MIT).
 
 ### page.evaluate
 

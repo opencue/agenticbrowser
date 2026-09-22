@@ -453,6 +453,53 @@ const FUNCTION_DOCS: Record<string, FunctionDoc> = {
     returns: "Promise<{ x: number, y: number }>",
     example: "console.log(await page.elementCenter('@12'))",
   },
+  "page.fastObserve": {
+    signature: "page.fastObserve(options?) => Promise<object>",
+    description:
+      "Read visible controls as an indexed action table (e1, e2, …, scroll_down, scroll_up, wait) plus visible text, in one browser call. Pass the result to page.fastAct.",
+    params: [
+      {
+        name: "options",
+        type: "object",
+        description: "{ retries?: number } while the page is navigating.",
+      },
+    ],
+    returns: "Promise<{ url, title, text, table, actions, omitted_actions }>",
+    example: "const obs = await page.fastObserve(); console.log(obs.table)",
+  },
+  "page.fastAct": {
+    signature:
+      "page.fastAct(observation, id, text?, options?) => Promise<{ executed }>",
+    description:
+      "Execute one action from a fastObserve result. Throws StalePageError if the page or target changed or is covered; observe again instead of retrying.",
+    params: [
+      {
+        name: "observation",
+        type: "object",
+        required: true,
+        description: "Result of page.fastObserve().",
+      },
+      {
+        name: "id",
+        type: "string",
+        required: true,
+        description: "Action id such as e3, scroll_down, or wait.",
+      },
+      {
+        name: "text",
+        type: "string",
+        description: "Replacement text for a fill action.",
+      },
+      {
+        name: "options",
+        type: "object",
+        description:
+          "{ settle?: boolean } — false skips the short post-input wait.",
+      },
+    ],
+    returns: "Promise<{ executed: string }>",
+    example: "await page.fastAct(obs, 'e3', 'Zurich')",
+  },
   "page.drainEvents": {
     signature: "page.drainEvents() => Promise<object[]>",
     description: "Drain buffered page/CDP events.",
