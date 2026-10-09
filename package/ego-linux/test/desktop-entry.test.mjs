@@ -26,3 +26,11 @@ test("launch targets keep URLs and turn paths into file URLs", () => {
   );
   assert.deepEqual(launchTargets([]), []);
 });
+
+test("launch targets refuse script and browser-internal schemes", () => {
+  assert.deepEqual(
+    launchTargets(["javascript:alert(1)", "chrome://settings", "-x", "about:blank"], "/home/u"),
+    ["file:///home/u/javascript:alert(1)", "file:///home/u/chrome:/settings", "about:blank"],
+  );
+});
+

@@ -57,15 +57,20 @@ StartupNotify=true
 }
 
 /**
- * The pages a desktop launch (`--launch %U`) should open: URLs as given, a
- * local path as a file:// URL. xdg-open passes either; nothing means "just
+ * The pages a desktop launch (`--launch %U`) should open: http(s)/file URLs
+ * as given, anything else as a local path turned into a file:// URL. xdg-open passes either; nothing means "just
  * show the browser" (the Spaces overview).
  */
 export function launchTargets(args, cwd = process.cwd()) {
   return args
-    .filter((arg) => arg && !arg.startsWith("--"))
+    .filter((arg) => arg && !arg.startsWith("-"))
     .map((arg) =>
-      /^[a-z][a-z0-9+.-]*:/i.test(arg) ? arg : pathToFileURL(resolve(cwd, arg)).href,
+      // Only web pages and files: anything xdg-open hands over lands in the
+      // browser the agents drive with their logins, so no javascript:,
+      // chrome:// or view-source:. Everything else is a path (also C:\x).
+      /^(https?:\/\/|file:\/\/)/i.test(arg) || arg === "about:blank"
+        ? arg
+        : pathToFileURL(resolve(cwd, arg)).href,
     );
 }
 
