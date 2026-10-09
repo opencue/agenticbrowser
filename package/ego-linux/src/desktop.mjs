@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { WM_CLASS } from "./chrome.mjs";
 import {
@@ -41,7 +41,7 @@ Type=Application
 Name=ego lite Spaces (Chromium port)
 GenericName=Managed Agent Chromium
 Comment=Task-space overview for the Chrome/Chromium browser managed by ego-browser
-Exec=${process.execPath} ${execPath} --spaces
+Exec=${process.execPath} ${execPath} --launch %U
 Icon=${APP_ID}
 Terminal=false
 # Best-effort desktop grouping for the managed Chrome/Chromium process. This
@@ -49,8 +49,24 @@ Terminal=false
 StartupWMClass=${WM_CLASS}
 Categories=Network;WebBrowser;
 Keywords=agent;automation;browser;ego;
+# Lets the desktop offer it for web links and local .html files (xdg-open);
+# it only becomes the default when the user picks it.
+MimeType=text/html;application/xhtml+xml;x-scheme-handler/http;x-scheme-handler/https;
 StartupNotify=true
 `;
+}
+
+/**
+ * The pages a desktop launch (`--launch %U`) should open: URLs as given, a
+ * local path as a file:// URL. xdg-open passes either; nothing means "just
+ * show the browser" (the Spaces overview).
+ */
+export function launchTargets(args, cwd = process.cwd()) {
+  return args
+    .filter((arg) => arg && !arg.startsWith("--"))
+    .map((arg) =>
+      /^[a-z][a-z0-9+.-]*:/i.test(arg) ? arg : pathToFileURL(resolve(cwd, arg)).href,
+    );
 }
 
 /** Best-effort cache refresh; the entry works without it on most desktops. */
