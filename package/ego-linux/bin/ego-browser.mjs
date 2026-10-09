@@ -18,7 +18,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { browserStatus, stopBrowser } from "../src/chrome.mjs";
 import { agentIdentity } from "../src/agent-identity.mjs";
 import { cleanupExpiredArtifacts } from "../src/artifact-retention.mjs";
-import { installDesktopEntry } from "../src/desktop.mjs";
+import { installDesktopEntry, launchTargets } from "../src/desktop.mjs";
 import { runDoctor } from "../src/doctor.mjs";
 import { acquireLaunchLock } from "../src/launch-lock.mjs";
 import {
@@ -61,6 +61,9 @@ Port commands:
                             recognised Next, Vite, and React dev servers
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
+  --launch [url|file ...]   open each page in a tab of the shared window and
+                            raise it; with none, the Spaces overview. The
+                            desktop entry uses it, so xdg-open works
   --prune-spaces            close spaces that hold nothing but about:blank
                             Two sweeps do this on their own. A space that never
                             loads a page is closed 120 seconds after it opens —
@@ -517,6 +520,59 @@ async function pruneSpaces() {
   return 0;
 }
 
+/**
+ * Show the shared agent window, opening `urls` in new tabs first (--open,
+ * --launch <url>). Launched from a desktop icon or xdg-open there is no
+ * terminal to read an error in, so this has to succeed rather than explain.
+ */
+async function openPages(urls) {
+  // Launched from a desktop icon there is no terminal to read an error in, so
+  // this has to succeed rather than explain. A headless browser has no window
+  // to show, so trade it for a visible one.
+  const status = await browserStatus();
+  if (status.running && status.headless) {
+    process.stderr.write(
+      "replacing the headless browser with a visible one\n",
+    );
+    await stopBrowser();
+  }
+  const shim = await createEgoShim({ headless: false });
+  try {
+    // Each page asked for gets its own plain tab, the last one raised. Not
+    // ego.createTab: that files the tab into the agents' selected task space
+    // and does nothing while a person has taken that space over.
+    let targetId;
+    for (const url of urls) {
+      ({ targetId } = await shim.cdp.call("Target.createTarget", { url }));
+    }
+    const { tabs } = await shim.ego.listTabs();
+    // A browser with no page target shows no window; give it one.
+    targetId ??= tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
+    if (!targetId) {
+      ({ targetId } = await shim.ego.createTab("about:blank"));
+      // This exact creator-stamped blank may be removed after the first real
+      // agent tab appears. The browser process stays alive; only its idle
+      // window disappears, and a future target maps it again automatically.
+      await shim.rememberWindowAnchor(targetId);
+    }
+
+    // The window usually already exists — it is just behind everything else.
+    // Clicking a launcher icon has to raise it, not quietly confirm it is
+    // running, which looks identical to nothing happening.
+    await shim.cdp
+      .call("Target.activateTarget", { targetId })
+      .catch(() => {});
+    const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
+      targetId,
+      flatten: true,
+    });
+    await shim.cdp.call("Page.bringToFront", {}, sessionId).catch(() => {});
+  } finally {
+    shim.close();
+  }
+  return 0;
+}
+
 async function main() {
   const argv = process.argv.slice(2);
 
@@ -611,6 +667,11 @@ async function main() {
   if (argv[0] === "--spaces") {
     return openSpaces();
   }
+  if (argv[0] === "--launch") {
+    const urls = launchTargets(argv.slice(1));
+    if (!urls.length) return openSpaces();
+    return openPages(urls);
+  }
   if (argv[0] === "--spaces-daemon") {
     return runSpacesDaemon();
   }
@@ -624,45 +685,7 @@ async function main() {
     return 0;
   }
   if (argv[0] === "--open") {
-    // Launched from a desktop icon there is no terminal to read an error in, so
-    // this has to succeed rather than explain. A headless browser has no window
-    // to show, so trade it for a visible one.
-    const status = await browserStatus();
-    if (status.running && status.headless) {
-      process.stderr.write(
-        "replacing the headless browser with a visible one\n",
-      );
-      await stopBrowser();
-    }
-    const shim = await createEgoShim({ headless: false });
-    try {
-      const { tabs } = await shim.ego.listTabs();
-      // A browser with no page target shows no window; give it one.
-      let targetId =
-        tabs.find((tab) => tab.active)?.targetId ?? tabs[0]?.targetId;
-      if (!targetId) {
-        ({ targetId } = await shim.ego.createTab("about:blank"));
-        // This exact creator-stamped blank may be removed after the first real
-        // agent tab appears. The browser process stays alive; only its idle
-        // window disappears, and a future target maps it again automatically.
-        await shim.rememberWindowAnchor(targetId);
-      }
-
-      // The window usually already exists — it is just behind everything else.
-      // Clicking a launcher icon has to raise it, not quietly confirm it is
-      // running, which looks identical to nothing happening.
-      await shim.cdp
-        .call("Target.activateTarget", { targetId })
-        .catch(() => {});
-      const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
-        targetId,
-        flatten: true,
-      });
-      await shim.cdp.call("Page.bringToFront", {}, sessionId).catch(() => {});
-    } finally {
-      shim.close();
-    }
-    return 0;
+    return openPages([]);
   }
 
   // EGO_LINUX_HEADLESS is for a machine whose owner does not want the agent

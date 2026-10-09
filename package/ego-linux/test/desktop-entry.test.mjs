@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { desktopEntry } from "../src/desktop.mjs";
+import { desktopEntry, launchTargets } from "../src/desktop.mjs";
 
 test("Linux launcher names the Chromium surface honestly", () => {
   const entry = desktopEntry("/opt/ego/ego-browser.mjs");
@@ -11,3 +11,26 @@ test("Linux launcher names the Chromium surface honestly", () => {
   assert.match(entry, /^Comment=.*Chrome\/Chromium.*$/m);
   assert.doesNotMatch(entry, /The browser you and your AI agents share/);
 });
+
+test("the launcher takes the pages xdg-open passes and offers itself for web content", () => {
+  const entry = desktopEntry("/opt/ego/ego-browser.mjs");
+
+  assert.match(entry, /^Exec=.* \/opt\/ego\/ego-browser\.mjs --launch %U$/m);
+  assert.match(entry, /^MimeType=.*text\/html;.*x-scheme-handler\/https;$/m);
+});
+
+test("launch targets keep URLs and turn paths into file URLs", () => {
+  assert.deepEqual(
+    launchTargets(["https://example.com/a?b=1", "report.html", "/tmp/x y.html", "--headless", ""], "/home/u"),
+    ["https://example.com/a?b=1", "file:///home/u/report.html", "file:///tmp/x%20y.html"],
+  );
+  assert.deepEqual(launchTargets([]), []);
+});
+
+test("launch targets refuse script and browser-internal schemes", () => {
+  assert.deepEqual(
+    launchTargets(["javascript:alert(1)", "chrome://settings", "-x", "about:blank"], "/home/u"),
+    ["file:///home/u/javascript:alert(1)", "file:///home/u/chrome:/settings", "about:blank"],
+  );
+});
+
