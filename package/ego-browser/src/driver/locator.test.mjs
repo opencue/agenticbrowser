@@ -504,6 +504,73 @@ test("evaluateAll supports refs as a single-element array", async () => {
   assert.equal(calls.at(-1).method, "Runtime.releaseObject");
 });
 
+for (const collection of [false, true]) {
+  for (const rejects of [false, true]) {
+    test(`${collection ? "evaluateAll on refs" : "evaluateLocator"} ${rejects ? "reports async callback errors" : "returns async callback results"} and releases its target`, async () => {
+      const calls = [];
+      browserRefMap.clear();
+      browserRefMap.add("1", 123, "button", "Submit");
+      const restore = setOverrides({
+        async cdpOverride(method, params) {
+          calls.push({ method, params });
+          if (method === "Runtime.evaluate") {
+            return { result: { objectId: "node-1" } };
+          }
+          if (method === "DOM.resolveNode") {
+            return { object: { objectId: "node-1" } };
+          }
+          if (method === "Runtime.callFunctionOn") {
+            const callback = (0, eval)(`(${params.functionDeclaration})`);
+            const result = callback.apply(
+              { textContent: "Ready" },
+              params.arguments.map((argument) => argument.value),
+            );
+            if (!params.awaitPromise && result?.then) {
+              // CDP serializes the Promise object without waiting for its value.
+              result.catch(() => {});
+              return { result: { value: {} } };
+            }
+            try {
+              return { result: { value: await result } };
+            } catch (error) {
+              return {
+                exceptionDetails: { exception: { description: error.message } },
+              };
+            }
+          }
+          return {};
+        },
+      });
+      try {
+        const callback = async (target, shouldReject) => {
+          await Promise.resolve();
+          if (shouldReject) throw new Error("async callback failed");
+          return Array.isArray(target)
+            ? target.map((element) => element.textContent)
+            : target.textContent;
+        };
+        const result = collection
+          ? evaluateAll("@1", callback, rejects)
+          : evaluateLocator(".item", callback, rejects);
+        if (rejects) {
+          await assert.rejects(result, /async callback failed/);
+        } else {
+          assert.deepEqual(await result, collection ? ["Ready"] : "Ready");
+        }
+      } finally {
+        browserRefMap.clear();
+        restore();
+      }
+      assert.deepEqual(
+        calls
+          .filter((call) => call.method === "Runtime.releaseObject")
+          .map((call) => call.params.objectId),
+        ["node-1"],
+      );
+    });
+  }
+}
+
 test("count treats a resolved ref as one element", async () => {
   const calls = [];
   browserRefMap.clear();
