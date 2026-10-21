@@ -5,6 +5,7 @@ import { setOverrides } from "../../dist/src/state.js";
 import {
   check,
   down,
+  fill,
   focus,
   press,
   pressOnSelector,
@@ -397,6 +398,46 @@ test("setChecked rejects page-side validation errors", async () => {
     restore();
   }
 });
+
+for (const [step, marker, error, insertedTexts] of [
+  ["focus", "this.focus()", "focus step failed", 0],
+  ["clear", "fill target is not editable", "fill target is not editable", 0],
+  ["event", "new Event('change'", "event step failed", 1],
+]) {
+  test(`fill rejects when its ${step} step throws in the page and releases the element`, async () => {
+    const calls = [];
+    const restore = setOverrides({
+      cdpOverride(method, params, sessionId) {
+        calls.push({ method, params, sessionId });
+        if (method === "Runtime.evaluate") {
+          return { result: { objectId: "object-1", value: true } };
+        }
+        if (
+          method === "Runtime.callFunctionOn" &&
+          params.functionDeclaration.includes(marker)
+        ) {
+          const description = `Error: ${error}`;
+          return {
+            result: { subtype: "error", description },
+            exceptionDetails: { text: "Uncaught", exception: { description } },
+          };
+        }
+        return {};
+      },
+    });
+    try {
+      await assert.rejects(() => fill("#name", "hello"), new RegExp(error));
+    } finally {
+      restore();
+    }
+
+    assert.equal(
+      calls.filter((entry) => entry.method === "Input.insertText").length,
+      insertedTexts,
+    );
+    assert.equal(calls.at(-1).method, "Runtime.releaseObject");
+  });
+}
 
 test("pressSequentially focuses a selector then presses characters with delay", async () => {
   const calls = [];
