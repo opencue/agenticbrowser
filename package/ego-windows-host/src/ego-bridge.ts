@@ -61,8 +61,10 @@ type BridgeOptions = {
 export function createEgoBridge(options: BridgeOptions) {
   const { hostConnection, agentConnection, registry } = options;
   // Runtime requests worth reacting to on their response (Target.createTarget
-  // returns the new targetId asynchronously, under the runtime's own id).
-  const sniffedCreates = new Set<number>();
+  // returns the new targetId asynchronously, under the runtime's own id),
+  // mapped to the space that sent them: the selection can change before the
+  // reply arrives.
+  const sniffedCreates = new Map<number, number>();
 
   const bridge: Record<string, any> = {
     onCDPMessage: null,
@@ -96,7 +98,7 @@ export function createEgoBridge(options: BridgeOptions) {
       ) {
         registry.setActive(parsed.params.targetId);
       } else if (parsed?.method === "Target.createTarget" && parsed.id) {
-        sniffedCreates.add(parsed.id);
+        sniffedCreates.set(parsed.id, space.id);
       } else if (
         parsed?.method === "Target.closeTarget" &&
         parsed.params?.targetId
@@ -144,8 +146,8 @@ export function createEgoBridge(options: BridgeOptions) {
       const created = await hostConnection.request("Target.createTarget", {
         url,
       });
-      registry.trackTarget(created.targetId);
-      registry.setActive(created.targetId);
+      registry.trackTarget(created.targetId, space.id);
+      registry.setActive(created.targetId, space.id);
       return { targetId: created.targetId };
     },
 
@@ -284,11 +286,12 @@ export function createEgoBridge(options: BridgeOptions) {
       data = null;
     }
     if (data?.id && sniffedCreates.has(data.id)) {
+      const spaceId = sniffedCreates.get(data.id);
       sniffedCreates.delete(data.id);
       const targetId = data.result?.targetId;
       if (targetId) {
-        registry.trackTarget(targetId);
-        registry.setActive(targetId);
+        registry.trackTarget(targetId, spaceId);
+        registry.setActive(targetId, spaceId);
       }
     }
     const callback = bridge.onCDPMessage;
