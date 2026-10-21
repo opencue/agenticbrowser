@@ -162,34 +162,67 @@ async function writeBrowserState(state) {
   );
 }
 
-function processFlagValue(argv, prefix) {
-  const token = argv.find((arg) => arg.startsWith(prefix));
-  if (token && !token.includes(" ")) return token.slice(prefix.length);
+// Chromium stops reading switches at a bare "--" (base/command_line.cc).
+function switchArgs(args) {
+  const end = args.indexOf("--");
+  return end < 0 ? args : args.slice(0, end);
+}
 
-  // Chromium rewrites /proc/<pid>/cmdline after startup into one space-joined
-  // process title. Preserve support for normal tokenized argv while also
-  // reading flags from that live representation. A value ends at the next flag,
-  // not the next space, so profile paths containing spaces remain intact.
-  const text = argv.filter(Boolean).join(" ");
-  const start = text.indexOf(prefix);
-  if (start < 0) return null;
-  const valueStart = start + prefix.length;
-  const rest = text.slice(valueStart);
-  const nextFlag = rest.search(/\s--[a-zA-Z0-9-]+(?:=|\s|$)/);
-  return (nextFlag < 0 ? rest : rest.slice(0, nextFlag)).trim();
+// Each "--name=" or bare "--name" that starts a word of a rewritten process
+// title, up to a bare "--", which is kept as the boundary of the value before
+// it. Chromium builds the title by joining argv with spaces and no quoting
+// (base/process/set_process_title.cc), so a quote character belongs to a value.
+function processTitleFlags(text) {
+  const flags = [];
+  for (const match of text.matchAll(
+    /(?<!\S)--(?:[a-zA-Z0-9-]+)?(?:=|(?=\s|$))/g,
+  )) {
+    flags.push({
+      flag: match[0],
+      index: match.index,
+      valueStart: match.index + match[0].length,
+    });
+    if (match[0] === "--") break;
+  }
+  return flags;
+}
+
+function processFlagValues(argv, prefix) {
+  const args = argv.filter(Boolean);
+  if (args.length !== 1) {
+    // Wrapper scripts can prepend the person's profile and debugging-port
+    // flags. Chromium uses the final occurrence; keep each argv value intact,
+    // including spaces or flag-like text embedded in another argument's value.
+    return switchArgs(args)
+      .filter((arg) => arg.startsWith(prefix))
+      .map((arg) => arg.slice(prefix.length));
+  }
+
+  // Chromium can rewrite /proc/<pid>/cmdline into one space-joined process
+  // title. Only that representation needs boundary scanning. A value ends at
+  // the next flag, not the next space, preserving profile paths with spaces.
+  const text = args[0];
+  const flags = processTitleFlags(text);
+  return flags.flatMap((entry, index) =>
+    entry.flag === prefix
+      ? [text.slice(entry.valueStart, flags[index + 1]?.index).trim()]
+      : [],
+  );
+}
+
+function processFlagValue(argv, prefix) {
+  return processFlagValues(argv, prefix).at(-1) ?? null;
 }
 
 function processHasArg(argv, expected) {
-  if (argv.includes(expected)) return true;
-  const text = argv.filter(Boolean).join(" ");
-  let index = text.indexOf(expected);
-  while (index >= 0) {
-    const before = index === 0 ? " " : text[index - 1];
-    const after = text[index + expected.length] || " ";
-    if (/\s/.test(before) && /\s/.test(after)) return true;
-    index = text.indexOf(expected, index + 1);
-  }
-  return false;
+  const args = argv.filter(Boolean);
+  if (args.length !== 1) return switchArgs(args).includes(expected);
+  const text = args[0];
+  return processTitleFlags(text).some(
+    ({ index }) =>
+      text.startsWith(expected, index) &&
+      /\s/.test(text[index + expected.length] || " "),
+  );
 }
 
 function processHasFlag(argv, flag) {
@@ -209,13 +242,15 @@ export function unsafeBrowserLaunchFlags(argv = []) {
   const unsafe = UNSAFE_PROFILE_BROWSER_FLAGS.filter((flag) =>
     processHasFlag(argv, flag),
   );
-  const debuggingAddress = processFlagValue(
+  const debuggingAddresses = processFlagValues(
     argv,
     "--remote-debugging-address=",
   );
   if (
-    debuggingAddress &&
-    !["127.0.0.1", "localhost", "::1"].includes(debuggingAddress)
+    debuggingAddresses.some(
+      (address) =>
+        address && !["127.0.0.1", "localhost", "::1"].includes(address),
+    )
   ) {
     unsafe.push("--remote-debugging-address");
   }
