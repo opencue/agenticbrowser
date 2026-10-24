@@ -58,12 +58,14 @@ export async function withHandle(selectorOrRef, fn) {
  * @param {string} selectorOrRef Selector or ref string.
  * @param {string} functionDeclaration Function source whose `this` is the element.
  * @param {Array<unknown>} [args=[]] Arguments passed by value.
+ * @param {{awaitPromise?: boolean}} [options] Whether to await a Promise returned by the function.
  * @returns {Promise<{result: any, objectId: string, sessionId?: string}>}
  */
 export async function resolveAndCall(
   selectorOrRef,
   functionDeclaration,
   args = [],
+  options: { awaitPromise?: boolean } = {},
 ) {
   return withHandle(selectorOrRef, async ({ objectId, sessionId }) => {
     const result = await cdp(
@@ -73,7 +75,7 @@ export async function resolveAndCall(
         objectId,
         arguments: args.map((value) => ({ value })),
         returnByValue: true,
-        awaitPromise: false,
+        awaitPromise: options.awaitPromise ?? false,
       },
       sessionId,
     );
