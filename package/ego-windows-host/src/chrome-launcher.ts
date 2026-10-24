@@ -72,14 +72,23 @@ export async function ensureBrowser(options: EnsureBrowserOptions) {
     detached: true,
     stdio: "ignore",
   });
+  const launchFailure = new Promise<never>((_, reject) => {
+    child.once("error", reject);
+  });
+  // Nothing awaits this after the loop below ends, or if it never runs; a
+  // spawn error then must not become an unhandled rejection.
+  void launchFailure.catch(() => {});
   child.unref();
   const deadline = Date.now() + (options.timeoutMs ?? READY_TIMEOUT_MS);
   while (Date.now() < deadline) {
-    const endpoint = await browserEndpoint(options.port, fetchFn);
+    const endpoint = await Promise.race([
+      browserEndpoint(options.port, fetchFn),
+      launchFailure,
+    ]);
     if (endpoint) {
       return { endpoint, launched: true };
     }
-    await sleep(POLL_INTERVAL_MS);
+    await Promise.race([sleep(POLL_INTERVAL_MS), launchFailure]);
   }
   throw new Error(
     `browser did not expose CDP on port ${options.port} within ${options.timeoutMs ?? READY_TIMEOUT_MS}ms`,

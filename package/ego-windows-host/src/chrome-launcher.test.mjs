@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { EventEmitter } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +29,9 @@ function fakeSpawn(record) {
     record.args = args;
     record.options = options;
     record.calls = (record.calls || 0) + 1;
-    return { unref() {} };
+    const child = new EventEmitter();
+    child.unref = () => {};
+    return child;
   };
 }
 
@@ -112,6 +115,36 @@ test("ensureBrowser reports a launch that never becomes ready", async () => {
       }),
       /did not expose CDP on port 9522/,
     );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("ensureBrowser rejects with the spawn error when the browser cannot start", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ego-host-launch-"));
+  try {
+    const spawnError = new Error("spawn EACCES");
+    let probes = 0;
+    await assert.rejects(
+      ensureBrowser({
+        port: 9522,
+        userDataDir: join(dir, "profile"),
+        browserPath: () => "C:\\fake\\msedge.exe",
+        spawnFn: (...args) => {
+          const child = fakeSpawn({})(...args);
+          queueMicrotask(() => child.emit("error", spawnError));
+          return child;
+        },
+        fetchFn: async () => {
+          probes += 1;
+          throw new Error("ECONNREFUSED");
+        },
+        sleep: async () => new Promise((resolve) => setImmediate(resolve)),
+        timeoutMs: 1000,
+      }),
+      (error) => error === spawnError,
+    );
+    assert.equal(probes, 2, "stops probing as soon as the launch fails");
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
