@@ -132,14 +132,32 @@ export async function connectHost(socketPath: string): Promise<HostConnection> {
   };
 }
 
-function openSocket(socketPath: string): Promise<Socket> {
+function openSocket(socketPath: string, timeoutMs = 5000): Promise<Socket> {
   return new Promise((resolve, reject) => {
     const sock = createConnection(socketPath);
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      sock.destroy();
+      reject(
+        makeEgoError(
+          "EGO_TASK_HOST_DISCONNECTED",
+          `host daemon socket connect timed out after ${timeoutMs}ms`,
+        ),
+      );
+    }, timeoutMs);
+    const clearTimer = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
     const onError = (err: Error) => {
+      clearTimer();
       sock.removeListener("connect", onConnect);
       reject(err);
     };
     const onConnect = () => {
+      clearTimer();
       sock.removeListener("error", onError);
       resolve(sock);
     };
