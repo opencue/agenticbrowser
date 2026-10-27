@@ -46,6 +46,20 @@ const META_MODIFIER = 4;
 const INPUT_EVENT_DELAY_MS = 25;
 const INPUT_DISPATCH_TIMEOUT_MS = 1000;
 
+/**
+ * Input types whose value cannot be set with Input.insertText. For these,
+ * fill() assigns .value directly via Runtime.callFunctionOn instead.
+ */
+const COMPOSITE_INPUT_TYPES = new Set([
+  "date",
+  "datetime-local",
+  "month",
+  "week",
+  "time",
+  "color",
+  "range",
+]);
+
 function keyDefinition(key) {
   const special = KEYS[key];
   if (special) {
@@ -252,6 +266,28 @@ export async function insertText(text) {
 }
 
 /**
+ * Set an input's .value directly and fire bubbling input and change events.
+ * Use this for composite inputs — date, time, datetime-local, month, week,
+ * color, range — where Input.insertText has no effect. Unlike fill(), this
+ * does not focus the element, clear it first, or simulate keyboard events.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= for the input.
+ * @param {string} value Value to set.
+ * @returns {Promise<void>}
+ */
+export async function setInputValue(selector, value) {
+  await resolveAndCall(
+    selector,
+    `function(v){
+      if (!("value" in this)) throw new Error("setInputValue: target has no .value property");
+      this.value = v;
+      this.dispatchEvent(new Event("input", { bubbles: true }));
+      this.dispatchEvent(new Event("change", { bubbles: true }));
+    }`,
+    [String(value)],
+  );
+}
+
+/**
  * Type text with key events, Playwright-style keyboard.type().
  * @param {string} text Text to type.
  * @param {{delay?: number}} [options] delay in milliseconds between key presses.
@@ -313,7 +349,33 @@ export async function fill(selector, value, options: FillOptions = {}) {
         sessionId,
       );
     }
-    await cdp("Input.insertText", { text: value }, sessionId);
+    const typeResult = await cdp(
+      "Runtime.callFunctionOn",
+      {
+        functionDeclaration:
+          "function(){ return this instanceof HTMLInputElement ? this.type : ''; }",
+        objectId,
+        returnByValue: true,
+        awaitPromise: false,
+      },
+      sessionId,
+    );
+    const inputType = String(typeResult?.result?.value ?? "");
+    if (COMPOSITE_INPUT_TYPES.has(inputType)) {
+      await cdp(
+        "Runtime.callFunctionOn",
+        {
+          functionDeclaration: "function(v){ this.value = v; }",
+          objectId,
+          arguments: [{ value: String(value) }],
+          returnByValue: true,
+          awaitPromise: false,
+        },
+        sessionId,
+      );
+    } else {
+      await cdp("Input.insertText", { text: value }, sessionId);
+    }
     await cdp(
       "Runtime.callFunctionOn",
       {
