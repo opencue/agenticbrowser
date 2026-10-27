@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
 
 import {
   clearPreferredTarget,
@@ -118,6 +121,64 @@ test("waitForEvent('download') falls back to Page.setDownloadBehavior", async ()
       calls.some((call) => call.method === "Page.setDownloadBehavior"),
       "uses page-level download behavior when browser-level command is missing",
     );
+  } finally {
+    cleanup();
+  }
+});
+
+test("delete() removes the temp download dir", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fireEvent("Page.downloadWillBegin", {
+      guid: "download-del-1",
+      url: "https://example.com/report.pdf",
+      suggestedFilename: "report.pdf",
+    });
+    fireEvent("Page.downloadProgress", {
+      guid: "download-del-1",
+      state: "completed",
+    });
+    const download = await promise;
+    const downloadedPath = await download.path();
+    const tmpDir = dirname(downloadedPath);
+    assert.ok(existsSync(tmpDir), "temp dir exists before delete");
+    await download.delete();
+    assert.ok(!existsSync(tmpDir), "temp dir removed after delete()");
+  } finally {
+    cleanup();
+  }
+});
+
+test("saveAs deletes the temp download dir after a successful copy", async () => {
+  installAutoEgo();
+  try {
+    const promise = waitForEvent("download", { timeout: 1000 });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    fireEvent("Page.downloadWillBegin", {
+      guid: "download-sa-1",
+      url: "https://example.com/image.png",
+      suggestedFilename: "image.png",
+    });
+    fireEvent("Page.downloadProgress", {
+      guid: "download-sa-1",
+      state: "completed",
+    });
+    const download = await promise;
+    const downloadedPath = await download.path();
+    const tmpDir = dirname(downloadedPath);
+    // Seed a real file so copyFile succeeds
+    writeFileSync(downloadedPath, "dummy");
+    const targetPath = join(tmpdir(), `ego-saveas-test-${Date.now()}.png`);
+    try {
+      await download.saveAs(targetPath);
+      assert.ok(!existsSync(tmpDir), "temp dir removed after saveAs");
+    } finally {
+      try {
+        unlinkSync(targetPath);
+      } catch {}
+    }
   } finally {
     cleanup();
   }
