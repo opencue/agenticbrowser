@@ -242,7 +242,7 @@ learnings/<site>/
 ## 8. Testing & Quality
 
 - Test framework: `node --test` with `node:assert/strict`
-- Test files: `package/ego-browser/test/*.test.js`, split by responsibility (runtime / helpers / resolver / nav-driver / site-skills / build / state ...)
+- Test files: `package/ego-browser/src/**/*.test.mjs`, colocated with the source they cover (runtime / helpers / resolver / nav-driver / site-skills / build / state ...). The only file in `package/ego-browser/test/` is `skill-publish-workflow.test.js`, which tests the CI workflow YAML.
 - Style: behavior-driven, using **temp workspaces + `setOverrides()`** for stub injection — no real browser launches
 
 **Minimum pre-submit bar**:
@@ -255,10 +255,10 @@ npm run validate:site-skills   # if learnings changed
 
 **When to add/extend tests**:
 
-- Changes to session / connection handling → add cases in `browser-runtime.test.js` / `session-injection.test.js`
-- Changes to the resolver → `element-resolver.test.js`
-- New helper → `helpers.test.js` or the matching driver test
-- Changes to learning loading → `site-skills.test.js` / `validate-site-skills.test.js`
+- Changes to session / connection handling → add cases in `src/browser-runtime.test.mjs`
+- Changes to the resolver → `src/element-resolver.test.mjs`
+- New helper → `src/helpers.test.mjs` or the matching driver test under `src/driver/`
+- Changes to learning loading → run `npm run validate:site-skills`
 
 ---
 

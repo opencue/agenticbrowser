@@ -67,6 +67,18 @@ jobs:
       - run: npm ci
       - run: npm test
 
+  # Eval harness unit tests — pure Node, no browser or Codex needed.
+  # Covers parseArgs, selectedCases, the JSONL parser, result summarisation,
+  # report comparison, the fixture server, and the --dry run path of run.mjs.
+  test-evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: node --test evals/agent-eval/*.test.mjs
+
   # The same package as test-linux, on the other operating system it supports.
   # Everything platform-specific in it lives behind src/platform.mjs, and
   # test/platform.test.mjs checks the Windows branch from Linux — but only a
