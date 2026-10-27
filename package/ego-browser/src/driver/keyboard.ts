@@ -46,6 +46,20 @@ const META_MODIFIER = 4;
 const INPUT_EVENT_DELAY_MS = 25;
 const INPUT_DISPATCH_TIMEOUT_MS = 1000;
 
+/**
+ * Input types whose value cannot be set with Input.insertText. For these,
+ * fill() assigns .value directly via Runtime.callFunctionOn instead.
+ */
+const COMPOSITE_INPUT_TYPES = new Set([
+  "date",
+  "datetime-local",
+  "month",
+  "week",
+  "time",
+  "color",
+  "range",
+]);
+
 function keyDefinition(key) {
   const special = KEYS[key];
   if (special) {
@@ -252,6 +266,28 @@ export async function insertText(text) {
 }
 
 /**
+ * Set an input's .value directly and fire bubbling input and change events.
+ * Use this for composite inputs — date, time, datetime-local, month, week,
+ * color, range — where Input.insertText has no effect. Unlike fill(), this
+ * does not focus the element, clear it first, or simulate keyboard events.
+ * @param {string} selector CSS selector / @ref / loc= / xpath= for the input.
+ * @param {string} value Value to set.
+ * @returns {Promise<void>}
+ */
+export async function setInputValue(selector, value) {
+  await resolveAndCall(
+    selector,
+    `function(v){
+      if (!("value" in this)) throw new Error("setInputValue: target has no .value property");
+      this.value = v;
+      this.dispatchEvent(new Event("input", { bubbles: true }));
+      this.dispatchEvent(new Event("change", { bubbles: true }));
+    }`,
+    [String(value)],
+  );
+}
+
+/**
  * Type text with key events, Playwright-style keyboard.type().
  * @param {string} text Text to type.
  * @param {{delay?: number}} [options] delay in milliseconds between key presses.
@@ -293,12 +329,13 @@ export async function fill(selector, value, options: FillOptions = {}) {
     // A function that throws in the page resolves with exceptionDetails rather
     // than rejecting. Stop at the failed step instead of typing into whatever
     // element has focus.
-    const callOnTarget = async (functionDeclaration) => {
+    const callOnTarget = async (functionDeclaration, args?) => {
       const result = await cdp(
         "Runtime.callFunctionOn",
         {
           functionDeclaration,
           objectId,
+          ...(args && { arguments: args.map((value) => ({ value })) }),
           returnByValue: true,
           awaitPromise: false,
         },
@@ -307,6 +344,7 @@ export async function fill(selector, value, options: FillOptions = {}) {
       if (result.exceptionDetails || result.result?.subtype === "error") {
         runtimeValue(result, functionDeclaration);
       }
+      return result.result?.value;
     };
     await callOnTarget(focusSource);
     if (clearFirst) {
@@ -314,7 +352,16 @@ export async function fill(selector, value, options: FillOptions = {}) {
         "function(){if(this.isContentEditable){this.textContent='';}else if('value' in this){this.value='';}else{throw new Error('fill target is not editable');} this.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));}",
       );
     }
-    await cdp("Input.insertText", { text: value }, sessionId);
+    const inputType = String(
+      (await callOnTarget(
+        "function(){ return this instanceof HTMLInputElement ? this.type : ''; }",
+      )) ?? "",
+    );
+    if (COMPOSITE_INPUT_TYPES.has(inputType)) {
+      await callOnTarget("function(v){ this.value = v; }", [String(value)]);
+    } else {
+      await cdp("Input.insertText", { text: value }, sessionId);
+    }
     await callOnTarget(
       "function(){this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true}));}",
     );

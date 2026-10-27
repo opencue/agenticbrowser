@@ -12,6 +12,7 @@ import {
   pressSequentially,
   selectOption,
   setChecked,
+  setInputValue,
   typeText,
   uncheck,
   up,
@@ -540,5 +541,150 @@ test("pressOnSelector focuses a selector then presses a key", async () => {
         entry.params.type === "keyDown" &&
         entry.params.key === "Enter",
     ),
+  );
+});
+
+function fillCallHarness(typeOverride = "") {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "object-1", value: true } };
+      }
+      if (
+        method === "Runtime.callFunctionOn" &&
+        params.functionDeclaration.includes("instanceof HTMLInputElement")
+      ) {
+        return { result: { value: typeOverride } };
+      }
+      return {};
+    },
+  });
+  return { calls, restore };
+}
+
+test("fill uses Input.insertText for text inputs", async () => {
+  const { calls, restore } = fillCallHarness("text");
+  try {
+    await fill("#input", "hello");
+  } finally {
+    restore();
+  }
+
+  assert.ok(
+    calls.some(
+      (c) => c.method === "Input.insertText" && c.params.text === "hello",
+    ),
+    "fill should call Input.insertText for text inputs",
+  );
+  assert.ok(
+    !calls.some(
+      (c) =>
+        c.method === "Runtime.callFunctionOn" &&
+        c.params.functionDeclaration.includes("this.value = v"),
+    ),
+    "fill should not assign .value directly for text inputs",
+  );
+});
+
+test("fill sets .value directly for composite input types", async () => {
+  for (const type of [
+    "date",
+    "time",
+    "datetime-local",
+    "month",
+    "week",
+    "color",
+    "range",
+  ]) {
+    const { calls, restore } = fillCallHarness(type);
+    try {
+      await fill("#input", "2024-01-15");
+    } finally {
+      restore();
+    }
+
+    assert.ok(
+      !calls.some((c) => c.method === "Input.insertText"),
+      `fill ${type}: should not call Input.insertText`,
+    );
+    assert.ok(
+      calls.some(
+        (c) =>
+          c.method === "Runtime.callFunctionOn" &&
+          c.params.functionDeclaration.includes("this.value = v") &&
+          c.params.arguments?.[0]?.value === "2024-01-15",
+      ),
+      `fill ${type}: should assign .value directly`,
+    );
+    assert.ok(
+      calls.some(
+        (c) =>
+          c.method === "Runtime.callFunctionOn" &&
+          c.params.functionDeclaration.includes("dispatchEvent"),
+      ),
+      `fill ${type}: should dispatch input/change events`,
+    );
+  }
+});
+
+test("fill still dispatches input and change events for text inputs", async () => {
+  const { calls, restore } = fillCallHarness("text");
+  try {
+    await fill("#input", "world");
+  } finally {
+    restore();
+  }
+
+  assert.ok(
+    calls.some(
+      (c) =>
+        c.method === "Runtime.callFunctionOn" &&
+        c.params.functionDeclaration.includes("dispatchEvent"),
+    ),
+    "fill should dispatch events for text inputs too",
+  );
+});
+
+test("setInputValue assigns .value and dispatches input and change events", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params, sessionId) {
+      calls.push({ method, params, sessionId });
+      if (method === "Runtime.evaluate") {
+        return { result: { objectId: "object-1" } };
+      }
+      return {};
+    },
+  });
+  try {
+    await setInputValue("#date", "2024-06-15");
+  } finally {
+    restore();
+  }
+
+  const callFnCalls = calls.filter(
+    (c) => c.method === "Runtime.callFunctionOn",
+  );
+  assert.equal(
+    callFnCalls.length,
+    1,
+    "setInputValue makes exactly one callFunctionOn call",
+  );
+  assert.deepEqual(
+    callFnCalls[0].params.arguments,
+    [{ value: "2024-06-15" }],
+    "setInputValue passes value as argument",
+  );
+  assert.match(
+    callFnCalls[0].params.functionDeclaration,
+    /this\.value\s*=\s*v/,
+    "setInputValue assigns .value",
+  );
+  assert.match(
+    callFnCalls[0].params.functionDeclaration,
+    /dispatchEvent/,
+    "setInputValue dispatches events",
   );
 });
