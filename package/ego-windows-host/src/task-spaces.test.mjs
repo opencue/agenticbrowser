@@ -127,9 +127,6 @@ test("save leaves no orphan temp file on success", async () => {
   await withRegistry(async (dir) => {
     const registry = new TaskSpaceRegistry(dir);
     registry.create("research");
-    const entries = (await import("node:fs/promises").then((m) => m.readdir))(
-      dir,
-    );
     // spaces.json must be present and contain valid JSON.
     const raw = readFileSync(join(dir, "spaces.json"), "utf8");
     const parsed = JSON.parse(raw);

@@ -9,13 +9,15 @@ import { join } from "node:path";
 
 /** How many times to retry a rename that Windows refused due to a held file. */
 const RENAME_RETRY_LIMIT = 10;
-/** Milliseconds to wait between retries (busy-loop is worse than a short sleep). */
+/** Milliseconds to wait between retries. */
 const RENAME_RETRY_DELAY_MS = 20;
 
+// save() is synchronous all the way up, so the wait cannot yield to the event
+// loop; Atomics.wait at least parks the thread instead of spinning the CPU.
+// Worst case (every retry refused) blocks ~200 ms, only under file contention.
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
 function sleepSync(ms: number) {
-  const end = Date.now() + ms;
-  // eslint-disable-next-line no-empty
-  while (Date.now() < end) {}
+  Atomics.wait(sleepCell, 0, 0, ms);
 }
 
 export type Ownership = "agent" | "agentDelegatedToUser" | "user";

@@ -171,7 +171,11 @@ export function createEgoBridge(options: BridgeOptions) {
       } catch (error) {
         // The space was persisted before the CDP call. Remove it so a failed
         // createTaskSpace does not leave an empty zombie space in the registry.
-        registry.remove(space.id);
+        try {
+          registry.remove(space.id);
+        } catch {
+          // Keep the CDP failure as the reported cause.
+        }
         throw error;
       }
       registry.trackTarget(created.targetId, space.id);
