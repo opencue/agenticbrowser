@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { copyFile } from "node:fs/promises";
+import { copyFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -32,7 +32,7 @@ type DownloadProgress = {
  * Wait for a Playwright-style page event. Currently supports "download".
  * @param {"download"} eventName Event name.
  * @param {{timeout?: number}} [options] Timeout in milliseconds.
- * @returns {Promise<object>} Download facade with suggestedFilename(), path(), saveAs(path), url().
+ * @returns {Promise<object>} Download facade with suggestedFilename(), path(), saveAs(path), delete(), url().
  */
 export async function waitForEvent(
   eventName,
@@ -67,12 +67,17 @@ async function waitForDownload(options: WaitForEventOptions = {}) {
       throw new Error(`Download canceled: ${suggestedFilename}`);
     }
     const downloadedPath = join(downloadDir, suggestedFilename);
+    const deleteTmpDir = async () => {
+      await rm(downloadDir, { recursive: true, force: true });
+    };
     return {
       suggestedFilename: () => suggestedFilename,
       url: () => willBegin.params?.url || "",
       path: async () => downloadedPath,
+      delete: deleteTmpDir,
       saveAs: async (targetPath) => {
         await copyFile(downloadedPath, targetPath);
+        await deleteTmpDir();
         return targetPath;
       },
     };

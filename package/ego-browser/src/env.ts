@@ -42,7 +42,7 @@ export function loadEnvFile(path) {
     const value = line
       .slice(index + 1)
       .trim()
-      .replace(/^['"]|['"]$/g, "");
+      .replace(/^(['"])(.*)\1$/, "$2");
     if (key && process.env[key] === undefined) {
       process.env[key] = value;
     }

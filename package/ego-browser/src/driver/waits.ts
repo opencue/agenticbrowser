@@ -276,11 +276,16 @@ async function waitForNetworkMatch(
   const networkEvents = acquireNetworkEvents();
   let matched;
   try {
-    void networkEvents.ready;
-    await waitForBrowserEvent((event) => {
+    // Start the event waiter before awaiting Network.enable so events that
+    // arrive during the enable round-trip are not missed in the buffer. We
+    // then await the ready promise so the domain is confirmed up before we
+    // return — the same guarantee waitForNetworkIdle gives its callers.
+    const eventReady = waitForBrowserEvent((event) => {
       matched = processNetworkEvent(kind, matcher, event, requests, timeout);
       return Boolean(matched);
     }, browserEventTimeout(timeout));
+    await networkEvents.ready;
+    await eventReady;
     return matched;
   } catch (error) {
     if (/page\.waitForEvent timed out/i.test(error?.message || "")) {

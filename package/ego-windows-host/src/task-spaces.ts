@@ -1,5 +1,24 @@
-import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
+
+/** How many times to retry a rename that Windows refused due to a held file. */
+const RENAME_RETRY_LIMIT = 10;
+/** Milliseconds to wait between retries. */
+const RENAME_RETRY_DELAY_MS = 20;
+
+// save() is synchronous all the way up, so the wait cannot yield to the event
+// loop; Atomics.wait at least parks the thread instead of spinning the CPU.
+// Worst case (every retry refused) blocks ~200 ms, only under file contention.
+const sleepCell = new Int32Array(new SharedArrayBuffer(4));
+function sleepSync(ms: number) {
+  Atomics.wait(sleepCell, 0, 0, ms);
+}
 
 export type Ownership = "agent" | "agentDelegatedToUser" | "user";
 
@@ -192,6 +211,26 @@ export class TaskSpaceRegistry {
     // Atomic replace so a failed write leaves the previous state valid.
     const tempPath = `${this.statePath}.${process.pid}.tmp`;
     writeFileSync(tempPath, JSON.stringify(state, null, 2));
-    renameSync(tempPath, this.statePath);
+    // Windows refuses to rename onto a file that another process holds open
+    // (EPERM / EBUSY). Retry briefly, then clean up the scratch file and
+    // rethrow — the same pattern as atomic-write.mjs on Linux.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        renameSync(tempPath, this.statePath);
+        return;
+      } catch (error: unknown) {
+        const code = (error as NodeJS.ErrnoException).code;
+        const transient = code === "EPERM" || code === "EBUSY";
+        if (!transient || attempt >= RENAME_RETRY_LIMIT) {
+          try {
+            rmSync(tempPath, { force: true });
+          } catch {
+            // best-effort cleanup; original error is the one worth surfacing
+          }
+          throw error;
+        }
+        sleepSync(RENAME_RETRY_DELAY_MS);
+      }
+    }
   }
 }

@@ -968,3 +968,133 @@ test("waitForSelector accepts multiple matches and waits for the first by defaul
     "the non-strict wait resolves the first matching table",
   );
 });
+
+// ---------------------------------------------------------------------------
+// (a) waitForNetworkMatch awaits networkEvents.ready before listening
+// ---------------------------------------------------------------------------
+
+test("waitForRequest catches a request fired after a slow Network.enable", async () => {
+  // Regression guard for the void → await fix in waitForNetworkMatch.
+  // The Network.enable acknowledgement is delayed here; the network event is
+  // fired after that delay so it arrives once the domain is enabled. With
+  // 'await networkEvents.ready', the event waiter is set up in time; without
+  // awaiting, the code proceeds before the domain is ready.
+  const ENABLE_DELAY_MS = 30;
+  globalThis.ego = {
+    async listTabs() {
+      return { tabs: [{ targetId: "tab-1", active: true }] };
+    },
+    sendCDPMessage(payload) {
+      const parsed = JSON.parse(payload);
+      const delay = parsed.method === "Network.enable" ? ENABLE_DELAY_MS : 0;
+      setTimeout(() => {
+        if (!globalThis.ego?.onCDPMessage) return;
+        const outcome =
+          parsed.method === "Target.attachToTarget"
+            ? { sessionId: `auto-sess-${parsed.id}` }
+            : {};
+        globalThis.ego.onCDPMessage(
+          JSON.stringify({ id: parsed.id, result: outcome }),
+        );
+      }, delay);
+    },
+  };
+  try {
+    const promise = waitForRequest(
+      "https://example.com/api/after-slow-enable",
+      { timeout: 1000 },
+    );
+    // Fire the event well after Network.enable is acknowledged so the domain
+    // is definitely active and the event waiter is registered.
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-slow-enable",
+        type: "XHR",
+        request: {
+          url: "https://example.com/api/after-slow-enable",
+          method: "GET",
+          headers: {},
+        },
+      });
+    }, ENABLE_DELAY_MS + 20);
+    const request = await promise;
+    assert.equal(request.url(), "https://example.com/api/after-slow-enable");
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// (b) waitForNetworkIdle — in-flight traffic tests
+// ---------------------------------------------------------------------------
+
+test("waitForLoadState networkidle stays non-idle while a request is in-flight", async () => {
+  // A requestWillBeSent event must keep the idle window from starting until
+  // the matching loadingFinished arrives. Without this constraint a busy page
+  // could incorrectly be reported as idle mid-navigation.
+  installAutoEgo();
+  try {
+    const promise = waitForLoadState("networkidle", {
+      timeout: 3000,
+      idleMs: 200,
+    });
+    // Give the session and Network domain time to be established.
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-inflight",
+        type: "XHR",
+        request: {
+          url: "https://example.com/api/inflight",
+          method: "GET",
+          headers: {},
+        },
+      });
+    }, 20);
+    // Finish the request; the idle window can only start after this.
+    setTimeout(() => {
+      fireEvent("Network.loadingFinished", { requestId: "req-inflight" });
+    }, 70);
+    const result = await promise;
+    assert.equal(
+      result,
+      true,
+      "resolves true once in-flight request finishes and idle window passes",
+    );
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
+
+test("waitForLoadState networkidle times out when a request never finishes", async () => {
+  // An in-flight request that never receives loadingFinished must prevent
+  // networkidle from resolving, causing it to return false at the timeout.
+  installAutoEgo();
+  try {
+    const start = Date.now();
+    const promise = waitForLoadState("networkidle", { timeout: 600 });
+    setTimeout(() => {
+      fireEvent("Network.requestWillBeSent", {
+        requestId: "req-stuck",
+        type: "XHR",
+        request: {
+          url: "https://example.com/api/stuck",
+          method: "GET",
+          headers: {},
+        },
+      });
+    }, 20);
+    // loadingFinished is deliberately never fired.
+    const result = await promise;
+    assert.equal(
+      result,
+      false,
+      "returns false when an in-flight request is still pending at timeout",
+    );
+    assert.ok(
+      Date.now() - start >= 500,
+      "waited until the timeout before giving up",
+    );
+  } finally {
+    cleanupBrowserRuntime();
+  }
+});
