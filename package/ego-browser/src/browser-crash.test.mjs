@@ -3,7 +3,8 @@
  *
  * Verifies that:
  *  - Inspector.targetCrashed events mark the session as crashed.
- *  - Page.frameNavigated to chrome-error:// also marks the session as crashed.
+ *  - chrome-error:// pages and iframe navigations do not count as crashes.
+ *  - Page.navigate / Page.reload still reach a crashed session (recovery).
  *  - Subsequent page-level CDP calls throw EGO_PAGE_CRASHED with the last
  *    known URL and a 'reload or open a new page' hint.
  *  - Successful navigation away from the error page clears the crash state.
@@ -133,7 +134,7 @@ test("Inspector.targetCrashed records last known URL", async () => {
 /*  Page.frameNavigated to chrome-error://                            */
 /* ------------------------------------------------------------------ */
 
-test("Page.frameNavigated to chrome-error:// marks session as crashed", async () => {
+test("Page.frameNavigated to chrome-error:// is not a crash", async () => {
   installAutoEgo();
   try {
     await browserCdp("Runtime.evaluate", { expression: "1" });
@@ -141,27 +142,19 @@ test("Page.frameNavigated to chrome-error:// marks session as crashed", async ()
 
     fireEvent(
       "Page.frameNavigated",
-      { frame: { url: "https://example.com/" } },
-      sessionId,
-    );
-    assert.equal(isCrashedSession(sessionId), false, "not crashed on real URL");
-
-    fireEvent(
-      "Page.frameNavigated",
       { frame: { url: "chrome-error://chromewebdata" } },
       sessionId,
     );
-    assert.equal(
-      isCrashedSession(sessionId),
-      true,
-      "marked crashed on chrome-error:// navigation",
+    assert.equal(isCrashedSession(sessionId), false);
+    await assert.doesNotReject(() =>
+      browserCdp("Runtime.evaluate", { expression: "document.title" }),
     );
   } finally {
     cleanup();
   }
 });
 
-test("Page.frameNavigated to chrome-error:// preserves the last good URL", async () => {
+test("iframe navigation neither clears crash state nor replaces the last URL", async () => {
   installAutoEgo();
   try {
     await browserCdp("Runtime.evaluate", { expression: "1" });
@@ -172,13 +165,31 @@ test("Page.frameNavigated to chrome-error:// preserves the last good URL", async
       { frame: { url: "https://example.com/app" } },
       sessionId,
     );
+    fireEvent("Inspector.targetCrashed", {}, sessionId);
     fireEvent(
       "Page.frameNavigated",
-      { frame: { url: "chrome-error://chromewebdata" } },
+      { frame: { url: "https://cdn.example.com/widget", parentId: "main" } },
       sessionId,
     );
 
+    assert.equal(isCrashedSession(sessionId), true, "iframe does not clear");
     assert.equal(getCrashedLastUrl(sessionId), "https://example.com/app");
+  } finally {
+    cleanup();
+  }
+});
+
+test("Page.navigate and Page.reload reach a crashed session", async () => {
+  installAutoEgo();
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    const sessionId = state.sessionId;
+    fireEvent("Inspector.targetCrashed", {}, sessionId);
+
+    await assert.doesNotReject(() =>
+      browserCdp("Page.navigate", { url: "https://example.com/" }),
+    );
+    await assert.doesNotReject(() => browserCdp("Page.reload", {}));
   } finally {
     cleanup();
   }

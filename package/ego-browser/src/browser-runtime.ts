@@ -30,9 +30,8 @@ const pendingDialogs = new Map();
 /**
  * Sessions whose renderer has crashed. Maps sessionId → last known page URL
  * before the crash (empty string when unknown). Populated by
- * Inspector.targetCrashed events and Page.frameNavigated to chrome-error://.
- * Cleared on session invalidation or successful navigation away from the error
- * page.
+ * Inspector.targetCrashed events. Cleared on session invalidation or the next
+ * main-frame navigation.
  */
 const crashedSessions = new Map<string, string>();
 /**
@@ -41,6 +40,12 @@ const crashedSessions = new Map<string, string>();
  * crash, so error messages can tell the agent which page to reload.
  */
 const sessionLastUrls = new Map<string, string>();
+/** Page-level methods that must reach a crashed session so it can recover. */
+const CRASH_RECOVERY_METHODS = new Set([
+  "Page.navigate",
+  "Page.reload",
+  "Page.enable",
+]);
 export function isBrowserRuntime() {
   return Boolean(
     globalThis.ego && typeof globalThis.ego.sendCDPMessage === "function",
@@ -138,7 +143,13 @@ export async function browserCdp(
   // Guard: throw a clear EGO_PAGE_CRASHED before sending any page-level command
   // to a session whose renderer has crashed. Without this, the caller would get an
   // opaque "Element not found" or CDP evaluation failure instead of a diagnosis.
-  if (!browserLevel && effective && crashedSessions.has(effective)) {
+  // Navigation and reload are the recovery path, so they pass through.
+  if (
+    !browserLevel &&
+    effective &&
+    crashedSessions.has(effective) &&
+    !CRASH_RECOVERY_METHODS.has(method)
+  ) {
     const lastUrl = crashedSessions.get(effective) || "";
     throw buildEgoError(
       {
@@ -146,7 +157,7 @@ export async function browserCdp(
           "The page has crashed" +
           (lastUrl ? ` (was: ${lastUrl})` : "") +
           ". Reload or open a new page to continue.\n" +
-          "If you know the URL, call browser.goto(url) to reload it, or use browser.newTab(url) to open it in a fresh tab.",
+          "If you know the URL, call page.goto(url) to reload it, or browser.openOrReuseTab(url) to open it in a fresh tab.",
         error_code: "EGO_PAGE_CRASHED",
       },
       method,
@@ -364,20 +375,17 @@ function handleMessage(message) {
       invalidateSession();
     }
   }
-  // Track the last navigated URL per session so crash errors can report it.
-  if (data.method === "Page.frameNavigated") {
+  // Track the last main-frame URL per session so crash errors can report it.
+  // Iframes (frame.parentId set) never touch crash state, and chrome-error://
+  // is a network error page, not a crash — the agent must still be able to
+  // read it.
+  if (data.method === "Page.frameNavigated" && !data.params?.frame?.parentId) {
     const sessionId = data.sessionId || state.sessionId;
     const url = data.params?.frame?.url;
     if (sessionId && typeof url === "string" && url) {
-      if (url.startsWith("chrome-error://")) {
-        // The page has transitioned to the Chrome error page — mark as crashed.
-        // Preserve the last good URL so agents can reload it.
-        if (!crashedSessions.has(sessionId)) {
-          crashedSessions.set(sessionId, sessionLastUrls.get(sessionId) || "");
-        }
-      } else {
-        // Successful navigation — clear any prior crash state and update URL.
-        crashedSessions.delete(sessionId);
+      // A main-frame navigation means the renderer is alive again.
+      crashedSessions.delete(sessionId);
+      if (!url.startsWith("chrome-error://")) {
         sessionLastUrls.set(sessionId, url);
       }
     }
