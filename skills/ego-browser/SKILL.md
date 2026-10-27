@@ -47,6 +47,8 @@ console.log(await page.snapshot())
 EOF
 ```
 
+> **Tip:** Pass `{ scope: 'only_within_viewport' }` to `page.snapshot()` when the task only needs visible content — cuts output ~92% on long pages while keeping all refs addressable.
+
 The heredoc body runs as a Node.js script that controls the selected ego-browser task space. The API objects are preloaded into that script — do not import anything.
 
 ## API surface
@@ -153,6 +155,40 @@ The rules that matter every round:
 - **Linux port caveat**: `browser.listTabs()` is browser-wide, not per-space, and resolves to a plain **array** of `{ targetId, title, url, active, index }` — filter by the space's `targetIds` when you need per-space tabs.
 
 **Before acting on any claim / handoff / takeover / complete edge case, read `references/task-spaces.md`** — it carries the full ownership table, the `{ done, skipped }` result contract, the keep/cleanup policy, and the recovery flow for "user is controlling" and unassigned-space errors.
+
+## Return shapes
+
+```typescript
+// taskSpaces.complete(nameOrId, { keep })
+// keep: false, or keep: true and agent controls → { done: true }
+// keep: true and user controls the space       → { done: false, skipped: "user-owned" }
+
+// page.snapshot(opts?)    → Promise<string>                        (annotated text tree)
+// page.snapshotRaw(opts?) → Promise<{ content: string, refs: object[] }>
+```
+
+## Error codes
+
+Branch on `error.error_code`, not `error.message` (wording can drift between builds).
+
+| Code | Meaning | Agent action |
+| ---- | ------- | ------------ |
+| `EGO_BROWSER_UNAVAILABLE` | Browser process not reachable | Restart ego-browser |
+| `EGO_CDP_CHANNEL_UNAVAILABLE` | CDP channel closed | Retry once; reconnect |
+| `EGO_CDP_SEND_FAILED` | CDP message send failed | Retry; check connection |
+| `EGO_INVALID_ARGUMENT` | Bad argument to a binding | Fix caller code |
+| `EGO_INVALID_RESULT_PAYLOAD` | Malformed binding response | Report; do not retry |
+| `EGO_OPERATION_FAILED` | Generic operation failure | Inspect failure artifact |
+| `EGO_RESULT_CONVERSION_FAILED` | Result could not be converted | Report; do not retry |
+| `EGO_SNAPSHOT_FAILED` | Snapshot operation failed | Retry; check page state |
+| `EGO_TASK_HOST_DISCONNECTED` | Task host disconnected | Reconnect; open new space |
+| `EGO_TASK_SPACE_INACTIVE` | User ended space — **hard stop** | Wait; `taskSpaces.claim(id)` to resume |
+| `EGO_TASK_SPACE_NOT_FOUND` | Space not found by name/id | Re-list via `taskSpaces.list()` |
+| `EGO_TASK_SPACE_NOT_SELECTED` | No space selected | Call `taskSpaces.useOrCreate(name)` |
+| `EGO_TASK_SPACE_STATE_UNAVAILABLE` | Space state unavailable | Retry once |
+| `EGO_TASK_SPACE_UNAVAILABLE` | Space exists but unavailable | Retry; or create new space |
+| `EGO_TASK_SPACE_USER_IN_CONTROL` | User controls space — **hard stop** | Wait; `taskSpaces.takeOver(id)` when user confirms |
+| `EGO_WEB_CONTENTS_UNAVAILABLE` | Page/tab is gone | Reopen with `browser.openOrReuseTab(url)` |
 
 ## Recommended workflow
 
