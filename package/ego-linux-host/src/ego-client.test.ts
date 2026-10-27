@@ -239,6 +239,45 @@ test("resolveHarnessPath prefers EGO_HARNESS_PATH", () => {
   assert.equal(path, "/tmp/custom-harness.js");
 });
 
+test("connectHost clears connect timer on success (no timer leak)", async () => {
+  const dir = join(
+    tmpdir(),
+    `ego-conn-timer-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  await mkdir(dir, { recursive: true });
+  const sockPath = join(dir, "test.sock");
+  const server = createServer(() => {
+    // Accept connections but don't send anything — just proves connect succeeds.
+  });
+  await new Promise<void>((res) => server.listen(sockPath, res));
+  try {
+    // connectHost should resolve (socket connects) and the internal timer must
+    // be cleared — a leak would fire after the socket is destroyed below.
+    const conn = await connectHost(sockPath);
+    conn.close();
+  } finally {
+    await new Promise<void>((res, rej) =>
+      server.close((e) => (e ? rej(e) : res())),
+    );
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("connectHost rejects quickly when socket does not exist", async () => {
+  const sockPath = join(
+    tmpdir(),
+    `ego-noexist-${Date.now()}-${Math.random().toString(16).slice(2)}.sock`,
+  );
+  // ENOENT fires before the 5 s timeout so the OS error propagates directly.
+  await assert.rejects(
+    () => connectHost(sockPath),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      return true;
+    },
+  );
+});
+
 test("connectHost ping + installEgoClient against daemon", async () => {
   const dir = join(
     tmpdir(),

@@ -1,9 +1,10 @@
 import { spawn } from "node:child_process";
-import { access, mkdir, readFile, writeFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 
+import { replaceFile } from "./atomic-write.mjs";
 import { BROWSER_STATE_FILE, PROFILE_DIR } from "./paths.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
 import { writePrivateStateFile } from "./private-state.mjs";
@@ -371,7 +372,7 @@ export async function neutralizeZoom(profileDir) {
       prefs.profile = { ...prefs.profile, name: PROFILE_LABEL };
       changed = true;
     }
-    if (changed) await writeFile(path, JSON.stringify(prefs));
+    if (changed) await replaceFile(path, JSON.stringify(prefs));
     return changed;
   } catch {
     // A fresh profile has no Preferences file yet; nothing to reset.
@@ -401,7 +402,7 @@ export async function suppressPasswordSavePrompts(profileDir) {
   }
   if (prefs.credentials_enable_service === false) return false;
   prefs.credentials_enable_service = false;
-  await writeFile(path, JSON.stringify(prefs));
+  await replaceFile(path, JSON.stringify(prefs));
   return true;
 }
 
@@ -429,7 +430,7 @@ export async function clearStaleCrashMark(profileDir) {
     const prefs = JSON.parse(await readFile(path, "utf8"));
     if (!prefs.profile || prefs.profile.exit_type === "Normal") return false;
     prefs.profile = { ...prefs.profile, exit_type: "Normal" };
-    await writeFile(path, JSON.stringify(prefs));
+    await replaceFile(path, JSON.stringify(prefs));
     return true;
   } catch {
     // A fresh profile has no Preferences file yet; nothing to clear.

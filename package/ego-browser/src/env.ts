@@ -20,7 +20,10 @@ export function agentWorkspace() {
 
 export function resolvePath(path) {
   if (path.startsWith("~")) {
-    return resolve(process.env.HOME || process.env.USERPROFILE || ".", path.slice(1));
+    return resolve(
+      process.env.HOME || process.env.USERPROFILE || ".",
+      path.slice(1),
+    );
   }
   return resolve(path);
 }
@@ -36,7 +39,10 @@ export function loadEnvFile(path) {
     }
     const index = line.indexOf("=");
     const key = line.slice(0, index).trim();
-    const value = line.slice(index + 1).trim().replace(/^['"]|['"]$/g, "");
+    const value = line
+      .slice(index + 1)
+      .trim()
+      .replace(/^(['"])(.*)\1$/, "$2");
     if (key && process.env[key] === undefined) {
       process.env[key] = value;
     }

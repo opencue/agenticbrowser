@@ -190,6 +190,14 @@ export function buildChromeArgs(config: HostConfig): string[] {
     "--remote-debugging-address=127.0.0.1",
     "--no-first-run",
     "--no-default-browser-check",
+    // Node's WebSocket client sends no Origin header; without this Chrome
+    // rejects the CDP WebSocket upgrade with 403 Forbidden.
+    "--remote-allow-origins=*",
+    // Keep JS timers and rendering pipelines running at full speed regardless
+    // of whether the window is visible or occluded — matching ego-linux parity.
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
     // Give the managed browser a distinct desktop identity. This changes the
     // window grouping/icon where the compositor honours WM_CLASS; it does not
     // turn stock Chrome/Chromium into a native Ego Lite application shell.
