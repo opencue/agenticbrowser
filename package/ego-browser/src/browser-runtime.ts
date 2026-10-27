@@ -27,6 +27,20 @@ const eventWaiters = [];
 const eventSubscribers = new Set<BrowserEventSubscriber>();
 const pageEnabledSessions = new Set();
 const pendingDialogs = new Map();
+/**
+ * Sessions whose renderer has crashed. Maps sessionId → last known page URL
+ * before the crash (empty string when unknown). Populated by
+ * Inspector.targetCrashed events and Page.frameNavigated to chrome-error://.
+ * Cleared on session invalidation or successful navigation away from the error
+ * page.
+ */
+const crashedSessions = new Map<string, string>();
+/**
+ * Last URL navigated in each session, tracked from Page.frameNavigated.
+ * Used to populate crashedSessions with the URL that was current before the
+ * crash, so error messages can tell the agent which page to reload.
+ */
+const sessionLastUrls = new Map<string, string>();
 export function isBrowserRuntime() {
   return Boolean(
     globalThis.ego && typeof globalThis.ego.sendCDPMessage === "function",
@@ -121,6 +135,23 @@ export async function browserCdp(
   if (!explicit && !browserLevel) {
     effective = await ensureSession();
   }
+  // Guard: throw a clear EGO_PAGE_CRASHED before sending any page-level command
+  // to a session whose renderer has crashed. Without this, the caller would get an
+  // opaque "Element not found" or CDP evaluation failure instead of a diagnosis.
+  if (!browserLevel && effective && crashedSessions.has(effective)) {
+    const lastUrl = crashedSessions.get(effective) || "";
+    throw buildEgoError(
+      {
+        error:
+          "The page has crashed" +
+          (lastUrl ? ` (was: ${lastUrl})` : "") +
+          ". Reload or open a new page to continue.\n" +
+          "If you know the URL, call browser.goto(url) to reload it, or use browser.newTab(url) to open it in a fresh tab.",
+        error_code: "EGO_PAGE_CRASHED",
+      },
+      method,
+    );
+  }
   try {
     return await rawCdp(method, params, effective, timeoutMs);
   } catch (error) {
@@ -191,6 +222,8 @@ export function invalidateSession() {
   if (state.sessionId) {
     pageEnabledSessions.delete(state.sessionId);
     pendingDialogs.delete(state.sessionId);
+    crashedSessions.delete(state.sessionId);
+    sessionLastUrls.delete(state.sessionId);
   }
   state.sessionId = null;
   state.sessionTargetId = null;
@@ -203,6 +236,19 @@ export function setPreferredTarget(targetId) {
 
 export function clearPreferredTarget() {
   state.preferredTargetId = null;
+}
+
+/** Whether the given session's renderer has crashed. */
+export function isCrashedSession(sessionId: string): boolean {
+  return crashedSessions.has(sessionId);
+}
+
+/**
+ * The last known page URL before the crash for a crashed session, or an empty
+ * string when not tracked.
+ */
+export function getCrashedLastUrl(sessionId: string): string {
+  return crashedSessions.get(sessionId) ?? "";
 }
 
 export function drainBrowserEvents() {
@@ -310,10 +356,39 @@ function handleMessage(message) {
     if (sessionId) {
       pageEnabledSessions.delete(sessionId);
       pendingDialogs.delete(sessionId);
+      crashedSessions.delete(sessionId);
+      sessionLastUrls.delete(sessionId);
     }
     const targetId = data.params?.targetId || data.params?.targetInfo?.targetId;
     if (targetId && targetId === state.sessionTargetId) {
       invalidateSession();
+    }
+  }
+  // Track the last navigated URL per session so crash errors can report it.
+  if (data.method === "Page.frameNavigated") {
+    const sessionId = data.sessionId || state.sessionId;
+    const url = data.params?.frame?.url;
+    if (sessionId && typeof url === "string" && url) {
+      if (url.startsWith("chrome-error://")) {
+        // The page has transitioned to the Chrome error page — mark as crashed.
+        // Preserve the last good URL so agents can reload it.
+        if (!crashedSessions.has(sessionId)) {
+          crashedSessions.set(sessionId, sessionLastUrls.get(sessionId) || "");
+        }
+      } else {
+        // Successful navigation — clear any prior crash state and update URL.
+        crashedSessions.delete(sessionId);
+        sessionLastUrls.set(sessionId, url);
+      }
+    }
+  }
+  // Inspector.targetCrashed fires on the page's CDP session when the renderer
+  // process crashes. Record the crash so the next action throws EGO_PAGE_CRASHED
+  // instead of an opaque CDP or "Element not found" error.
+  if (data.method === "Inspector.targetCrashed") {
+    const sessionId = data.sessionId || state.sessionId;
+    if (sessionId && !crashedSessions.has(sessionId)) {
+      crashedSessions.set(sessionId, sessionLastUrls.get(sessionId) || "");
     }
   }
   if (data.method === "Page.javascriptDialogOpening") {
