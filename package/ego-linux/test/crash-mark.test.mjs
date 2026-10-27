@@ -6,6 +6,7 @@ import {
   readFile,
   readdir,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -253,6 +254,31 @@ describe("Preferences writes are atomic (no scratch files left behind)", () => {
         await scratchFilesIn(join(dir, "Default")),
         [],
         "no .tmp files left in Default/",
+      );
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  // Verify via inode: replaceFile renames a scratch file onto the target, which
+  // changes the inode. A plain writeFile truncates in place and leaves the same
+  // inode. This test fails if the implementation reverts to plain writeFile.
+  it("clearStaleCrashMark replaces the file inode (rename, not truncate)", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "ego-atomic-inode-"));
+    try {
+      await mkdir(join(dir, "Default"), { recursive: true });
+      const path = join(dir, "Default", "Preferences");
+      await writeFile(
+        path,
+        JSON.stringify({ profile: { exit_type: "Crashed" } }),
+      );
+      const before = await stat(path);
+      await clearStaleCrashMark(dir);
+      const after = await stat(path);
+      assert.notEqual(
+        after.ino,
+        before.ino,
+        "inode must change: rename replaces the file rather than truncating",
       );
     } finally {
       await rm(dir, { recursive: true, force: true });

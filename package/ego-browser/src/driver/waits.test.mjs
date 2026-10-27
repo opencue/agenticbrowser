@@ -951,11 +951,14 @@ test("waitForSelector accepts multiple matches and waits for the first by defaul
 
 test("waitForRequest catches a request fired after a slow Network.enable", async () => {
   // Regression guard for the void → await fix in waitForNetworkMatch.
-  // The Network.enable acknowledgement is delayed here; the network event is
-  // fired after that delay so it arrives once the domain is enabled. With
-  // 'await networkEvents.ready', the event waiter is set up in time; without
-  // awaiting, the code proceeds before the domain is ready.
+  // The Network.enable acknowledgement is delayed; the request event is fired
+  // BEFORE the acknowledgement arrives. With 'await networkEvents.ready' the
+  // resolver waits for Network.enable before returning, so enableAcknowledged
+  // is true when waitForRequest resolves. With 'void networkEvents.ready' the
+  // promise resolves as soon as the event fires (before enable completes) and
+  // enableAcknowledged remains false — causing the assertion below to fail.
   const ENABLE_DELAY_MS = 30;
+  let enableAcknowledged = false;
   globalThis.ego = {
     async listTabs() {
       return { tabs: [{ targetId: "tab-1", active: true }] };
@@ -965,6 +968,7 @@ test("waitForRequest catches a request fired after a slow Network.enable", async
       const delay = parsed.method === "Network.enable" ? ENABLE_DELAY_MS : 0;
       setTimeout(() => {
         if (!globalThis.ego?.onCDPMessage) return;
+        if (parsed.method === "Network.enable") enableAcknowledged = true;
         const outcome =
           parsed.method === "Target.attachToTarget"
             ? { sessionId: `auto-sess-${parsed.id}` }
@@ -976,25 +980,34 @@ test("waitForRequest catches a request fired after a slow Network.enable", async
     },
   };
   try {
-    const promise = waitForRequest(
-      "https://example.com/api/after-slow-enable",
-      { timeout: 1000 },
+    const promise = waitForRequest("https://example.com/api/before-enable", {
+      timeout: 1000,
+    });
+    // Fire the event BEFORE Network.enable is acknowledged.
+    // With 'await networkEvents.ready' the waiter holds until enable completes,
+    // so the returned promise resolves only after enableAcknowledged is set.
+    // With 'void networkEvents.ready' the waiter resolves here, before enable.
+    setTimeout(
+      () => {
+        fireEvent("Network.requestWillBeSent", {
+          requestId: "req-before-enable",
+          type: "XHR",
+          request: {
+            url: "https://example.com/api/before-enable",
+            method: "GET",
+            headers: {},
+          },
+        });
+      },
+      Math.floor(ENABLE_DELAY_MS / 2),
     );
-    // Fire the event well after Network.enable is acknowledged so the domain
-    // is definitely active and the event waiter is registered.
-    setTimeout(() => {
-      fireEvent("Network.requestWillBeSent", {
-        requestId: "req-slow-enable",
-        type: "XHR",
-        request: {
-          url: "https://example.com/api/after-slow-enable",
-          method: "GET",
-          headers: {},
-        },
-      });
-    }, ENABLE_DELAY_MS + 20);
     const request = await promise;
-    assert.equal(request.url(), "https://example.com/api/after-slow-enable");
+    assert.equal(request.url(), "https://example.com/api/before-enable");
+    assert.equal(
+      enableAcknowledged,
+      true,
+      "Network.enable must be acknowledged before waitForRequest resolves",
+    );
   } finally {
     cleanupBrowserRuntime();
   }

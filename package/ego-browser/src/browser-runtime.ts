@@ -35,17 +35,20 @@ const pendingDialogs = new Map();
  */
 const crashedSessions = new Map<string, string>();
 /**
+ * Targets whose renderer has crashed. Maps targetId → last known page URL.
+ * Parallel to crashedSessions but keyed by targetId so the crash mark
+ * survives a session re-attachment after TTL expiry or invalidateSession().
+ * Cleared on Target.targetDestroyed or a real main-frame navigation.
+ */
+const crashedTargets = new Map<string, string>();
+/**
  * Last URL navigated in each session, tracked from Page.frameNavigated.
  * Used to populate crashedSessions with the URL that was current before the
  * crash, so error messages can tell the agent which page to reload.
  */
 const sessionLastUrls = new Map<string, string>();
 /** Page-level methods that must reach a crashed session so it can recover. */
-const CRASH_RECOVERY_METHODS = new Set([
-  "Page.navigate",
-  "Page.reload",
-  "Page.enable",
-]);
+const CRASH_RECOVERY_METHODS = new Set(["Page.navigate", "Page.reload"]);
 export function isBrowserRuntime() {
   return Boolean(
     globalThis.ego && typeof globalThis.ego.sendCDPMessage === "function",
@@ -218,6 +221,11 @@ export async function ensureSession() {
         );
         state.sessionId = attached.result?.sessionId || attached.sessionId;
         state.sessionTargetId = targetId;
+        // Propagate a per-target crash mark to the new session so a re-attach
+        // after TTL expiry or invalidateSession() does not bypass the guard.
+        if (state.sessionId && crashedTargets.has(targetId)) {
+          crashedSessions.set(state.sessionId, crashedTargets.get(targetId)!);
+        }
       }
       await enablePageEvents(state.sessionId);
       state.sessionAt = Date.now();
@@ -260,6 +268,11 @@ export function isCrashedSession(sessionId: string): boolean {
  */
 export function getCrashedLastUrl(sessionId: string): string {
   return crashedSessions.get(sessionId) ?? "";
+}
+
+/** Clear all per-target crash marks. Used by test cleanup to reset module state. */
+export function clearCrashedTargets(): void {
+  crashedTargets.clear();
 }
 
 export function drainBrowserEvents() {
@@ -371,6 +384,9 @@ function handleMessage(message) {
       sessionLastUrls.delete(sessionId);
     }
     const targetId = data.params?.targetId || data.params?.targetInfo?.targetId;
+    if (targetId) {
+      crashedTargets.delete(targetId);
+    }
     if (targetId && targetId === state.sessionTargetId) {
       invalidateSession();
     }
@@ -388,6 +404,10 @@ function handleMessage(message) {
       if (!url.startsWith("chrome-error://")) {
         crashedSessions.delete(sessionId);
         sessionLastUrls.set(sessionId, url);
+        // Clear the per-target crash mark so a future re-attachment is not blocked.
+        if (sessionId === state.sessionId && state.sessionTargetId) {
+          crashedTargets.delete(state.sessionTargetId);
+        }
       }
     }
   }
@@ -398,6 +418,13 @@ function handleMessage(message) {
     const sessionId = data.sessionId || state.sessionId;
     if (sessionId && !crashedSessions.has(sessionId)) {
       crashedSessions.set(sessionId, sessionLastUrls.get(sessionId) || "");
+    }
+    // Also record by targetId so a session re-attachment carries the crash mark.
+    if (sessionId === state.sessionId && state.sessionTargetId) {
+      crashedTargets.set(
+        state.sessionTargetId,
+        crashedSessions.get(sessionId) || "",
+      );
     }
   }
   if (data.method === "Page.javascriptDialogOpening") {
