@@ -69,7 +69,8 @@ function nonNegativeNumber(
   fileValue: number | undefined,
   fallback: number,
 ): number {
-  const value = envValue !== undefined ? Number(envValue) : Number(fileValue ?? fallback);
+  const value =
+    envValue !== undefined ? Number(envValue) : Number(fileValue ?? fallback);
   return Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
@@ -78,7 +79,7 @@ function portNumber(
   fileValue: number | undefined,
   fallback: number,
 ): number {
-  const raw = envValue !== undefined ? envValue : String(fileValue ?? fallback);
+  const raw = envValue?.trim() ? envValue : String(fileValue ?? fallback);
   const n = Number(raw);
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : fallback;
 }

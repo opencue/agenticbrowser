@@ -76,9 +76,12 @@ async function waitForDownload(options: WaitForEventOptions = {}) {
       path: async () => downloadedPath,
       delete: deleteTmpDir,
       saveAs: async (targetPath) => {
-        await copyFile(downloadedPath, targetPath);
-        await deleteTmpDir();
-        return targetPath;
+        try {
+          await copyFile(downloadedPath, targetPath);
+          return targetPath;
+        } finally {
+          await deleteTmpDir();
+        }
       },
     };
   } finally {

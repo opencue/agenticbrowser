@@ -492,7 +492,13 @@ describe("Spaces overview server", () => {
     );
 
     try {
-      const space = await waitForActiveSpace("busy space", "counting clicks");
+      // The agent launches its own process, loads the fixture and clicks
+      // first; a cold Windows runner needs well over the default 5 s for that.
+      const space = await waitForActiveSpace(
+        "busy space",
+        "counting clicks",
+        20000,
+      );
 
       // The panel and the agent are separate processes with separate CDP
       // connections; this only works because the live overlay leaves its state in

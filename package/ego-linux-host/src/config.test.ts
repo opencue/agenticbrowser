@@ -112,6 +112,30 @@ test("loadConfig rejects out-of-range cdpPort and falls back to default", async 
   );
 });
 
+test("loadConfig treats empty EGO_CDP_PORT as unset, applying file cdpPort", async () => {
+  const base = join(tmpdir(), `ego-cfg-empty-port-${process.pid}`);
+  const configDir = join(base, "config");
+  await mkdir(configDir, { recursive: true });
+  await writeFile(
+    join(configDir, "config.json"),
+    JSON.stringify({ cdpPort: 9333 }),
+  );
+  try {
+    const cfg = await loadConfig({
+      EGO_CONFIG_DIR: configDir,
+      EGO_DATA_DIR: "/tmp/ego-cfg-empty-port-data",
+      EGO_CDP_PORT: "",
+    });
+    assert.equal(
+      cfg.cdpPort,
+      9333,
+      "empty EGO_CDP_PORT must not override file cdpPort with 9222",
+    );
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
 test("loadConfig reads optional config.json when env absent", async () => {
   const base = join(tmpdir(), `ego-cfg-file-${process.pid}`);
   const configDir = join(base, "config");
