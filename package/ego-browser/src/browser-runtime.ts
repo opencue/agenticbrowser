@@ -383,9 +383,10 @@ function handleMessage(message) {
     const sessionId = data.sessionId || state.sessionId;
     const url = data.params?.frame?.url;
     if (sessionId && typeof url === "string" && url) {
-      // A main-frame navigation means the renderer is alive again.
-      crashedSessions.delete(sessionId);
+      // Chrome shows chrome-error:// right after a crash, so only a real page
+      // means the renderer is alive again.
       if (!url.startsWith("chrome-error://")) {
+        crashedSessions.delete(sessionId);
         sessionLastUrls.set(sessionId, url);
       }
     }

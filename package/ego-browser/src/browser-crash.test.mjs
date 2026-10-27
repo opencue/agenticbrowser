@@ -179,6 +179,23 @@ test("iframe navigation neither clears crash state nor replaces the last URL", a
   }
 });
 
+test("chrome-error:// after targetCrashed keeps the crash state", async () => {
+  installAutoEgo();
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    const sessionId = state.sessionId;
+    fireEvent("Inspector.targetCrashed", {}, sessionId);
+    fireEvent(
+      "Page.frameNavigated",
+      { frame: { url: "chrome-error://chromewebdata" } },
+      sessionId,
+    );
+    assert.equal(isCrashedSession(sessionId), true);
+  } finally {
+    cleanup();
+  }
+});
+
 test("Page.navigate and Page.reload reach a crashed session", async () => {
   installAutoEgo();
   try {
