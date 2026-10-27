@@ -323,3 +323,32 @@ test("getBrowserVersion reports no update so the notice stays silent", async () 
     assert.match(version.currentVersion, /ego-windows-host/);
   });
 });
+
+test("createTaskSpace removes the zombie space when Target.createTarget fails", async () => {
+  // registry.create() persists the space before the CDP call. If CDP rejects,
+  // the space must be removed so subsequent listTaskSpaces does not surface it.
+  const dir = await mkdtemp(join(tmpdir(), "ego-host-bridge-zombie-"));
+  try {
+    const cdpError = new Error("CDP connection refused");
+    const hostConnection = fakeConnection(async (method) => {
+      if (method === "Target.createTarget") throw cdpError;
+      return {};
+    });
+    const agentConnection = fakeConnection();
+    const registry = new TaskSpaceRegistry(dir);
+    const ego = createEgoBridge({ hostConnection, agentConnection, registry });
+
+    await assert.rejects(
+      () => ego.createTaskSpace("zombie-space"),
+      (err) => err === cdpError,
+    );
+
+    assert.equal(
+      registry.list().length,
+      0,
+      "zombie space must be removed after CDP failure",
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

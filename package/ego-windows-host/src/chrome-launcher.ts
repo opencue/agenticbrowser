@@ -64,6 +64,23 @@ export async function ensureBrowser(options: EnsureBrowserOptions) {
     `--user-data-dir=${options.userDataDir}`,
     "--no-first-run",
     "--no-default-browser-check",
+    // Node's WebSocket sends no Origin; without this Chrome rejects the upgrade.
+    "--remote-allow-origins=*",
+    // Keep timers and rendering active even when the window is backgrounded or
+    // occluded — the same flags used on Linux to prevent the agent browser from
+    // throttling itself while the user works in another window.
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    // Big enough that a page laid out for a desktop viewport fits. The default
+    // headless window is ~800x600, which pushes lower page content out of view;
+    // input dispatched at those coordinates hit-tests to nothing.
+    "--window-size=1280,900",
+    // Without this, HiDPI scaling (e.g. 150%) shrinks the CSS viewport so
+    // page content falls below the fold and pointer input silently does nothing.
+    "--force-device-scale-factor=1",
+    // Suppress "Chrome didn't shut down correctly — Restore pages?" on restart.
+    "--hide-crash-restore-bubble",
     ...(options.headless ? ["--headless=new"] : []),
     "about:blank",
   ];

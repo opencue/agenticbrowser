@@ -163,9 +163,21 @@ export function createEgoBridge(options: BridgeOptions) {
       const space = registry.create(name);
       // A fresh space starts with one blank tab so the runtime always has a
       // target to attach its session to.
-      const created = await hostConnection.request("Target.createTarget", {
-        url: "about:blank",
-      });
+      let created: { targetId: string };
+      try {
+        created = await hostConnection.request("Target.createTarget", {
+          url: "about:blank",
+        });
+      } catch (error) {
+        // The space was persisted before the CDP call. Remove it so a failed
+        // createTaskSpace does not leave an empty zombie space in the registry.
+        try {
+          registry.remove(space.id);
+        } catch {
+          // Keep the CDP failure as the reported cause.
+        }
+        throw error;
+      }
       registry.trackTarget(created.targetId, space.id);
       registry.setActive(created.targetId, space.id);
       return shapeSpace(registry.get(space.id));

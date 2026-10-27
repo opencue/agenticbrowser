@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -115,5 +116,27 @@ test("remove clears the current selection when it was selected", async () => {
     registry.remove(space.id);
     assert.equal(registry.current(), null);
     assert.equal(registry.list().length, 0);
+  });
+});
+
+test("save leaves no orphan temp file on success", async () => {
+  // Verifies the rename-based atomic-write path: after a successful save the
+  // only artefact in the state directory is spaces.json — no stray .tmp file.
+  // (The EPERM retry path is exercised at the OS level on Windows; it cannot
+  // be unit-tested here without a seam that does not exist in save().)
+  await withRegistry(async (dir) => {
+    const registry = new TaskSpaceRegistry(dir);
+    registry.create("research");
+    // spaces.json must be present and contain valid JSON.
+    const raw = readFileSync(join(dir, "spaces.json"), "utf8");
+    const parsed = JSON.parse(raw);
+    assert.ok(Array.isArray(parsed.spaces), "spaces array present");
+    assert.equal(parsed.spaces.length, 1);
+    // No leftover scratch files.
+    const allFiles = await (
+      await import("node:fs/promises")
+    ).readdir(dir);
+    const temps = allFiles.filter((f) => f.endsWith(".tmp"));
+    assert.deepEqual(temps, [], "no .tmp files remain after save");
   });
 });

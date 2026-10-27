@@ -90,6 +90,35 @@ test("ensureBrowser launches detached with the CDP and profile flags", async () 
     assert.ok(record.args.includes("--remote-debugging-port=9522"));
     assert.ok(record.args.includes(`--user-data-dir=${userDataDir}`));
     assert.ok(record.args.includes("--no-first-run"));
+    // Stability flags that must match the Linux host for parity.
+    assert.ok(
+      record.args.includes("--remote-allow-origins=*"),
+      "must allow WebSocket origins so Node CDP can connect",
+    );
+    assert.ok(
+      record.args.includes("--disable-background-timer-throttling"),
+      "must not throttle timers when backgrounded",
+    );
+    assert.ok(
+      record.args.includes("--disable-backgrounding-occluded-windows"),
+      "must not background occluded windows",
+    );
+    assert.ok(
+      record.args.includes("--disable-renderer-backgrounding"),
+      "must not background renderer",
+    );
+    assert.ok(
+      record.args.includes("--window-size=1280,900"),
+      "must set viewport size so pointer input lands correctly",
+    );
+    assert.ok(
+      record.args.includes("--force-device-scale-factor=1"),
+      "must pin DPI scale so CSS viewport matches physical pixels",
+    );
+    assert.ok(
+      record.args.includes("--hide-crash-restore-bubble"),
+      "must suppress crash-restore bubble on restart",
+    );
     assert.equal(record.options.detached, true);
     assert.ok(existsSync(userDataDir), "creates the profile directory");
   } finally {
