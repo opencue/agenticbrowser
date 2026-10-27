@@ -29,7 +29,7 @@ let sequence = 0;
 /**
  * How long Windows is given to let go of a file another process is reading.
  * A reader that reopens the file in a loop can hold it past a fixed 200 ms, so
- * back off from 10 ms up to 100 ms per wait: about 1.5 s before giving up.
+ * back off from 10 ms up to 100 ms per wait: about 1.75 s before giving up.
  */
 const RETRY_LIMIT = 20;
 const RETRY_DELAY_MS = 10;
