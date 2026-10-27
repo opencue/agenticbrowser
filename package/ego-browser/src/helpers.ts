@@ -47,6 +47,7 @@ export {
   insertText,
   focus,
   fill,
+  setInputValue,
   pressSequentially,
   check,
   uncheck,
@@ -1724,6 +1725,7 @@ function createLocator(selector) {
     focus: () => keyboard.focus(selector),
     fill: (value, options = {}) => keyboard.fill(selector, value, options),
     clear: (options = {}) => keyboard.fill(selector, "", options),
+    setInputValue: (value) => keyboard.setInputValue(selector, value),
     press: (key, options = {}) =>
       keyboard.pressOnSelector(selector, key, options),
     pressSequentially: (text, options = {}) =>
@@ -1897,6 +1899,7 @@ function createPageFacade() {
     drainEvents: observe.drainEvents,
     fastObserve: fast.fastObserve,
     fastAct: fast.fastAct,
+    setInputValue: keyboard.setInputValue,
     screencast: {
       start: screencast.startScreencast,
       stop: screencast.stopScreencast,
