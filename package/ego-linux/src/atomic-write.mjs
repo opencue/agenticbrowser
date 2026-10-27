@@ -26,9 +26,14 @@ import { rename, rm, writeFile } from "node:fs/promises";
 /** Distinguishes concurrent writes from within one process. */
 let sequence = 0;
 
-/** How long Windows is given to let go of a file another process is reading. */
-const RETRY_LIMIT = 10;
-const RETRY_DELAY_MS = 20;
+/**
+ * How long Windows is given to let go of a file another process is reading.
+ * A reader that reopens the file in a loop can hold it past a fixed 200 ms, so
+ * back off from 10 ms up to 100 ms per wait: about 1.5 s before giving up.
+ */
+const RETRY_LIMIT = 20;
+const RETRY_DELAY_MS = 10;
+const RETRY_DELAY_MAX_MS = 100;
 
 /**
  * @param {string} path The file to replace.
@@ -56,7 +61,8 @@ export async function replaceFile(path, contents, options) {
         await rm(scratch, { force: true });
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      const delay = Math.min(RETRY_DELAY_MS * 2 ** attempt, RETRY_DELAY_MAX_MS);
+      await new Promise((resolve) => setTimeout(resolve, delay));
     }
   }
 }
