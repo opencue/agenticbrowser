@@ -16,6 +16,7 @@ import assert from "node:assert/strict";
 
 import {
   browserCdp,
+  clearCrashedTargets,
   clearPreferredTarget,
   drainBrowserEvents,
   drainBrowserTrace,
@@ -62,6 +63,7 @@ function fireEvent(method, params = {}, sessionId) {
 function cleanup() {
   delete globalThis.ego;
   invalidateSession();
+  clearCrashedTargets();
   clearPreferredTarget();
   drainBrowserEvents();
   drainBrowserTrace();
@@ -358,6 +360,77 @@ test("invalidateSession clears crash and URL tracking state", async () => {
 /* ------------------------------------------------------------------ */
 /*  cdpOverride bypasses crash guard (test mock path)                 */
 /* ------------------------------------------------------------------ */
+
+/* ------------------------------------------------------------------ */
+/*  Page.enable is no longer in CRASH_RECOVERY_METHODS                */
+/* ------------------------------------------------------------------ */
+
+test("Page.enable on a crashed session throws EGO_PAGE_CRASHED", async () => {
+  // CRASH_RECOVERY_METHODS previously contained "Page.enable" as a dead
+  // entry: enablePageEvents() calls rawCdp() directly, so Page.enable never
+  // goes through browserCdp's crash guard. After removing the dead entry,
+  // an explicit browserCdp("Page.enable") on a crashed session must be
+  // blocked. This test fails when the entry is present (Page.enable passes).
+  installAutoEgo();
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    const sessionId = state.sessionId;
+    fireEvent("Inspector.targetCrashed", {}, sessionId);
+
+    await assert.rejects(
+      () => browserCdp("Page.enable", {}),
+      (err) => {
+        assert.equal(err.error_code, "EGO_PAGE_CRASHED");
+        return true;
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Crash mark survives session re-attachment (targetId tracking)     */
+/* ------------------------------------------------------------------ */
+
+test("re-attaching to a crashed target carries the crash mark to the new session", async () => {
+  // After a crash + invalidateSession(), ensureSession() re-attaches to the
+  // same target and gets a new sessionId. Without crashedTargets tracking,
+  // the new sessionId is not in crashedSessions and the guard is bypassed.
+  installAutoEgo();
+  try {
+    await browserCdp("Runtime.evaluate", { expression: "1" });
+    const sessionId = state.sessionId;
+    assert.ok(sessionId, "session established");
+
+    fireEvent("Inspector.targetCrashed", {}, sessionId);
+    assert.equal(
+      isCrashedSession(sessionId),
+      true,
+      "original session marked crashed",
+    );
+
+    // Simulate session expiry: invalidate without navigating away.
+    invalidateSession();
+    assert.equal(isCrashedSession(sessionId), false, "old sessionId cleared");
+
+    // The next browserCdp call re-attaches to the same target (tab-1) and
+    // gets a fresh sessionId. It must still throw EGO_PAGE_CRASHED.
+    await assert.rejects(
+      () => browserCdp("Runtime.evaluate", { expression: "2" }),
+      (err) => {
+        assert.equal(
+          err.error_code,
+          "EGO_PAGE_CRASHED",
+          "new session for same crashed target must be blocked",
+        );
+        return true;
+      },
+    );
+  } finally {
+    cleanup();
+  }
+});
 
 test("cdpOverride bypasses the crash guard", async () => {
   installAutoEgo();
