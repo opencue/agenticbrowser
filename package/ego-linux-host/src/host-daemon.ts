@@ -465,6 +465,7 @@ export async function startDaemon(
   runtime.onEvent(broadcastEvent);
 
   await mkdir(dirname(socketPath), { recursive: true, mode: 0o700 });
+  await chmod(dirname(socketPath), 0o700);
   await safeUnlink(socketPath);
 
   const server: Server = createServer((socket) => {

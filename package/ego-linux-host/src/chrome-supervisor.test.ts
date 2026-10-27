@@ -39,6 +39,28 @@ test("buildChromeArgs keeps CDP local and makes no-sandbox explicit", () => {
   assert.ok(containerFallback.includes("--no-sandbox"));
 });
 
+test("buildChromeArgs includes remote-allow-origins and background-throttling flags", () => {
+  const args = buildChromeArgs(baseConfig());
+  // Node's WebSocket sends no Origin; Chrome rejects without this flag.
+  assert.ok(
+    args.includes("--remote-allow-origins=*"),
+    "missing --remote-allow-origins=*",
+  );
+  // Keep JS timers and rendering at full speed for agent tasks.
+  assert.ok(
+    args.includes("--disable-background-timer-throttling"),
+    "missing --disable-background-timer-throttling",
+  );
+  assert.ok(
+    args.includes("--disable-backgrounding-occluded-windows"),
+    "missing --disable-backgrounding-occluded-windows",
+  );
+  assert.ok(
+    args.includes("--disable-renderer-backgrounding"),
+    "missing --disable-renderer-backgrounding",
+  );
+});
+
 test("resolveChromePath prefers EGO_CHROME_PATH when executable", async () => {
   const dir = join(tmpdir(), `ego-chrome-${process.pid}`);
   await mkdir(dir, { recursive: true });
