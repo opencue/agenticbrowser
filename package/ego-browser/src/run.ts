@@ -198,8 +198,15 @@ async function emitFailureArtifact(
   env: Record<string, string | undefined>,
 ) {
   try {
-    const path = await writeFailureArtifact(error, code, env);
+    const { path, recoveryHint } = await writeFailureArtifact(error, code, env);
     write(stderr, `ego-browser: failure artifact written to ${path}\n`);
+    if (recoveryHint) {
+      const hint =
+        recoveryHint.length > 200
+          ? recoveryHint.slice(0, 200) + "…"
+          : recoveryHint;
+      write(stderr, `ego-browser: recovery hint: ${hint}\n`);
+    }
   } catch (artifactError) {
     write(
       stderr,
@@ -212,7 +219,7 @@ async function writeFailureArtifact(
   error: unknown,
   code: string,
   env: Record<string, string | undefined>,
-) {
+): Promise<{ path: string; recoveryHint: string | undefined }> {
   const dir = env.EGO_BROWSER_FAILURE_ARTIFACT_DIR || tmpdir();
   const filename = `ego-browser-failure-${processPid}-${state.now()}-${++failureArtifactSeq}.json`;
   const path = join(dir, filename);
@@ -242,12 +249,17 @@ async function writeFailureArtifact(
 
   artifact.recovery = buildFailureRecovery(artifact);
 
+  const recovery = artifact.recovery as {
+    readThisFirst?: Array<{ instruction: string }>;
+  };
+  const recoveryHint = recovery.readThisFirst?.[0]?.instruction;
+
   await mkdir(dir, { recursive: true, mode: 0o700 });
   await state.writeFile(path, `${JSON.stringify(artifact, null, 2)}\n`, {
     mode: 0o600,
     flag: "wx",
   });
-  return path;
+  return { path, recoveryHint };
 }
 
 function failureArtifactsEnabled(env: Record<string, string | undefined>) {
