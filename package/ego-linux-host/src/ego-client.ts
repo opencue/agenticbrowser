@@ -121,7 +121,12 @@ export async function connectHost(socketPath: string): Promise<HostConnection> {
     close(): void {
       if (closed) return;
       closed = true;
-      pending.clear();
+      failAll(
+        makeEgoError(
+          "EGO_TASK_HOST_DISCONNECTED",
+          "host daemon socket closed",
+        ),
+      );
       eventHandlers.clear();
       try {
         socket.destroy();

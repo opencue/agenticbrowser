@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { createServer } from "node:net";
+import { createServer, type Socket } from "node:net";
 import {
   connectHost,
   installEgoClient,
@@ -322,6 +322,64 @@ test("connectHost ping + installEgoClient against daemon", async () => {
       await daemon.close();
     }
   } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("closing a host connection rejects all unfinished requests", async () => {
+  const dir = join(
+    tmpdir(),
+    `ego-close-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  await mkdir(dir, { recursive: true });
+  const sockets = new Set<Socket>();
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    // A fake daemon accepts requests but never replies.
+    socket.resume();
+  });
+  const socketPath = join(dir, "host.sock");
+  let conn: HostConnection | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    conn = await connectHost(socketPath);
+    const outcomes = Promise.allSettled([
+      conn.request("first"),
+      conn.request("second"),
+    ]);
+    conn.close();
+    conn.close();
+    const results = await Promise.race([
+      outcomes,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () =>
+            reject(
+              new Error("unfinished requests remained pending after close"),
+            ),
+          250,
+        );
+      }),
+    ]);
+    for (const result of results) {
+      assert.equal(result.status, "rejected");
+      if (result.status === "rejected") {
+        assert.equal(result.reason.error_code, "EGO_TASK_HOST_DISCONNECTED");
+      }
+    }
+    await assert.rejects(conn.request("after-close"), {
+      error_code: "EGO_TASK_HOST_DISCONNECTED",
+    });
+  } finally {
+    clearTimeout(timeout);
+    conn?.close();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(dir, { recursive: true, force: true });
   }
 });
