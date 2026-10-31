@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SRC_DIR = dirname(fileURLToPath(import.meta.url));
@@ -19,10 +19,10 @@ export function agentWorkspace() {
 }
 
 export function resolvePath(path) {
-  if (path.startsWith("~")) {
+  if (path === "~" || path.startsWith("~/") || path.startsWith(`~${sep}`)) {
+    // join, not resolve: resolve(home, "/x") would return "/x".
     return resolve(
-      process.env.HOME || process.env.USERPROFILE || ".",
-      path.slice(1),
+      join(process.env.HOME || process.env.USERPROFILE || ".", path.slice(1)),
     );
   }
   return resolve(path);

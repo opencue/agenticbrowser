@@ -272,6 +272,7 @@ export async function evaluateLocator(selector, pageFunction, arg = undefined) {
       return pageFunction(this, arg);
     }`,
     [functionSource, arg],
+    { awaitPromise: true },
   );
 }
 
@@ -292,6 +293,7 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
         return pageFunction([this], arg);
       }`,
       [functionSource, arg],
+      { awaitPromise: true },
     );
   }
   const backendNodeIds = await queryRoleBackendNodeIds(selector);
@@ -307,12 +309,22 @@ export async function evaluateAll(selector, pageFunction, arg = undefined) {
 // element costs no more round trips than before.
 const RESOLVE_RETRY_MS = [25, 50, 100];
 
-async function readElement(selector, functionDeclaration, args = []) {
+async function readElement(
+  selector,
+  functionDeclaration,
+  args = [],
+  options: { awaitPromise?: boolean } = {},
+) {
   const deadline = state.now() + state.defaultTimeout;
   let attempt = 0;
   while (true) {
     try {
-      return await readElementOnce(selector, functionDeclaration, args);
+      return await readElementOnce(
+        selector,
+        functionDeclaration,
+        args,
+        options,
+      );
     } catch (error) {
       if (
         !(error instanceof ElementResolutionError) ||
@@ -328,8 +340,18 @@ async function readElement(selector, functionDeclaration, args = []) {
   }
 }
 
-async function readElementOnce(selector, functionDeclaration, args = []) {
-  const { result } = await resolveAndCall(selector, functionDeclaration, args);
+async function readElementOnce(
+  selector,
+  functionDeclaration,
+  args = [],
+  options: { awaitPromise?: boolean } = {},
+) {
+  const { result } = await resolveAndCall(
+    selector,
+    functionDeclaration,
+    args,
+    options,
+  );
   return runtimeValue(result, functionDeclaration);
 }
 

@@ -56,23 +56,33 @@ export async function startScreencast(options: ScreencastOptions) {
     );
   }
   if (activeRecording) throw new Error("Screencast is already started");
-  const sessionId = await dependencies.ensureSession();
-  const size = evenSize(options.size ?? (await defaultSize()));
-  const recorder = dependencies.createRecorder({
-    outputPath: resolve(options.path),
-    size,
-  });
-  await recorder.start();
   const recording: any = {
-    sessionId,
-    recorder,
     unsubscribe: () => {},
     receivedFrames: false,
     quality,
     frameChain: Promise.resolve(),
   };
+  // Reserve the slot before initialization yields, and retain it through shutdown.
   activeRecording = recording;
+  recording.startPromise = initializeRecording(recording, options);
+  await recording.startPromise;
+  const dispose = async () => {
+    if (activeRecording === recording) await stopScreencast();
+  };
+  return { dispose, [Symbol.asyncDispose]: dispose };
+}
+
+async function initializeRecording(recording, options: ScreencastOptions) {
   try {
+    const sessionId = await dependencies.ensureSession();
+    recording.sessionId = sessionId;
+    const size = evenSize(options.size ?? (await defaultSize()));
+    const recorder = dependencies.createRecorder({
+      outputPath: resolve(options.path),
+      size,
+    });
+    recording.recorder = recorder;
+    await recorder.start();
     recording.unsubscribe = dependencies.subscribeBrowserEvent(
       "Page.screencastFrame",
       sessionId,
@@ -104,22 +114,21 @@ export async function startScreencast(options: ScreencastOptions) {
       "Page.startScreencast",
       {
         format: "jpeg",
-        quality,
+        quality: recording.quality,
         maxWidth: size.width,
         maxHeight: size.height,
       },
       sessionId,
     );
   } catch (error) {
-    activeRecording = undefined;
-    recording.unsubscribe();
-    await recorder.stop().catch(() => {});
+    try {
+      recording.unsubscribe();
+      await recording.recorder?.stop().catch(() => {});
+    } finally {
+      if (activeRecording === recording) activeRecording = undefined;
+    }
     throw error;
   }
-  const dispose = async () => {
-    if (activeRecording === recording) await stopScreencast();
-  };
-  return { dispose, [Symbol.asyncDispose]: dispose };
 }
 
 /**
@@ -129,7 +138,20 @@ export async function startScreencast(options: ScreencastOptions) {
 export async function stopScreencast() {
   const recording = activeRecording;
   if (!recording) return;
-  activeRecording = undefined;
+  recording.stopPromise ??= finalizeRecording(recording);
+  await recording.stopPromise;
+}
+
+async function finalizeRecording(recording) {
+  try {
+    await recording.startPromise;
+    await stopRecording(recording);
+  } finally {
+    if (activeRecording === recording) activeRecording = undefined;
+  }
+}
+
+async function stopRecording(recording) {
   let stopError = recording.error;
   recording.unsubscribe();
   await recording.frameChain;

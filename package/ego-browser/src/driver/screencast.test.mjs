@@ -729,3 +729,229 @@ test("stopScreencast surfaces an encoder frame failure and still finalizes", asy
     restore();
   }
 });
+
+test("startScreencast reserves the recording before session initialization", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  let releaseSession;
+  const session = new Promise((resolve) => {
+    releaseSession = resolve;
+  });
+  let sessionCalls = 0;
+  let recorderStarts = 0;
+  const restore = module.__testing.setOverrides({
+    ensureSession: () => {
+      sessionCalls += 1;
+      return session;
+    },
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async () => ({
+      result: { data: Buffer.from("fallback").toString("base64") },
+    }),
+    createRecorder: () => ({
+      async start() {
+        recorderStarts += 1;
+      },
+      writeFrame() {},
+      async stop() {},
+    }),
+  });
+  try {
+    const first = module.startScreencast({
+      path: "artifacts/first.webm",
+      size: { width: 640, height: 480 },
+    });
+    const second = module.startScreencast({
+      path: "artifacts/second.webm",
+      size: { width: 640, height: 480 },
+    });
+    const settled = Promise.allSettled([first, second]);
+    releaseSession("session-1");
+    const results = await settled;
+
+    assert.equal(results[0].status, "fulfilled");
+    assert.equal(results[1].status, "rejected");
+    assert.match(results[1].reason.message, /already started/);
+    assert.equal(sessionCalls, 1);
+    assert.equal(recorderStarts, 1);
+  } finally {
+    releaseSession("session-1");
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});
+
+test("stopScreencast waits for a recording that is still starting", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  let releaseSession;
+  const session = new Promise((resolve) => {
+    releaseSession = resolve;
+  });
+  const order = [];
+  const restore = module.__testing.setOverrides({
+    ensureSession: () => session,
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async (method) => {
+      order.push(method);
+      return { result: { data: Buffer.from("fallback").toString("base64") } };
+    },
+    createRecorder: () => ({
+      async start() {
+        order.push("recorder:start");
+      },
+      writeFrame() {},
+      async stop() {
+        order.push("recorder:stop");
+      },
+    }),
+  });
+  try {
+    const starting = module.startScreencast({
+      path: "artifacts/run.webm",
+      size: { width: 640, height: 480 },
+    });
+    let stopped = false;
+    const stopping = module.stopScreencast().then(() => {
+      stopped = true;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const stoppedBeforeStartup = stopped;
+    releaseSession("session-1");
+    await Promise.all([starting, stopping]);
+
+    assert.equal(stoppedBeforeStartup, false);
+    assert.deepEqual(order, [
+      "recorder:start",
+      "Page.startScreencast",
+      "Page.captureScreenshot",
+      "Page.stopScreencast",
+      "recorder:stop",
+    ]);
+  } finally {
+    releaseSession("session-1");
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});
+
+test("stopScreencast keeps the recording reserved and shares in-flight shutdown", async () => {
+  const module = await import("../../dist/src/driver/screencast.js");
+  let finishStop;
+  const stopGate = new Promise((resolve) => {
+    finishStop = resolve;
+  });
+  let recorderStopCalls = 0;
+  let cdpStopCalls = 0;
+  const restore = module.__testing.setOverrides({
+    ensureSession: async () => "session-1",
+    subscribeBrowserEvent: () => () => {},
+    browserCdp: async (method) => {
+      if (method === "Page.stopScreencast") {
+        cdpStopCalls += 1;
+        await stopGate;
+        throw new Error("stop failed");
+      }
+      return { result: { data: Buffer.from("fallback").toString("base64") } };
+    },
+    createRecorder: () => ({
+      async start() {},
+      writeFrame() {},
+      async stop() {
+        recorderStopCalls += 1;
+      },
+    }),
+  });
+  try {
+    const recording = await module.startScreencast({
+      path: "artifacts/run.webm",
+      size: { width: 640, height: 480 },
+    });
+    const firstStop = module.stopScreencast();
+    await new Promise((resolve) => setImmediate(resolve));
+    let secondStopSettled = false;
+    const secondStop = module.stopScreencast().finally(() => {
+      secondStopSettled = true;
+    });
+    const resultsPromise = Promise.allSettled([
+      firstStop,
+      secondStop,
+      recording.dispose(),
+      module.startScreencast({
+        path: "artifacts/overlap.webm",
+        size: { width: 640, height: 480 },
+      }),
+    ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    const settledBeforeShutdown = secondStopSettled;
+    finishStop();
+    const results = await resultsPromise;
+
+    assert.equal(settledBeforeShutdown, false);
+    for (const result of results.slice(0, 3)) {
+      assert.equal(result.status, "rejected");
+      assert.match(result.reason.message, /stop failed/);
+    }
+    assert.equal(results[3].status, "rejected");
+    assert.match(results[3].reason.message, /already started/);
+    assert.equal(cdpStopCalls, 1);
+    assert.equal(recorderStopCalls, 1);
+    await module.stopScreencast();
+  } finally {
+    finishStop();
+    await module.stopScreencast().catch(() => {});
+    restore();
+  }
+});
+
+for (const failure of ["session", "encoder"]) {
+  test(`startScreencast releases its reservation after ${failure} startup fails`, async () => {
+    const module = await import("../../dist/src/driver/screencast.js");
+    let attempts = 0;
+    let recorderStopCalls = 0;
+    const restore = module.__testing.setOverrides({
+      ensureSession: async () => {
+        attempts += 1;
+        if (failure === "session" && attempts === 1) {
+          throw new Error("session failed");
+        }
+        return "session-1";
+      },
+      subscribeBrowserEvent: () => () => {},
+      browserCdp: async () => ({
+        result: { data: Buffer.from("fallback").toString("base64") },
+      }),
+      createRecorder: () => ({
+        async start() {
+          if (failure === "encoder" && attempts === 1) {
+            throw new Error("encoder failed");
+          }
+        },
+        writeFrame() {},
+        async stop() {
+          recorderStopCalls += 1;
+        },
+      }),
+    });
+    try {
+      await assert.rejects(
+        () =>
+          module.startScreencast({
+            path: "artifacts/run.webm",
+            size: { width: 640, height: 480 },
+          }),
+        new RegExp(`${failure} failed`),
+      );
+      assert.equal(recorderStopCalls, failure === "encoder" ? 1 : 0);
+
+      const recording = await module.startScreencast({
+        path: "artifacts/retry.webm",
+        size: { width: 640, height: 480 },
+      });
+      await recording.dispose();
+      assert.equal(attempts, 2);
+      assert.equal(recorderStopCalls, failure === "encoder" ? 2 : 1);
+    } finally {
+      await module.stopScreencast().catch(() => {});
+      restore();
+    }
+  });
+}

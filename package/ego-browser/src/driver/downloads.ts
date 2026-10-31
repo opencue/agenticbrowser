@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { cdp } from "../cdp-eval.js";
-import { ensureSession, waitForBrowserEvent } from "../browser-runtime.js";
+import { ensureSession, subscribeBrowserEvent } from "../browser-runtime.js";
 import { state } from "../state.js";
 
 type WaitForEventOptions = {
@@ -53,49 +53,77 @@ async function waitForDownload(options: WaitForEventOptions = {}) {
     `ego-browser-downloads-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
   );
   mkdirSync(downloadDir, { recursive: true });
-  const sessionPromise = ensureSession();
-  const behaviorPromise = setDownloadBehavior(downloadDir);
-  const willBeginPromise = waitForBrowserEvent(
-    (event) => event?.method === "Page.downloadWillBegin",
-    timeout,
-  ) as Promise<DownloadWillBegin>;
-  let downloadGuid;
-  const progressPromise = waitForBrowserEvent(
-    (event) =>
-      event?.method === "Page.downloadProgress" &&
-      (!downloadGuid || event?.params?.guid === downloadGuid) &&
-      (event?.params?.state === "completed" ||
-        event?.params?.state === "canceled"),
-    timeout,
-  ) as Promise<DownloadProgress>;
-  await Promise.all([sessionPromise, behaviorPromise]);
-  const willBegin = await willBeginPromise;
-  const guid = willBegin.params?.guid;
-  downloadGuid = guid;
-  const suggestedFilename =
-    willBegin.params?.suggestedFilename || guid || "download";
-  const progress = await progressPromise;
-  if (progress.params?.state === "canceled") {
-    throw new Error(`Download canceled: ${suggestedFilename}`);
+  const events = waitForDownloadEvents(timeout);
+  try {
+    const [, , { willBegin, progress }] = await Promise.all([
+      ensureSession(),
+      setDownloadBehavior(downloadDir),
+      events.promise,
+    ]);
+    const guid = willBegin.params?.guid;
+    const suggestedFilename =
+      willBegin.params?.suggestedFilename || guid || "download";
+    if (progress.params?.state === "canceled") {
+      throw new Error(`Download canceled: ${suggestedFilename}`);
+    }
+    const downloadedPath = join(downloadDir, suggestedFilename);
+    const deleteTmpDir = async () => {
+      await rm(downloadDir, { recursive: true, force: true });
+    };
+    return {
+      suggestedFilename: () => suggestedFilename,
+      url: () => willBegin.params?.url || "",
+      path: async () => downloadedPath,
+      delete: deleteTmpDir,
+      saveAs: async (targetPath) => {
+        try {
+          await copyFile(downloadedPath, targetPath);
+          return targetPath;
+        } finally {
+          await deleteTmpDir();
+        }
+      },
+    };
+  } finally {
+    events.dispose();
   }
-  const downloadedPath = join(downloadDir, suggestedFilename);
-  const deleteTmpDir = async () => {
-    await rm(downloadDir, { recursive: true, force: true });
+}
+
+function waitForDownloadEvents(timeout: number) {
+  let willBegin: DownloadWillBegin | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const subscriptions: (() => unknown)[] = [];
+  const dispose = () => {
+    clearTimeout(timer);
+    for (const unsubscribe of subscriptions.splice(0)) unsubscribe();
   };
-  return {
-    suggestedFilename: () => suggestedFilename,
-    url: () => willBegin.params?.url || "",
-    path: async () => downloadedPath,
-    delete: deleteTmpDir,
-    saveAs: async (targetPath) => {
-      try {
-        await copyFile(downloadedPath, targetPath);
-        return targetPath;
-      } finally {
-        await deleteTmpDir();
-      }
-    },
-  };
+  const promise = new Promise<{
+    willBegin: DownloadWillBegin;
+    progress: DownloadProgress;
+  }>((resolve, reject) => {
+    subscriptions.push(
+      subscribeBrowserEvent("Page.downloadWillBegin", undefined, (event) => {
+        // Select the GUID in the event callback: a completion can arrive in
+        // the same turn, before an awaiting caller has resumed.
+        if (!willBegin) willBegin = event;
+      }),
+      subscribeBrowserEvent("Page.downloadProgress", undefined, (event) => {
+        if (!willBegin || event.params?.guid !== willBegin.params?.guid) return;
+        if (
+          event.params?.state !== "completed" &&
+          event.params?.state !== "canceled"
+        )
+          return;
+        dispose();
+        resolve({ willBegin, progress: event });
+      }),
+    );
+    timer = setTimeout(() => {
+      dispose();
+      reject(new Error("page.waitForEvent timed out"));
+    }, timeout);
+  });
+  return { promise, dispose };
 }
 
 async function setDownloadBehavior(downloadDir) {

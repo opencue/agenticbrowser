@@ -231,6 +231,7 @@ function buildWaitForFunctionExpression(pageFunction, arg) {
 
 function urlMatches(current, matcher) {
   if (matcher instanceof RegExp) {
+    matcher.lastIndex = 0;
     return matcher.test(current);
   }
   if (typeof matcher === "function") {
