@@ -176,6 +176,35 @@ test("createTab tracks and activates the new tab in the space", async () => {
   });
 });
 
+for (const removeOriginal of [false, true]) {
+  test(`createTab ${removeOriginal ? "does not reassign a tab after its space is removed" : "keeps the originating space when selection changes"}`, async () => {
+    await withBridge(async ({ ego, registry, hostConnection }) => {
+      const original = await selectFreshSpace(ego);
+      const other = await ego.createTaskSpace("other");
+      let resolveCreate;
+      hostConnection.request = () =>
+        new Promise((resolve) => {
+          resolveCreate = resolve;
+        });
+
+      const pending = ego.createTab("https://example.com");
+      if (removeOriginal) registry.remove(original.id);
+      await ego.useTaskSpace(other.id);
+      resolveCreate({ targetId: "delayed-tab" });
+      await pending;
+
+      assert.equal(
+        registry.get(other.id).targetIds.includes("delayed-tab"),
+        false,
+      );
+      if (!removeOriginal) {
+        assert.equal(registry.get(original.id).activeTargetId, "delayed-tab");
+        assert.ok(registry.get(original.id).targetIds.includes("delayed-tab"));
+      }
+    });
+  });
+}
+
 test("sendCDPMessage forwards traffic verbatim for an agent-owned space", async () => {
   await withBridge(async ({ ego, agentConnection }) => {
     await selectFreshSpace(ego);
@@ -292,6 +321,42 @@ test("a raw Target.createTarget through the bridge is tracked into the space", a
     assert.equal(space.activeTargetId, "raw-created-tab");
   });
 });
+
+for (const removeOriginal of [false, true]) {
+  test(`raw Target.createTarget ${removeOriginal ? "does not reassign a tab after its space is removed" : "keeps the originating space and consumes its response"}`, async () => {
+    await withBridge(async ({ ego, registry, agentConnection }) => {
+      const original = await selectFreshSpace(ego);
+      const other = await ego.createTaskSpace("other");
+      ego.sendCDPMessage(
+        '{"id":7,"method":"Target.createTarget","params":{"url":"about:blank"}}',
+      );
+      if (removeOriginal) registry.remove(original.id);
+      await ego.useTaskSpace(other.id);
+      agentConnection.emit('{"id":7,"result":{"targetId":"delayed-tab"}}');
+
+      assert.equal(
+        registry.get(other.id).targetIds.includes("delayed-tab"),
+        false,
+      );
+      if (!removeOriginal) {
+        assert.equal(registry.get(original.id).activeTargetId, "delayed-tab");
+        assert.ok(registry.get(original.id).targetIds.includes("delayed-tab"));
+      }
+      agentConnection.emit(
+        '{"id":7,"result":{"targetId":"duplicate-response"}}',
+      );
+      assert.equal(
+        registry.get(other.id).targetIds.includes("duplicate-response"),
+        false,
+      );
+      assert.equal(
+        registry.get(original.id)?.targetIds.includes("duplicate-response") ??
+          false,
+        false,
+      );
+    });
+  });
+}
 
 test("a raw Target.activateTarget updates the active tab", async () => {
   await withBridge(async ({ ego, registry }) => {
