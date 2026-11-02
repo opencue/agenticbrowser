@@ -14,7 +14,7 @@
  * Requires: npm run build (to produce dist/ output).
  */
 
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
@@ -103,51 +103,62 @@ function walk(node, visitors) {
 }
 
 /* ── mutation candidate collection ── */
-function collectMutations(source, focusFunctions) {
+export function collectMutations(source, focusFunctions) {
   let ast;
+  const tokens = [];
   try {
     ast = acorn.parse(source, {
       ecmaVersion: 2022,
       sourceType: "module",
       locations: true,
+      onToken: tokens,
     });
   } catch {
     return [];
   }
 
   const mutations = [];
+  const focusRanges = collectFocusRanges(ast, focusFunctions);
+  const inFocus = (offset) =>
+    !focusRanges ||
+    focusRanges.some(({ start, end }) => start <= offset && offset < end);
+
+  function collectOperatorMutations(node) {
+    const op = node.operator;
+    const operator = tokens.find(
+      (token) =>
+        token.start >= node.left.end &&
+        token.end <= node.right.start &&
+        token.value === op,
+    );
+    // The operator, not the expression start, has to be in focus: the left
+    // operand can be a focus function itself.
+    if (!operator || !inFocus(operator.start)) return;
+    const original = source.slice(node.start, node.end);
+    const addMutation = (type, replacement) => {
+      mutations.push({
+        type: `${type}:${op}→${replacement}`,
+        start: node.start,
+        end: node.end,
+        original,
+        mutated:
+          source.slice(node.start, operator.start) +
+          replacement +
+          source.slice(operator.end, node.end),
+        line: node.loc?.start?.line,
+      });
+    };
+    if (BINARY_FLIPS[op]) addMutation("binary", BINARY_FLIPS[op]);
+    if (ARITHMETIC_FLIPS[op] && !isStringContext(source, node)) {
+      addMutation("arith", ARITHMETIC_FLIPS[op]);
+    }
+  }
 
   walk(ast, {
-    BinaryExpression(node) {
-      if (!inFocus(source, node.start, focusFunctions)) return;
-      const op = node.operator;
-      if (BINARY_FLIPS[op]) {
-        const original = source.slice(node.start, node.end);
-        const mutated = original.replace(op, BINARY_FLIPS[op]);
-        mutations.push({
-          type: `binary:${op}→${BINARY_FLIPS[op]}`,
-          start: node.start,
-          end: node.end,
-          original,
-          mutated,
-          line: node.loc?.start?.line,
-        });
-      }
-      if (ARITHMETIC_FLIPS[op] && !isStringContext(source, node)) {
-        const original = source.slice(node.start, node.end);
-        const mutated = original.replace(op, ARITHMETIC_FLIPS[op]);
-        mutations.push({
-          type: `arith:${op}→${ARITHMETIC_FLIPS[op]}`,
-          start: node.start,
-          end: node.end,
-          original,
-          mutated,
-          line: node.loc?.start?.line,
-        });
-      }
-    },
+    BinaryExpression: collectOperatorMutations,
+    LogicalExpression: collectOperatorMutations,
     ReturnStatement(node) {
-      if (!inFocus(source, node.start, focusFunctions)) return;
+      if (!inFocus(node.start)) return;
       if (!node.argument) return;
       const argSrc = source
         .slice(node.argument.start, node.argument.end)
@@ -167,7 +178,7 @@ function collectMutations(source, focusFunctions) {
       }
     },
     UnaryExpression(node) {
-      if (!inFocus(source, node.start, focusFunctions)) return;
+      if (!inFocus(node.start)) return;
       if (node.operator === "!" && node.argument.type === "Identifier") {
         mutations.push({
           type: "negate:!x→x",
@@ -184,23 +195,29 @@ function collectMutations(source, focusFunctions) {
   return deduplicateMutations(mutations);
 }
 
-function inFocus(source, offset, focusFunctions) {
-  if (!focusFunctions || focusFunctions.length === 0) return true;
-  // Check if the offset is inside a function whose name is in the focus list.
-  // Simple heuristic: scan backward from offset for a function declaration/export
-  // containing one of the focus names.
-  const before = source.slice(Math.max(0, offset - 2000), offset);
-  for (const name of focusFunctions) {
-    // Match both `function name(` and `async function name(` and `export function name(`
-    const pattern = new RegExp(
-      `(?:export\\s+)?(?:async\\s+)?function\\s+${name}\\s*\\(`,
-    );
-    if (pattern.test(before)) return true;
-    // Also match arrow functions: `const name = ... =>`
-    const arrowPattern = new RegExp(`(?:const|let|var)\\s+${name}\\s*=`);
-    if (arrowPattern.test(before)) return true;
-  }
-  return false;
+function collectFocusRanges(ast, focusFunctions) {
+  if (!focusFunctions || focusFunctions.length === 0) return null;
+  const names = new Set(focusFunctions);
+  const ranges = [];
+  const namedFunction = (node) => {
+    if (node.id && names.has(node.id.name)) ranges.push(node);
+  };
+  walk(ast, {
+    FunctionDeclaration: namedFunction,
+    FunctionExpression: namedFunction,
+    VariableDeclarator(node) {
+      if (
+        node.id.type === "Identifier" &&
+        names.has(node.id.name) &&
+        ["ArrowFunctionExpression", "FunctionExpression"].includes(
+          node.init?.type,
+        )
+      ) {
+        ranges.push(node.init);
+      }
+    },
+  });
+  return ranges;
 }
 
 function isStringContext(source, node) {
@@ -394,4 +411,11 @@ function main() {
   }
 }
 
-main();
+// Run only as a script, including through a symlink, not when imported.
+if (
+  process.argv[1] &&
+  existsSync(process.argv[1]) &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))
+) {
+  main();
+}
