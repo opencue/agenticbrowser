@@ -169,6 +169,30 @@ test("waitForURL predicates receive URL objects and wait for load by default", a
   );
 });
 
+test("waitForURL can reuse global and sticky regular expressions", async () => {
+  let t = 0;
+  const restore = setOverrides({
+    cdpOverride: async (method, params) => {
+      assert.equal(method, "Runtime.evaluate");
+      assert.equal(params.expression, "location.href");
+      return { result: { value: "https://example.com/target" } };
+    },
+    now: () => t,
+    sleep: async (ms) => {
+      t += ms;
+    },
+  });
+  try {
+    for (const matcher of [/target/g, /https:\/\/example\.com\/target/y]) {
+      const options = { timeout: 20, waitUntil: "commit" };
+      assert.equal(await waitForURL(matcher, options), true);
+      assert.equal(await waitForURL(matcher, options), true);
+    }
+  } finally {
+    restore();
+  }
+});
+
 test("waitForURL waitUntil commit returns without waiting for load", async () => {
   const calls = [];
   const restore = setOverrides({

@@ -1,4 +1,4 @@
-import { cdp } from "../cdp-eval.js";
+import { cdp, runtimeValue } from "../cdp-eval.js";
 import { browserCdp } from "../browser-runtime.js";
 import { withHandle, resolveAndCall } from "./element-ops.js";
 import { waitForSelector } from "./waits.js";
@@ -326,66 +326,44 @@ export async function fill(selector, value, options: FillOptions = {}) {
     const focusSource = clearFirst
       ? "function(){this.focus(); if(this.isContentEditable){const range=document.createRange();range.selectNodeContents(this);const sel=getSelection();sel.removeAllRanges();sel.addRange(range);}else if(typeof this.select==='function') this.select();}"
       : "function(){this.focus();}";
-    await cdp(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration: focusSource,
-        objectId,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-      sessionId,
-    );
-    if (clearFirst) {
-      await cdp(
+    // A function that throws in the page resolves with exceptionDetails rather
+    // than rejecting. Stop at the failed step instead of typing into whatever
+    // element has focus.
+    const callOnTarget = async (functionDeclaration, args?) => {
+      const result = await cdp(
         "Runtime.callFunctionOn",
         {
-          functionDeclaration:
-            "function(){if(this.isContentEditable){this.textContent='';}else if('value' in this){this.value='';}else{throw new Error('fill target is not editable');} this.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));}",
+          functionDeclaration,
           objectId,
+          ...(args && { arguments: args.map((value) => ({ value })) }),
           returnByValue: true,
           awaitPromise: false,
         },
         sessionId,
+      );
+      if (result.exceptionDetails || result.result?.subtype === "error") {
+        runtimeValue(result, functionDeclaration);
+      }
+      return result.result?.value;
+    };
+    await callOnTarget(focusSource);
+    if (clearFirst) {
+      await callOnTarget(
+        "function(){if(this.isContentEditable){this.textContent='';}else if('value' in this){this.value='';}else{throw new Error('fill target is not editable');} this.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward'}));}",
       );
     }
-    const typeResult = await cdp(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration:
-          "function(){ return this instanceof HTMLInputElement ? this.type : ''; }",
-        objectId,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-      sessionId,
+    const inputType = String(
+      (await callOnTarget(
+        "function(){ return this instanceof HTMLInputElement ? this.type : ''; }",
+      )) ?? "",
     );
-    const inputType = String(typeResult?.result?.value ?? "");
     if (COMPOSITE_INPUT_TYPES.has(inputType)) {
-      await cdp(
-        "Runtime.callFunctionOn",
-        {
-          functionDeclaration: "function(v){ this.value = v; }",
-          objectId,
-          arguments: [{ value: String(value) }],
-          returnByValue: true,
-          awaitPromise: false,
-        },
-        sessionId,
-      );
+      await callOnTarget("function(v){ this.value = v; }", [String(value)]);
     } else {
       await cdp("Input.insertText", { text: value }, sessionId);
     }
-    await cdp(
-      "Runtime.callFunctionOn",
-      {
-        functionDeclaration:
-          "function(){this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true}));}",
-        objectId,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-      sessionId,
+    await callOnTarget(
+      "function(){this.dispatchEvent(new Event('input',{bubbles:true})); this.dispatchEvent(new Event('change',{bubbles:true}));}",
     );
   });
 }

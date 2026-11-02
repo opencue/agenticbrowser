@@ -2,7 +2,7 @@ import { parseRef, RefMap } from "./ref-map.js";
 
 export const browserRefMap = new RefMap();
 
-let ensuring = false;
+let ensuring: Promise<unknown> | null = null;
 let snapshotImpl: (() => Promise<unknown>) | null = null;
 
 export function registerSnapshotForRefRefresh(fn: () => Promise<unknown>) {
@@ -10,15 +10,18 @@ export function registerSnapshotForRefRefresh(fn: () => Promise<unknown>) {
 }
 
 export async function ensureRefMapForRef(selectorOrRef: unknown) {
-  if (ensuring) return;
   if (typeof selectorOrRef !== "string") return;
   if (!parseRef(selectorOrRef)) return;
+  if (ensuring) {
+    await ensuring;
+    return;
+  }
   if (browserRefMap.map.size > 0) return;
   if (!snapshotImpl) return;
-  ensuring = true;
+  ensuring = Promise.resolve().then(snapshotImpl);
   try {
-    await snapshotImpl();
+    await ensuring;
   } finally {
-    ensuring = false;
+    ensuring = null;
   }
 }

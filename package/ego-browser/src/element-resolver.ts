@@ -1021,17 +1021,24 @@ function buildSelectorCenterJs(selector) {
 }
 
 function parseLocator(input) {
-  let value = String(input || "").trim();
-  let nth: number | undefined;
-  const nthMatch = /^internal:nth=(\d+);([\s\S]+)$/.exec(value);
-  if (nthMatch) {
-    nth = Number(nthMatch[1]);
-    value = nthMatch[2];
+  const raw = String(input || "").trim();
+  let value = raw;
+  const selections: Array<number | "last"> = [];
+  let selectionMatch;
+  while (
+    (selectionMatch = /^internal:(?:nth=(\d+)|last);([\s\S]+)$/.exec(value))
+  ) {
+    selections.push(
+      selectionMatch[1] === undefined ? "last" : Number(selectionMatch[1]),
+    );
+    value = selectionMatch[2];
   }
-  const lastMatch = /^internal:last;([\s\S]+)$/.exec(value);
-  if (lastMatch) {
-    nth = "last" as any;
-    value = lastMatch[1];
+  // Every selection leaves at most one match. Outer first()/last() calls
+  // preserve the innermost selection, including the AX path for role locators.
+  // Any other outer nth() is empty; retain the full query to express that case.
+  const nth = selections.at(-1);
+  if (selections.slice(0, -1).some((index) => index !== "last" && index > 0)) {
+    return { kind: "query", selector: raw, raw, nth: undefined };
   }
   if (
     value.startsWith("internal:scope:") ||

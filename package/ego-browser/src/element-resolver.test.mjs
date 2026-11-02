@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 
 import {
   resolveElementCenter,
   resolveElementObjectId,
+  queryRoleLocatorBackendNodeIds,
   ElementResolutionError,
 } from "../dist/src/element-resolver.js";
 import { RefMap } from "../dist/src/ref-map.js";
@@ -566,6 +568,119 @@ test("internal nth role locator resolves the requested AX match", async () => {
     'internal:nth=1;loc=role:button[name="Download"]',
   );
   assert.deepEqual(point, { x: 30, y: 40, sessionId: undefined });
+});
+
+function nestedSelectionCdp() {
+  const elements = [0, 1, 2].map((index) => ({
+    objectId: `element-${index}`,
+    tagName: "DIV",
+    innerText: "House",
+    getAttribute: (name) => (name === "role" ? "option" : null),
+    getBoundingClientRect: () => ({
+      x: index * 20,
+      y: 10,
+      width: 10,
+      height: 20,
+    }),
+  }));
+  return new FakeCDP(async (method, params) => {
+    assert.equal(method, "Runtime.evaluate");
+    try {
+      const value = runInNewContext(params.expression, {
+        document: {
+          querySelectorAll(selector) {
+            if (
+              selector !== ".item" &&
+              selector !==
+                "button, a[href], input, textarea, select, img[alt], h1, h2, h3, h4, h5, h6, [role]"
+            ) {
+              throw new SyntaxError(`Invalid CSS: ${selector}`);
+            }
+            return elements;
+          },
+        },
+        HTMLImageElement: class {},
+        HTMLInputElement: class {},
+      });
+      return {
+        result: params.returnByValue
+          ? { value }
+          : { objectId: value?.objectId },
+      };
+    } catch (error) {
+      return { exceptionDetails: { text: error.message } };
+    }
+  });
+}
+
+test("nested nth and last locators preserve the inner selected element", async () => {
+  const cases = [
+    ["internal:nth=0;internal:nth=1;loc=css:.item", 1],
+    ["internal:last;internal:nth=1;loc=css:.item", 1],
+    ["internal:nth=0;internal:last;loc=css:.item", 2],
+    ["internal:last;internal:last;loc=css:.item", 2],
+  ];
+  for (const [selector, index] of cases) {
+    const cdp = nestedSelectionCdp();
+    assert.deepEqual(
+      await resolveElementObjectId(cdp, undefined, new RefMap(), selector),
+      { objectId: `element-${index}`, sessionId: undefined },
+      selector,
+    );
+    assert.deepEqual(
+      await resolveElementCenter(cdp, undefined, new RefMap(), selector),
+      { x: index * 20 + 5, y: 20, sessionId: undefined },
+      selector,
+    );
+  }
+});
+
+test("nested nth role locators retain AX matching for reads and collections", async () => {
+  const cdp = new FakeCDP(async (method, params) => {
+    if (method === "Accessibility.getFullAXTree") {
+      return {
+        nodes: [100, 200].map((backendDOMNodeId) => ({
+          role: { value: "option" },
+          name: { value: "House" },
+          backendDOMNodeId,
+        })),
+      };
+    }
+    assert.equal(method, "DOM.resolveNode");
+    assert.equal(params.backendNodeId, 200);
+    return { object: { objectId: "second-option" } };
+  });
+  const selector =
+    'internal:nth=0;internal:nth=1;loc=role:option[name="House"]';
+  assert.deepEqual(
+    await queryRoleLocatorBackendNodeIds(cdp, undefined, selector),
+    [200],
+  );
+  assert.deepEqual(
+    await resolveElementObjectId(cdp, undefined, new RefMap(), selector),
+    { objectId: "second-option", sessionId: undefined },
+  );
+});
+
+test("nested nth locators keep missing inner and outer selections transient", async () => {
+  for (const selector of [
+    "internal:nth=1;internal:nth=0;loc=css:.item",
+    "internal:nth=1;internal:last;loc=css:.item",
+    'internal:nth=1;internal:last;loc=role:option[name="House"]',
+    "internal:nth=0;internal:nth=7;loc=css:.item",
+    "internal:last;internal:nth=7;loc=css:.item",
+  ]) {
+    for (const resolve of [resolveElementObjectId, resolveElementCenter]) {
+      await assert.rejects(
+        () => resolve(nestedSelectionCdp(), undefined, new RefMap(), selector),
+        (error) => {
+          assert.ok(error instanceof ElementResolutionError);
+          assert.equal(error.kind, "transient", selector);
+          return true;
+        },
+      );
+    }
+  }
 });
 
 test("text locator resolves through browser-side text matching", async () => {
