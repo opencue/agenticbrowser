@@ -163,7 +163,10 @@ type TaskExecutionOptions = {
   /** Returns true / { ok: true, ... } when work succeeded; false / { ok: false, ... } to retry. */
   verify: (
     context: TaskExecutionContext & { result: any },
-  ) => Promise<boolean | { ok: boolean; [key: string]: any }> | boolean | { ok: boolean; [key: string]: any };
+  ) =>
+    | Promise<boolean | { ok: boolean; [key: string]: any }>
+    | boolean
+    | { ok: boolean; [key: string]: any };
   /** Retry policy. max 0–5 attempts (only for read-only), delay in ms, on which failure kinds. */
   retries?: {
     max?: number;
@@ -2102,9 +2105,9 @@ const FACADE_HELP: Record<string, string> = {
   "taskSpaces.claim":
     "taskSpaces.claim(nameOrId) => Promise<{taskId,id,name,...}>: transfer ownership of a user-owned space to the agent and select it. Prefer takeOver when an explicit user confirmation overlay is appropriate.",
   "taskSpaces.complete":
-    "taskSpaces.complete(nameOrId, { keep }) => Promise<{done,visible?,reason?,skipped?}>: complete (keep:true) or close (keep:false) the task space. User-owned spaces return { done:false, skipped:\"user-owned\" }.",
+    'taskSpaces.complete(nameOrId, { keep }) => Promise<{done,visible?,reason?,skipped?}>: complete (keep:true) or close (keep:false) the task space. User-owned spaces return { done:false, skipped:"user-owned" }.',
   "taskSpaces.handOff":
-    "taskSpaces.handOff(nameOrId?) => Promise<{done,visible?,reason?,skipped?}>: hand the space back to the user and hide the agent overlay without taking focus. User-owned spaces return { done:false, skipped:\"user-owned\" }.",
+    'taskSpaces.handOff(nameOrId?) => Promise<{done,visible?,reason?,skipped?}>: hand the space back to the user and hide the agent overlay without taking focus. User-owned spaces return { done:false, skipped:"user-owned" }.',
   "taskSpaces.waitForAgentControl":
     "taskSpaces.waitForAgentControl(nameOrId, options?) => Promise<void>: block until the agent regains control of the space. options: interval (poll seconds, default 20), timeout (max wait seconds, default 600). Read-only — does not call takeOver or claim.",
   "taskSpaces.isHardStopError":

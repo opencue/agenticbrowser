@@ -3179,9 +3179,7 @@ test("bringToFrontTaskSpace normalises the return shape when native result lacks
     {
       async listTaskSpaces() {
         return {
-          taskSpaces: [
-            { taskId: "t", id: 7, name: "t", ownership: "agent" },
-          ],
+          taskSpaces: [{ taskId: "t", id: 7, name: "t", ownership: "agent" }],
         };
       },
       // Return a raw native result without a `done` field and with a `reason`.
@@ -3191,7 +3189,11 @@ test("bringToFrontTaskSpace normalises the return shape when native result lacks
     },
     async () => {
       const result = await bringToFrontTaskSpace("t");
-      assert.equal(result.done, true, "done must always be true after normalisation");
+      assert.equal(
+        result.done,
+        true,
+        "done must always be true after normalisation",
+      );
       assert.equal(result.visible, true);
       assert.equal(result.reason, "headless");
     },
@@ -3213,7 +3215,10 @@ test("runTaskSpace rethrows ordinary errors without swallowing them (finding 17 
     },
     async () => {
       await assert.rejects(
-        () => runTaskSpace("t", async () => { throw boom; }),
+        () =>
+          runTaskSpace("t", async () => {
+            throw boom;
+          }),
         (err) => err === boom,
         "runTaskSpace must rethrow the original error unchanged",
       );
