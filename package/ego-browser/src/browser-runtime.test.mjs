@@ -771,16 +771,20 @@ test("ensureSession lazily creates the first background target when a space is e
   }
 });
 
-test("ensureSession skips re-attach when targetId matches existing session", async () => {
+test("ensureSession keeps the session for the same target when TTL has expired", async () => {
   const calls = installAutoEgo();
   try {
     state.sessionId = "existing";
     state.sessionTargetId = "tab-1"; // matches the default tab
     state.sessionAt = Date.now() - 3000; // force re-entry past TTL
 
-    await ensureSession();
-    const attach = calls.find((c) => c.method === "Target.attachToTarget");
-    assert.equal(attach, undefined, "skips re-attach when target unchanged");
+    const result = await ensureSession();
+    // A re-attach would mint a new session id and orphan the old one.
+    assert.equal(
+      calls.find((c) => c.method === "Target.attachToTarget"),
+      undefined,
+    );
+    assert.equal(result, "existing");
   } finally {
     cleanup();
   }
@@ -953,4 +957,81 @@ test("browserSnapshotRefsToRefMap skips null, non-object, and missing backendNod
   ]);
   assert.equal(refMap._data.size, 1, "only the valid ref is added");
   assert.ok(refMap._data.has("7"));
+});
+
+/* ------------------------------------------------------------------ */
+/*  invalidateSession resets networkDomainEnabled (finding [1])       */
+/* ------------------------------------------------------------------ */
+
+test("invalidateSession resets state.networkDomainEnabled to false", () => {
+  state.sessionId = "sess-net";
+  state.networkDomainEnabled = true;
+  invalidateSession();
+  assert.equal(
+    state.networkDomainEnabled,
+    false,
+    "networkDomainEnabled reset so the next session re-enables the Network domain",
+  );
+});
+
+/* ------------------------------------------------------------------ */
+/*  ensureSession throws on missing sessionId (finding [3])           */
+/* ------------------------------------------------------------------ */
+
+test("ensureSession throws when Target.attachToTarget returns no sessionId", async () => {
+  globalThis.ego = {
+    async listTabs() {
+      return { tabs: [{ targetId: "tab-bad", active: true }] };
+    },
+    sendCDPMessage(payload) {
+      const parsed = JSON.parse(payload);
+      setTimeout(() => {
+        if (globalThis.ego?.onCDPMessage) {
+          // Return a result with no sessionId to simulate a malformed response.
+          globalThis.ego.onCDPMessage(
+            JSON.stringify({ id: parsed.id, result: {} }),
+          );
+        }
+      }, 0);
+    },
+  };
+  try {
+    await assert.rejects(
+      () => ensureSession(),
+      /Target\.attachToTarget returned no sessionId/,
+    );
+  } finally {
+    cleanup();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  Ring-buffer event ordering (finding [88])                         */
+/* ------------------------------------------------------------------ */
+
+test("drainBrowserEvents returns events in chronological order after overflow", async () => {
+  const calls = installManualEgo();
+  try {
+    const p = browserCdp("Target.getVersion", {}, undefined, 5000);
+    globalThis.ego.onCDPMessage(
+      JSON.stringify({ id: calls[0].id, result: {} }),
+    );
+    await p;
+
+    // Fire exactly MAX_BUFFERED_EVENTS + 3 events so the ring wraps.
+    for (let i = 0; i < 10003; i++) {
+      fireEvent(`ring.${i}`, {});
+    }
+    const evts = drainBrowserEvents();
+    assert.equal(evts.length, 10000, "capped at 10000");
+    // The first 3 events (ring.0..ring.2) are overwritten; oldest is ring.3.
+    assert.equal(evts[0].method, "ring.3", "oldest surviving event is ring.3");
+    assert.equal(
+      evts[evts.length - 1].method,
+      "ring.10002",
+      "newest event is ring.10002",
+    );
+  } finally {
+    cleanup();
+  }
 });

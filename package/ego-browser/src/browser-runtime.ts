@@ -22,7 +22,9 @@ let nextMessageId = 1;
 let nextTraceSeq = 1;
 const pending = new Map();
 const events = [];
+let eventsHead = 0; // ring-buffer head index; first valid item when buffer is full
 const traceEntries = [];
+let traceEntriesHead = 0; // ring-buffer head index for traceEntries
 const eventWaiters = [];
 const eventSubscribers = new Set<BrowserEventSubscriber>();
 const pageEnabledSessions = new Set();
@@ -213,18 +215,26 @@ export async function ensureSession() {
         throw new Error("no active tab to attach session");
       }
       const targetId = active.targetId;
+      // Same target on TTL expiry keeps its session: every attach mints a new
+      // session id (dropping domain state and session-scoped subscribers) and
+      // the old one is never detached. A dead session is caught by
+      // browserCdp's "Session not found" retry, which invalidates and re-attaches.
       if (targetId !== state.sessionTargetId || !state.sessionId) {
         const attached = await rawCdp(
           "Target.attachToTarget",
           { targetId, flatten: true },
           undefined,
         );
-        state.sessionId = attached.result?.sessionId || attached.sessionId;
+        const sid = attached.result?.sessionId;
+        if (!sid) {
+          throw new Error("Target.attachToTarget returned no sessionId");
+        }
+        state.sessionId = sid;
         state.sessionTargetId = targetId;
         // Propagate a per-target crash mark to the new session so a re-attach
         // after TTL expiry or invalidateSession() does not bypass the guard.
-        if (state.sessionId && crashedTargets.has(targetId)) {
-          crashedSessions.set(state.sessionId, crashedTargets.get(targetId)!);
+        if (crashedTargets.has(targetId)) {
+          crashedSessions.set(sid, crashedTargets.get(targetId)!);
         }
       }
       await enablePageEvents(state.sessionId);
@@ -247,6 +257,8 @@ export function invalidateSession() {
   state.sessionId = null;
   state.sessionTargetId = null;
   state.sessionAt = 0;
+  // Reset so the next session's acquireNetworkEvents() re-enables the domain.
+  state.networkDomainEnabled = false;
 }
 
 export function setPreferredTarget(targetId) {
@@ -276,12 +288,28 @@ export function clearCrashedTargets(): void {
 }
 
 export function drainBrowserEvents() {
-  const out = events.splice(0, events.length);
+  let out;
+  if (events.length < MAX_BUFFERED_EVENTS) {
+    out = events.splice(0);
+  } else {
+    out = events.slice(eventsHead).concat(events.slice(0, eventsHead));
+    events.length = 0;
+  }
+  eventsHead = 0;
   return out;
 }
 
 export function drainBrowserTrace() {
-  const out = traceEntries.splice(0, traceEntries.length);
+  let out;
+  if (traceEntries.length < MAX_TRACE_ENTRIES) {
+    out = traceEntries.splice(0);
+  } else {
+    out = traceEntries
+      .slice(traceEntriesHead)
+      .concat(traceEntries.slice(0, traceEntriesHead));
+    traceEntries.length = 0;
+  }
+  traceEntriesHead = 0;
   return out;
 }
 
@@ -448,9 +476,11 @@ function handleMessage(message) {
     subscriber.listener(data);
   }
   if (!(deliveredToSubscriber && data.method === "Page.screencastFrame")) {
-    events.push(data);
-    if (events.length > MAX_BUFFERED_EVENTS) {
-      events.splice(0, events.length - MAX_BUFFERED_EVENTS);
+    if (events.length < MAX_BUFFERED_EVENTS) {
+      events.push(data);
+    } else {
+      events[eventsHead] = data;
+      eventsHead = (eventsHead + 1) % MAX_BUFFERED_EVENTS;
     }
   }
   recordTraceEntry({
@@ -477,13 +507,12 @@ function handleMessage(message) {
 }
 
 function recordTraceEntry(entry) {
-  traceEntries.push({
-    seq: nextTraceSeq++,
-    at: state.now(),
-    ...entry,
-  });
-  if (traceEntries.length > MAX_TRACE_ENTRIES) {
-    traceEntries.splice(0, traceEntries.length - MAX_TRACE_ENTRIES);
+  const traceEntry = { seq: nextTraceSeq++, at: state.now(), ...entry };
+  if (traceEntries.length < MAX_TRACE_ENTRIES) {
+    traceEntries.push(traceEntry);
+  } else {
+    traceEntries[traceEntriesHead] = traceEntry;
+    traceEntriesHead = (traceEntriesHead + 1) % MAX_TRACE_ENTRIES;
   }
 }
 
