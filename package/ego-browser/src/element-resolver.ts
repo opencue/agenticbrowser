@@ -1,6 +1,32 @@
 import { parseRef } from "./ref-map.js";
 import { queryAllExpression } from "./locator-query.js";
 
+// ---------------------------------------------------------------------------
+// AX tree cache
+// Accessibility.getFullAXTree is expensive (50–200 ms on complex SPAs).  A
+// typical multi-action agent step resolves several role: locators against the
+// same stable DOM, so caching the last response for a short TTL collapses
+// those round-trips into one.
+//
+// The cache is keyed per cdp object (WeakMap) so tests that create separate
+// FakeCDP instances never share state.  Within one cdp, results are keyed by
+// "<sessionId>:<frameId>" and expire after AX_TREE_TTL_MS milliseconds.
+// ---------------------------------------------------------------------------
+const AX_TREE_TTL_MS = 500;
+const axTreePerCdp = new WeakMap<
+  object,
+  Map<string, { nodes: any[]; expires: number }>
+>();
+
+function getAxTreeCache(cdp: object) {
+  let cache = axTreePerCdp.get(cdp);
+  if (!cache) {
+    cache = new Map();
+    axTreePerCdp.set(cdp, cache);
+  }
+  return cache;
+}
+
 export class ElementResolutionError extends Error {
   kind: "transient" | "permanent";
   constructor(message: string, kind: "transient" | "permanent") {
@@ -41,6 +67,24 @@ export async function queryRoleLocatorBackendNodeIds(
 function exceptionText(result: any) {
   const d = result?.exceptionDetails;
   return d?.exception?.description || d?.text || "evaluation error";
+}
+
+/**
+ * Returns true only for known stale-node CDP errors that should trigger the
+ * role/name fallback.  Any other error (transport timeout, protocol mismatch,
+ * bridge disconnection) is re-thrown so it doesn't silently resolve a
+ * different element with the same accessible label.
+ *
+ * "Could not compute box model" is included because DOM.getBoxModel throws
+ * with this message when the node has been removed from the document (detached
+ * after a React/Vue re-render).  Nodes that merely lack layout (display:none)
+ * return an empty-quad model rather than throwing, so this catch is safe.
+ */
+function isStaleNodeError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  return /No node with given id|Could not find node with given BackendNodeId|Could not compute box model/i.test(
+    message,
+  );
 }
 
 function matchCountKind(message: string): "transient" | "permanent" {
@@ -99,7 +143,13 @@ export async function resolveElementCenter(
           // which could silently target a different node with the same label.
           throw error;
         }
-        // The backend node can become stale after DOM updates; fall back to role/name lookup below.
+        if (!isStaleNodeError(error)) {
+          // A transport error, protocol mismatch, or other unexpected failure.
+          // Re-throw instead of falling through to role/name lookup, which could
+          // silently resolve a different element with the same accessible label.
+          throw error;
+        }
+        // The backend node is stale after DOM updates; fall back to role/name lookup below.
       }
     }
     const backendNodeId = await findBackendNodeIdByRoleName(
@@ -181,8 +231,11 @@ export async function resolveElementObjectId(
         if (objectId) {
           return { objectId, sessionId: effectiveSessionId };
         }
-      } catch {
-        // The backend node can become stale after DOM updates; fall back to role/name lookup below.
+      } catch (error) {
+        if (!isStaleNodeError(error)) {
+          throw error;
+        }
+        // The backend node is stale after DOM updates; fall back to role/name lookup below.
       }
     }
     const backendNodeId = await findBackendNodeIdByRoleName(
@@ -202,9 +255,13 @@ export async function resolveElementObjectId(
     );
     const objectId = result.object?.objectId;
     if (!objectId) {
+      // The node was found in the AX tree but DOM.resolveNode returned no handle.
+      // This is a transient condition: the node is mid-detach during a concurrent
+      // re-render.  Classifying it as permanent would block retries in readElement
+      // and waitForSelector, turning a momentary flush into a hard failure.
       throw new ElementResolutionError(
         `No objectId for ref ${refId}`,
-        "permanent",
+        "transient",
       );
     }
     return { objectId, sessionId: effectiveSessionId };
@@ -315,47 +372,36 @@ async function resolveLocatorObjectId(cdp, sessionId, locator) {
     }
     return { objectId, sessionId };
   }
-  const count = await locatorCount(cdp, sessionId, locator);
-  if (count === 0) {
-    throw await locatorResolutionError(
-      cdp,
-      sessionId,
-      locator,
-      `Locator ${locator.raw} matched 0 elements`,
-    );
-  }
-  if (typeof locator.nth === "number" && count <= locator.nth) {
-    throw await locatorResolutionError(
-      cdp,
-      sessionId,
-      locator,
-      `Locator ${locator.raw} matched 0 elements`,
-    );
-  }
-  if (locator.nth === undefined && count > 1) {
-    throw await locatorResolutionError(
-      cdp,
-      sessionId,
-      locator,
-      `Locator ${locator.raw} matched ${count} elements`,
-    );
-  }
+  // Combine count check and element fetch into one atomic JS microtask, avoiding
+  // the TOCTOU window where a DOM mutation between the two separate calls could
+  // make the second evaluate return null for an element that existed at count-time.
   const result = await send(
     cdp,
     "Runtime.evaluate",
     {
-      expression: buildLocatorFindJs(locator),
+      expression: buildLocatorObjectIdJs(locator),
       returnByValue: false,
       awaitPromise: false,
       objectGroup: "ego-browser",
     },
     sessionId,
   );
+  if (result.exceptionDetails) {
+    throw await locatorResolutionError(
+      cdp,
+      sessionId,
+      locator,
+      exceptionText(result),
+    );
+  }
   const objectId = result.result?.objectId;
   if (!objectId) {
-    throw new ElementResolutionError(
+    // DOM may have mutated between JS evaluation and handle resolution.
+    throw await locatorResolutionError(
+      cdp,
+      sessionId,
+      locator,
       `Element not found: ${locator.raw}`,
-      "transient",
     );
   }
   return { objectId, sessionId };
@@ -559,14 +605,25 @@ async function findBackendNodeIdsByRoleName(
     sessionId,
     iframeSessions,
   );
-  const result = await send(
-    cdp,
-    "Accessibility.getFullAXTree",
-    params,
-    effectiveSessionId,
-  );
+  const cache = getAxTreeCache(cdp);
+  const cacheKey = `${effectiveSessionId ?? ""}:${frameId ?? ""}`;
+  const now = Date.now();
+  const cached = cache.get(cacheKey);
+  let nodes: any[];
+  if (cached && cached.expires > now) {
+    nodes = cached.nodes;
+  } else {
+    const result = await send(
+      cdp,
+      "Accessibility.getFullAXTree",
+      params,
+      effectiveSessionId,
+    );
+    nodes = result.nodes || [];
+    cache.set(cacheKey, { nodes, expires: now + AX_TREE_TTL_MS });
+  }
   const matches = [];
-  for (const node of result.nodes || []) {
+  for (const node of nodes) {
     if (node.ignored) {
       continue;
     }
@@ -717,6 +774,42 @@ function buildLocatorCenterJs(locator) {
             const rect = el.getBoundingClientRect();
             return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
         })()`;
+}
+
+/**
+ * Build a JS expression that atomically checks count and returns the element
+ * handle.  The expression either returns the element (for a returnByValue:false
+ * CDP evaluate to capture as an objectId) or throws with an error message that
+ * encodes the match count, which the exceptionDetails path in
+ * resolveLocatorObjectId then turns into the right ElementResolutionError kind.
+ *
+ * Semantics mirror the original two-call approach (locatorCount then fetch):
+ *   - nth === undefined : require exactly one match (strict uniqueness).
+ *   - nth !== undefined : require at least (nth+1) matches; return elements[nth].
+ *     Multiple-match ambiguity is NOT an error here — the caller explicitly
+ *     asked for the nth item (e.g. via internal:nth=0; from waitForSelector or
+ *     an explicit Playwright nth() locator).
+ */
+function buildLocatorObjectIdJs(locator) {
+  if (locator.nth !== undefined) {
+    // Pick elements[nth].  Throw with "matched 0 elements" (→ transient) when the
+    // index is out of bounds — mirrors the original `count <= nth` check.
+    const idx =
+      locator.nth === "last"
+        ? "elements.length - 1"
+        : JSON.stringify(locator.nth);
+    return `(() => {
+  const elements = Array.from(${buildLocatorElementsJs(locator)});
+  const el = elements[${idx}] || null;
+  if (!el) throw new Error(${JSON.stringify(`Locator ${locator.raw} matched 0 elements`)});
+  return el;
+})()`;
+  }
+  return `(() => {
+  const elements = Array.from(${buildLocatorElementsJs(locator)});
+  if (elements.length !== 1) throw new Error(${JSON.stringify(`Locator ${locator.raw} matched`)} + ' ' + elements.length + ' elements');
+  return elements[0];
+})()`;
 }
 
 function buildLocatorElementsJs(locator) {

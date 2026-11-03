@@ -391,7 +391,15 @@ export async function pressSequentially(
     effectiveOptions = textOrOptions || {};
   }
   for (const char of String(text)) {
-    await press(char);
+    // Supplementary-plane codepoints (emoji, etc.) have .length === 2 in
+    // JavaScript's UTF-16 strings.  keyDefinition() rejects key.length !== 1
+    // with text: '', so CDP Input.dispatchKeyEvent carries no text and the
+    // character is silently dropped.  Route them through Input.insertText.
+    if (char.length > 1) {
+      await insertText(char);
+    } else {
+      await press(char);
+    }
     const delay = Number(effectiveOptions.delay ?? 0);
     if (delay > 0) {
       await state.sleep(delay);
