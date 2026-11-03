@@ -97,6 +97,13 @@ export function decodeLine(line: string): RpcMessage {
 }
 
 /**
+ * Maximum allowed length of a single buffered RPC line (16 MiB).
+ * A well-formed CDP/RPC line is never this large; exceeding it means a
+ * malformed or adversarial sender. Exported so tests can reference the limit.
+ */
+export const MAX_LINE_BYTES = 16 * 1024 * 1024;
+
+/**
  * Incremental buffer that splits socket chunks into complete lines.
  * Empty lines are skipped.
  */
@@ -104,7 +111,15 @@ export class LineBuffer {
   private buffer = "";
 
   push(data: string | Buffer): string[] {
-    this.buffer += typeof data === "string" ? data : data.toString("utf8");
+    const incoming =
+      typeof data === "string" ? data : data.toString("utf8");
+    if (this.buffer.length + incoming.length > MAX_LINE_BYTES) {
+      this.buffer = "";
+      throw new Error(
+        `LineBuffer: incoming line exceeded ${MAX_LINE_BYTES} bytes; connection dropped`,
+      );
+    }
+    this.buffer += incoming;
     const lines: string[] = [];
     let idx: number;
     while ((idx = this.buffer.indexOf("\n")) !== -1) {

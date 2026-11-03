@@ -21,15 +21,29 @@ export type HostConnection = {
   close(): void;
 };
 
+/** Default timeout for a single RPC request (30 s). */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+export type ConnectHostOptions = {
+  /** Per-request timeout in ms. A hung daemon never blocks callers forever. */
+  requestTimeoutMs?: number;
+};
+
 type Pending = {
   resolve: (value: any) => void;
   reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
 };
 
 /**
  * Connect to the host daemon Unix socket and return a request/event API.
  */
-export async function connectHost(socketPath: string): Promise<HostConnection> {
+export async function connectHost(
+  socketPath: string,
+  options?: ConnectHostOptions,
+): Promise<HostConnection> {
+  const requestTimeoutMs =
+    options?.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const socket = await openSocket(socketPath);
   const lineBuf = new LineBuffer();
   let nextId = 1;
@@ -39,6 +53,7 @@ export async function connectHost(socketPath: string): Promise<HostConnection> {
 
   function failAll(err: Error): void {
     for (const [, p] of pending) {
+      clearTimeout(p.timer);
       p.reject(err);
     }
     pending.clear();
@@ -56,6 +71,7 @@ export async function connectHost(socketPath: string): Promise<HostConnection> {
         const p = pending.get(msg.id);
         if (!p) continue;
         pending.delete(msg.id);
+        clearTimeout(p.timer);
         if (msg.error) {
           p.reject(makeEgoError(msg.error.code, msg.error.message));
         } else {
@@ -103,11 +119,23 @@ export async function connectHost(socketPath: string): Promise<HostConnection> {
       }
       const id = nextId++;
       return new Promise((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const timer = setTimeout(() => {
+          if (pending.delete(id)) {
+            reject(
+              makeEgoError(
+                "EGO_TASK_HOST_DISCONNECTED",
+                `host request timed out after ${requestTimeoutMs}ms: ${method}`,
+              ),
+            );
+          }
+        }, requestTimeoutMs);
+        pending.set(id, { resolve, reject, timer });
         try {
           socket.write(encodeRequest({ id, method, params }));
         } catch (err) {
-          pending.delete(id);
+          if (pending.delete(id)) {
+            clearTimeout(timer);
+          }
           reject(err instanceof Error ? err : new Error(String(err)));
         }
       });

@@ -10,6 +10,7 @@ import {
   isRpcResponse,
   isRpcEvent,
   LineBuffer,
+  MAX_LINE_BYTES,
   type RpcRequest,
   type RpcResponse,
   type RpcEvent,
@@ -93,4 +94,27 @@ test("type guards reject wrong shapes", () => {
   assert.equal(isRpcEvent({ id: 1, method: "ping" }), false);
   assert.equal(isRpcResponse({ id: 1, method: "ping" }), false);
   assert.equal(isRpcResponse({ id: 1, result: true }), true);
+});
+
+test("LineBuffer throws when buffered data exceeds MAX_LINE_BYTES", () => {
+  const buf = new LineBuffer();
+  // Push just under the limit, then one more byte to exceed it
+  const almostFull = "x".repeat(MAX_LINE_BYTES - 1);
+  buf.push(almostFull);
+  // A two-byte push now takes us from MAX_LINE_BYTES-1 to MAX_LINE_BYTES+1
+  assert.throws(
+    () => buf.push("ab"),
+    (err: Error) => {
+      assert.match(err.message, /exceeded/i);
+      return true;
+    },
+  );
+  // Buffer must be cleared after the throw so the instance is not poisoned
+  assert.deepEqual(buf.push('{"id":1}\n'), ['{"id":1}']);
+});
+
+test("MAX_LINE_BYTES is a positive integer (16 MiB)", () => {
+  assert.ok(Number.isInteger(MAX_LINE_BYTES));
+  assert.ok(MAX_LINE_BYTES > 0);
+  assert.equal(MAX_LINE_BYTES, 16 * 1024 * 1024);
 });

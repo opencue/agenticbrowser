@@ -166,7 +166,14 @@ export function createEgoRuntime(deps: EgoRuntimeDeps): EgoRuntime {
       );
     }
     const sessionId = await deps.ensureSession();
-    return snapshotPage(deps.getCdp(), sessionId, params);
+    try {
+      return await snapshotPage(deps.getCdp(), sessionId, params);
+    } finally {
+      await deps
+        .getCdp()
+        .send("Target.detachFromTarget", { sessionId })
+        .catch(() => {});
+    }
   }
 
   async function sendCDPMessage(params: {

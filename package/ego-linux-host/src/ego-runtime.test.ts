@@ -129,6 +129,42 @@ test("snapshot works for agent-owned space", async () => {
   assert.equal(result.refs[0]?.backendNodeId, 42);
 });
 
+test("snapshot detaches the CDP session after snapshotPage completes", async () => {
+  const { sm, fakeCdp, runtime } = setup();
+  const space = sm.createAgentSpace("detach-test");
+  sm.use(space.id);
+  await runtime.handle("snapshot", {});
+  const detachCall = fakeCdp.calls.find(
+    ({ method }) => method === "Target.detachFromTarget",
+  );
+  assert.ok(detachCall, "Target.detachFromTarget must be called after snapshot");
+  assert.equal((detachCall?.params as { sessionId?: string })?.sessionId, "sess-1");
+});
+
+test("snapshot detaches the CDP session even when snapshotPage throws", async () => {
+  const sm = new SpaceManager();
+  const fakeCdp = makeFakeCdp();
+  // Override Accessibility.enable to throw so snapshotPage fails early
+  const origSend = fakeCdp.send.bind(fakeCdp);
+  fakeCdp.send = async (method: string, params?: object, sessionId?: string) => {
+    if (method === "Accessibility.enable") throw new Error("AX enable failed");
+    return origSend(method, params, sessionId);
+  };
+  const runtime = createEgoRuntime({
+    spaceManager: sm,
+    getCdp: () => fakeCdp,
+    ensureSession: async () => "sess-throw",
+  });
+  const space = sm.createAgentSpace("detach-on-error");
+  sm.use(space.id);
+  await assert.rejects(() => runtime.handle("snapshot", {}));
+  const detachCall = fakeCdp.calls.find(
+    ({ method }) => method === "Target.detachFromTarget",
+  );
+  assert.ok(detachCall, "Target.detachFromTarget must be called even on failure");
+  assert.equal((detachCall?.params as { sessionId?: string })?.sessionId, "sess-throw");
+});
+
 test("listTabs filters to selected space only", async () => {
   const { sm, fakeCdp, runtime } = setup({
     targets: [
