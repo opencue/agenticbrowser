@@ -58,6 +58,31 @@ describe("desktop focus guard", () => {
     );
   });
 
+  it("passes the observed (thief) window as the second argument to restoreFocus", async () => {
+    let capturedArgs;
+    const guard = createDesktopFocusGuard({
+      browserPid: 4242,
+      getActiveWindow: sequence(
+        { kind: "x11-window", windowId: "11", pid: 1001 },
+        { kind: "x11-window", windowId: "22", pid: 4242 },
+        { kind: "x11-window", windowId: "11", pid: 1001 },
+      ),
+      restoreFocus: async (focus, thief) => {
+        capturedArgs = { focus, thief };
+        return true;
+      },
+      recordEvent: async () => {},
+      sleep: async () => {},
+    });
+
+    await guard.run("create-tab", async () => {});
+
+    assert.deepEqual(capturedArgs, {
+      focus: { kind: "x11-window", windowId: "11", pid: 1001 },
+      thief: { kind: "x11-window", windowId: "22", pid: 4242 },
+    });
+  });
+
   it("does not fight a person who switches to another application", async () => {
     const restored = [];
     const guard = createDesktopFocusGuard({

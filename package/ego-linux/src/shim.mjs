@@ -31,7 +31,7 @@ export async function createEgoShim({ headless = false } = {}) {
   const desktopFocus = createDesktopFocusGuard({
     browserPid: pid,
     getActiveWindow: headless ? async () => null : () => captureDesktopFocus(),
-    restoreFocus: (focus) => restoreDesktopFocus(focus),
+    restoreFocus: (focus, thief) => restoreDesktopFocus(focus, { thief }),
   });
   if (launched) {
     await desktopFocus.restoreAfter("launch-browser", startupFocus);

@@ -66,7 +66,7 @@ export function createDesktopFocusGuard({
 
     let restorationRequested = false;
     try {
-      restorationRequested = (await restoreFocus(previous)) === true;
+      restorationRequested = (await restoreFocus(previous, observed)) === true;
     } catch {
       restorationRequested = false;
     }

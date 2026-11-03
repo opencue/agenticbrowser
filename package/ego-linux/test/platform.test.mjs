@@ -481,6 +481,60 @@ describe("platform: explicit X11 window activation", () => {
     assert.deepEqual(calls, [["ydotool", "key", "alt+tab"]]);
   });
 
+  it("minimizes the thief window directly when a thief X11 window ID is known", async () => {
+    const calls = [];
+    const run = async (command, args) => {
+      calls.push([command, ...args]);
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    assert.equal(
+      await restoreDesktopFocus(
+        { kind: "wayland-history", windowId: null, pid: null },
+        {
+          env: { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":1" },
+          platform: "linux",
+          thief: { kind: "x11-window", windowId: "27263363", pid: 4242 },
+        },
+        { run },
+      ),
+      true,
+    );
+    // xdotool windowminimize is tried first when a thief window ID is available;
+    // ydotool/xdotool alt+tab fallbacks are not reached.
+    assert.deepEqual(calls, [
+      ["xdotool", "windowminimize", "--sync", "27263363"],
+    ]);
+  });
+
+  it("falls back to compositor shortcut when xdotool windowminimize fails", async () => {
+    const calls = [];
+    const run = async (command, args) => {
+      calls.push([command, ...args]);
+      // windowminimize fails; ydotool succeeds
+      if (command === "xdotool" && args[0] === "windowminimize")
+        return { ok: false, stdout: "", stderr: "no window" };
+      return { ok: true, stdout: "", stderr: "" };
+    };
+
+    assert.equal(
+      await restoreDesktopFocus(
+        { kind: "wayland-history", windowId: null, pid: null },
+        {
+          env: { WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":1" },
+          platform: "linux",
+          thief: { kind: "x11-window", windowId: "27263363", pid: 4242 },
+        },
+        { run },
+      ),
+      true,
+    );
+    assert.deepEqual(calls, [
+      ["xdotool", "windowminimize", "--sync", "27263363"],
+      ["ydotool", "key", "alt+tab"],
+    ]);
+  });
+
   it("activates only a visible window owned by the requested browser pid", async () => {
     const calls = [];
     const run = async (_command, args) => {

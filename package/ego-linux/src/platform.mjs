@@ -154,7 +154,7 @@ export async function activateWindowById(
 /** Restore a desktop focus snapshot captured before background work. */
 export async function restoreDesktopFocus(
   focus,
-  { env = process.env, platform = process.platform } = {},
+  { env = process.env, platform = process.platform, thief } = {},
   { run = runCapturedCommand } = {},
 ) {
   if (focus?.kind === "x11-window") {
@@ -169,6 +169,19 @@ export async function restoreDesktopFocus(
     !(env.XDG_SESSION_TYPE === "wayland" || env.WAYLAND_DISPLAY)
   ) {
     return false;
+  }
+
+  // When the thief window has a known X11 window ID, minimize it directly.
+  // This is more reliable than a global alt+tab shortcut: it names the exact
+  // window, works whether or not a ydotool uinput device is available, and
+  // does not depend on compositor focus-follows-pointer ordering.
+  if (thief?.windowId && env.DISPLAY) {
+    const minimize = await run("xdotool", [
+      "windowminimize",
+      "--sync",
+      String(thief.windowId),
+    ]);
+    if (minimize.ok) return true;
   }
 
   // uinput reaches GNOME's global switcher even when the previous application
