@@ -326,41 +326,43 @@ function main() {
     };
     process.once("SIGINT", sigintHandler);
 
-    for (let i = 0; i < mutations.length; i++) {
-      const m = mutations[i];
-      const mutated = applyMutation(source, m);
+    try {
+      for (let i = 0; i < mutations.length; i++) {
+        const m = mutations[i];
+        const mutated = applyMutation(source, m);
 
-      // Backup original
-      writeFileSync(srcPath, mutated, "utf-8");
-      try {
-        const result = runTest(config.test);
-        const status = result.passed ? "SURVIVED" : "KILLED";
+        // Backup original
+        writeFileSync(srcPath, mutated, "utf-8");
+        try {
+          const result = runTest(config.test);
+          const status = result.passed ? "SURVIVED" : "KILLED";
 
-        if (result.passed) {
-          survived++;
-          totalSurvived++;
-        } else {
-          killed++;
-          totalKilled++;
+          if (result.passed) {
+            survived++;
+            totalSurvived++;
+          } else {
+            killed++;
+            totalKilled++;
+          }
+
+          moduleResults.push({ ...m, status });
+
+          if (verbose || status === "SURVIVED") {
+            const marker = status === "KILLED" ? "✗" : "✓";
+            console.log(`  ${marker} L${m.line || "?"} ${m.type} — ${status}`);
+          }
+
+          const pct = Math.round(((i + 1) / mutations.length) * 100);
+          process.stdout.write(`  ${i + 1}/${mutations.length} (${pct}%)\r`);
+        } finally {
+          // Always restore original
+          writeFileSync(srcPath, source, "utf-8");
         }
-
-        moduleResults.push({ ...m, status });
-
-        if (verbose || status === "SURVIVED") {
-          const marker = status === "KILLED" ? "✗" : "✓";
-          console.log(`  ${marker} L${m.line || "?"} ${m.type} — ${status}`);
-        }
-
-        const pct = Math.round(((i + 1) / mutations.length) * 100);
-        process.stdout.write(`  ${i + 1}/${mutations.length} (${pct}%)\r`);
-      } finally {
-        // Always restore original
-        writeFileSync(srcPath, source, "utf-8");
       }
+    } finally {
+      // Mutation loop done (or aborted) — remove the SIGINT guard for this file.
+      process.off("SIGINT", sigintHandler);
     }
-
-    // Mutation loop complete — remove the SIGINT guard for this file.
-    process.off("SIGINT", sigintHandler);
 
     totalMutations += mutations.length;
 
