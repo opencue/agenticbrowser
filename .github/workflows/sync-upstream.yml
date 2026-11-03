@@ -25,7 +25,7 @@ jobs:
     if: github.repository == 'opencue/agenticbrowser'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: main
           fetch-depth: 0
@@ -51,21 +51,32 @@ jobs:
 
           SHA=$(git rev-parse upstream/main)
           SHORT=$(git rev-parse --short upstream/main)
+          BRANCH="sync/upstream-${SHORT}"
 
           if git merge --no-edit -m "Merge upstream citrolabs/ego-lite@${SHORT} into main" upstream/main; then
-            git push origin HEAD:main
-            echo "Merged upstream@${SHORT} into main." >> "$GITHUB_STEP_SUMMARY"
+            git push origin "HEAD:refs/heads/${BRANCH}"
+            if [ "$(gh pr list --repo opencue/agenticbrowser --head "$BRANCH" --state open --json number --jq 'length')" = "0" ]; then
+              gh pr create --repo opencue/agenticbrowser --base main --head "$BRANCH" \
+                --title "Sync upstream citrolabs/ego-lite@${SHORT}" \
+                --body "$(printf '%s\n' \
+                  "Automatic upstream sync — clean merge." \
+                  "" \
+                  "This PR was opened instead of pushing to \`main\` directly so that" \
+                  "CI runs before the commit lands." \
+                  "" \
+                  "Opened by \`.github/workflows/sync-upstream.yml\`.")"
+            fi
+            echo "Pushed upstream sync branch ${BRANCH}; merge it after CI passes." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           git merge --abort
-          BRANCH="sync/upstream-${SHORT}"
           echo "Merge conflicts — main left untouched."
 
           git push --quiet origin "${SHA}:refs/heads/${BRANCH}" || true
 
-          if [ "$(gh pr list --head "$BRANCH" --state open --json number --jq 'length')" = "0" ]; then
-            gh pr create --base main --head "$BRANCH" \
+          if [ "$(gh pr list --repo opencue/agenticbrowser --head "$BRANCH" --state open --json number --jq 'length')" = "0" ]; then
+            gh pr create --repo opencue/agenticbrowser --base main --head "$BRANCH" \
               --title "Sync upstream citrolabs/ego-lite@${SHORT} (conflicts)" \
               --body "$(printf '%s\n' \
                 "Automatic upstream sync hit merge conflicts, so \`main\` was left untouched." \

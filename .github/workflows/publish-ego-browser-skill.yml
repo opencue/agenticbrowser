@@ -19,9 +19,9 @@ jobs:
     outputs:
       version: ${{ steps.release.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -73,7 +73,7 @@ jobs:
           tar -C "$RUNNER_TEMP" -czf "$RUNNER_TEMP/ego-browser-skill.tgz" ego-browser
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ego-browser-skill-${{ steps.release.outputs.version }}
           path: ${{ runner.temp }}/ego-browser-skill.tgz
@@ -87,12 +87,12 @@ jobs:
       CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ego-browser-skill-${{ needs.prepare.outputs.version }}
           path: ${{ runner.temp }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -130,7 +130,7 @@ jobs:
       SKILLHUB_CLI_SHA256: af9e07635194fb9e80fd6bc32ef80ac88fe7277146a0cc6afbc36b95398e0b89
       VERSION: ${{ needs.prepare.outputs.version }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ego-browser-skill-${{ needs.prepare.outputs.version }}
           path: ${{ runner.temp }}

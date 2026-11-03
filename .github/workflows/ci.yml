@@ -9,6 +9,12 @@ on:
       - "v*.*.*"
   pull_request:
 
+permissions: read-all
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -16,8 +22,8 @@ jobs:
       run:
         working-directory: package/ego-browser
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -30,8 +36,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -58,8 +64,8 @@ jobs:
       run:
         working-directory: package/ego-linux-host
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -73,8 +79,8 @@ jobs:
   test-evals:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
       - run: node --test evals/agent-eval/*.test.mjs
@@ -88,8 +94,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -128,10 +134,11 @@ jobs:
   build-windows-installer:
     runs-on: windows-latest
     needs: test-windows
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
@@ -162,6 +169,21 @@ jobs:
           $url = "https://nodejs.org/dist/$version/node-$version-win-x64.zip"
           Write-Host "bundling $version from $url"
           Invoke-WebRequest -Uri $url -OutFile node.zip
+
+          # Verify the download against the official SHA-256 manifest so a CDN
+          # compromise or MitM cannot silently ship a trojanised Node runtime.
+          $shasumsUrl = "https://nodejs.org/dist/$version/SHASUMS256.txt"
+          $shasums = (Invoke-WebRequest -Uri $shasumsUrl -UseBasicParsing).Content
+          $zipName = "node-$version-win-x64.zip"
+          $expectedLine = ($shasums -split "`r?`n") | Where-Object { $_ -like "* $zipName" } | Select-Object -First 1
+          if (-not $expectedLine) { throw "no SHASUMS256.txt entry for $zipName" }
+          $expectedHash = ($expectedLine.Trim() -split '\s+')[0].ToLowerInvariant()
+          $actualHash = (Get-FileHash node.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actualHash -ne $expectedHash) {
+            throw "SHA-256 mismatch for ${zipName}:`n  expected: $expectedHash`n  got:      $actualHash"
+          }
+          Write-Host "SHA-256 verified for $zipName"
+
           Expand-Archive node.zip -DestinationPath node-dist
           Copy-Item "node-dist\node-$version-win-x64\node.exe" node.exe
           # The bundled runtime has to be able to run, not just exist.
@@ -199,7 +221,7 @@ jobs:
           $hash = (Get-FileHash $exe.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  $($exe.Name)" | Set-Content "$($exe.FullName).sha256" -Encoding ascii
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ego-lite-setup
           path: package/ego-linux/installer/dist/ego-lite-setup.exe*
@@ -207,7 +229,7 @@ jobs:
 
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [test, test-windows, build-windows-installer]
+    needs: [test, test-linux, test-linux-host, test-windows, build-windows-installer]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -216,15 +238,15 @@ jobs:
         shell: bash
         working-directory: package/ego-browser
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: package/ego-browser/package-lock.json
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ego-lite-setup
           path: ${{ runner.temp }}/windows-installer

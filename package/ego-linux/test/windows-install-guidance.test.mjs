@@ -38,7 +38,11 @@ describe("native Windows installation guidance", () => {
       /release:\s*[\s\S]*needs:\s*\[[^\]]*build-windows-installer/,
     );
     assert.match(workflow, /release:\s*[\s\S]*needs:\s*\[[^\]]*test-windows/);
-    assert.match(workflow, /actions\/download-artifact@v4/);
+    // Actions are pinned to a commit SHA with the tag kept as a comment.
+    assert.match(
+      workflow,
+      /actions\/download-artifact@(?:v4\b|[0-9a-f]{40}\s+#\s*v4\b)/,
+    );
     assert.match(workflow, /ego-lite-setup\.exe/);
     assert.match(workflow, /install-windows\.ps1/);
   });
