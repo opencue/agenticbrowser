@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Install ego-browser Linux host (ego-shaped OSS host — not the Citro/macOS app).
 #
+# WARNING: This script installs the EXPERIMENTAL ego-linux-host package
+# (package/ego-linux-host), which is distinct from the supported Linux port
+# in package/ego-linux installed by skills/ego-browser/scripts/install.sh.
+#
+#   - Supported port:    install.sh  → data dir: ~/.local/share/ego-lite-linux
+#   - Experimental host: this script → data dir: ~/.local/share/ego-lite
+#
+# If you previously used install.sh, note that profiles are stored at a
+# DIFFERENT path and the two installs do not share state.
+#
 # This script builds the monorepo packages and places an `ego-browser` shim on PATH.
 # It does NOT download the macOS DMG from cdn.ego.app.
 #
