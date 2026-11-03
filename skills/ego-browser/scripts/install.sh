@@ -10,7 +10,7 @@ set -eu
 BIN_DIR="${EGO_LINUX_BIN_DIR:-$HOME/.local/bin}"
 LINK_PATH="$BIN_DIR/ego-browser"
 MCP_LINK_PATH="$BIN_DIR/ego-browser-mcp"
-# Keep in sync with CHROME_CANDIDATES in package/ego-linux/src/chrome.mjs.
+# Keep in sync with browserBinaryCandidates() in package/ego-linux/src/platform.mjs.
 CHROME_CANDIDATES="google-chrome google-chrome-stable chromium chromium-browser brave-browser microsoft-edge"
 
 log() { printf '%s\n' "$*" >&2; }
@@ -76,6 +76,7 @@ log "Installing MCP runtime dependencies in $port_dir ..."
 	die "MCP dependency install failed"
 
 mkdir -p "$BIN_DIR"
+chmod +x "$shim_bin" "$mcp_bin"
 ln -sf "$shim_bin" "$LINK_PATH"
 log "Linked $LINK_PATH -> $shim_bin"
 ln -sf "$mcp_bin" "$MCP_LINK_PATH"
@@ -87,7 +88,11 @@ case ":$PATH:" in
 esac
 
 log "Running installation diagnostics ..."
-"$LINK_PATH" --doctor || die "installed $LINK_PATH but its diagnostics failed"
+"$LINK_PATH" --doctor || {
+	log "warning: ego-browser --doctor reported a problem. The install itself succeeded."
+	log "         Common causes: Chrome not found, display not set, or a 5-second startup timeout."
+	log "         Re-run 'ego-browser --doctor' manually after adjusting your environment."
+}
 
 log ""
 log "ego-browser and ego-browser-mcp are installed. Optional onboarding commands (not run automatically):"
