@@ -1,9 +1,16 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { resolve } from "node:path";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
-import { desktopEntry, launchTargets } from "../src/desktop.mjs";
+import {
+  desktopEntry,
+  installDesktopEntry,
+  launchTargets,
+} from "../src/desktop.mjs";
+import { IS_WINDOWS } from "../src/platform.mjs";
 
 // Paths resolve per platform (a drive letter on Windows), so build the
 // expected file URLs the same way rather than hard-coding POSIX ones.
@@ -59,3 +66,59 @@ test("launch targets refuse script and browser-internal schemes", () => {
     ],
   );
 });
+
+// installDesktopEntry writes real files; test only the Linux (XDG) path.
+if (!IS_WINDOWS) {
+  test("installDesktopEntry writes an executable .desktop file and SVG icon", async () => {
+    const sandbox = await mkdtemp(join(tmpdir(), "ego-desktop-install-test-"));
+    const origXdg = process.env.XDG_DATA_HOME;
+    process.env.XDG_DATA_HOME = sandbox;
+    try {
+      const { entryPath, iconPath } = await installDesktopEntry();
+
+      // (1) .desktop file exists and has execute bits set
+      const entryStat = await stat(entryPath);
+      assert.ok(entryStat.isFile(), ".desktop is a regular file");
+      // 0o111 = any execute bit (user/group/other)
+      assert.ok(
+        // eslint-disable-next-line no-bitwise
+        (entryStat.mode & 0o111) !== 0,
+        ".desktop file has at least one execute bit set",
+      );
+
+      // (2) SVG icon exists
+      const iconStat = await stat(iconPath);
+      assert.ok(iconStat.isFile(), "SVG icon is a regular file");
+      assert.ok(iconPath.endsWith(".svg"), "icon path has .svg extension");
+
+      // (3) desktopEntry() content is present: at minimum the section header
+      //     and the Exec= line that embeds the current interpreter
+      const content = await readFile(entryPath, "utf8");
+      assert.match(
+        content,
+        /^\[Desktop Entry\]/m,
+        "desktop-entry section header present",
+      );
+      assert.match(
+        content,
+        new RegExp(
+          `^Exec=${process.execPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`,
+          "m",
+        ),
+        "Exec= line pins the current Node.js interpreter",
+      );
+      assert.match(
+        content,
+        /--launch %U/,
+        "desktop entry handles web-content URLs",
+      );
+    } finally {
+      if (origXdg === undefined) {
+        delete process.env.XDG_DATA_HOME;
+      } else {
+        process.env.XDG_DATA_HOME = origXdg;
+      }
+      await rm(sandbox, { recursive: true, force: true });
+    }
+  });
+}
