@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 # Install ego-browser Linux host (ego-shaped OSS host — not the Citro/macOS app).
 #
+# WARNING: This script installs the EXPERIMENTAL ego-linux-host package
+# (package/ego-linux-host), which is distinct from the supported Linux port
+# in package/ego-linux installed by skills/ego-browser/scripts/install.sh.
+#
+#   - Supported port:    install.sh  → data dir: ~/.local/share/ego-lite-linux
+#   - Experimental host: this script → data dir: ~/.local/share/ego-lite
+#
+# If you previously used install.sh, note that profiles are stored at a
+# DIFFERENT path and the two installs do not share state.
+#
 # This script builds the monorepo packages and places an `ego-browser` shim on PATH.
 # It does NOT download the macOS DMG from cdn.ego.app.
 #
@@ -130,12 +140,12 @@ create_dirs_and_symlink() {
 }
 
 detect_chrome() {
-  if [ -n "${EGO_CHROME_PATH:-}" ]; then
-    if [ -x "$EGO_CHROME_PATH" ]; then
-      log "Chrome: EGO_CHROME_PATH=$EGO_CHROME_PATH"
+  if [ -n "${EGO_LINUX_CHROME:-}" ]; then
+    if [ -x "$EGO_LINUX_CHROME" ]; then
+      log "Chrome: EGO_LINUX_CHROME=$EGO_LINUX_CHROME"
       return 0
     fi
-    log "warning: EGO_CHROME_PATH is set but not executable: $EGO_CHROME_PATH"
+    log "warning: EGO_LINUX_CHROME is set but not executable: $EGO_LINUX_CHROME"
   fi
 
   local candidate found=""
@@ -176,8 +186,8 @@ warning: Chrome/Chromium not found on PATH.
     # Debian/Ubuntu
     sudo apt-get install -y chromium-browser
     # or Google Chrome from https://www.google.com/chrome/
-  Then set EGO_CHROME_PATH if the binary is non-standard:
-    export EGO_CHROME_PATH=/path/to/chrome
+  Then set EGO_LINUX_CHROME if the binary is non-standard:
+    export EGO_LINUX_CHROME=/path/to/chrome
 
   Headed mode needs a display (native Linux or WSLg). For headless:
     export EGO_HEADLESS=1
