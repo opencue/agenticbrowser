@@ -221,7 +221,7 @@ ego-browser --install-desktop-entry
 
 The macOS build installs as an app you click to open; this gives the Linux port
 the same affordance. It writes an XDG desktop entry and a scalable icon, then
-refreshes the desktop and icon caches. Clicking it runs `--open`.
+refreshes the desktop and icon caches. Clicking it runs `--launch` (opens each URL xdg-open passes, or the Spaces overview when invoked with no arguments).
 
 The entry pins **the absolute path of the node that installed it** rather than
 relying on a `#!/usr/bin/env node` shebang, because a desktop session's `PATH` is
@@ -313,10 +313,14 @@ then aborts with "Failed to create a ProcessSingleton".
 
 ## Command reference
 
-| Command                               | What it does                                                          |
-| ------------------------------------- | --------------------------------------------------------------------- |
-| `ego-browser --status`                | Connection state of the backing browser, as JSON.                     |
-| `ego-browser --open`                  | Open or raise the shared agent browser window.                        |
+| Command                               | What it does                                                                                        |
+| ------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `ego-browser --status`                | Connection state of the backing browser, as JSON.                                                   |
+| `ego-browser --open`                  | Open or raise the shared agent browser window.                                                      |
+| `ego-browser --launch [url …]`        | Open each URL in a tab and raise the window; no arguments shows the Spaces overview. Used by the desktop entry. |
+| `ego-browser --spaces`                | Open the Spaces overview panel.                                                                     |
+| `ego-browser --doctor [--json]`       | Inspect installation and runtime state without starting or attaching to the browser.                |
+| `ego-browser --cleanup-session`       | Close this agent session's spaces and stop its recognised dev servers.                              |
 | `ego-browser --stop`                  | Terminate the backing browser and clear its profile lock.             |
 | `ego-browser --import-chrome-profile` | Copy your real Chrome profile in, so agent tasks inherit your logins. |
 | `ego-browser --install-desktop-entry` | Add it to your app launcher, with an icon.                            |
@@ -340,12 +344,16 @@ Both roots follow `XDG_DATA_HOME` / `XDG_STATE_HOME` when those are set.
 
 ### Environment overrides
 
-| Variable            | Effect                                                                   |
-| ------------------- | ------------------------------------------------------------------------ |
-| `EGO_LINUX_CHROME`  | Which browser binary to launch.                                          |
-| `EGO_LINUX_PROFILE` | Which profile directory to use.                                          |
-| `EGO_LINUX_CDP_URL` | Attach to an already-running DevTools endpoint instead of launching one. |
-| `EGO_LINUX_BIN_DIR` | Where `install.sh` links the CLI. Defaults to `~/.local/bin`.            |
+| Variable                        | Effect                                                                                          |
+| ------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `EGO_LINUX_CHROME`              | Which browser binary to launch.                                                                 |
+| `EGO_LINUX_PROFILE`             | Which profile directory to use.                                                                 |
+| `EGO_LINUX_CDP_URL`             | Attach to an already-running DevTools endpoint instead of launching one.                        |
+| `EGO_LINUX_BIN_DIR`             | Where `install.sh` links the CLI. Defaults to `~/.local/bin`.                                  |
+| `EGO_LINUX_HEADLESS`            | `1` makes the browser launch headless by default; `--open` still gives a visible window.       |
+| `EGO_LINUX_TASK_SPACE_STORAGE`  | `isolated` or `isolated-sync` to opt into the older context-backed task-space storage.          |
+| `EGO_LINUX_CURSOR`              | `0` hides the agent cursor overlay in screenshots.                                              |
+| `EGO_BROWSER_ARTIFACT_TTL_HOURS`| How long screenshots, failure artifacts, and temp download dirs are kept. Default is 24 hours. |
 
 ## Troubleshooting
 

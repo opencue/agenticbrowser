@@ -1,6 +1,6 @@
 # Contributing Guide
 
-Thanks for your interest in contributing to **ego-browser (ego-lite)**! This guide is aimed at developers who want to build on top of the project or submit patches upstream. It covers the architecture, local development workflow, code conventions, and PR process.
+Thanks for your interest in contributing to **ego-browser (agenticbrowser)**! This guide is aimed at developers who want to build on top of the project or submit patches. It covers the architecture, local development workflow, code conventions, and PR process.
 
 > For the project vision, see [`README.md`](./README.md). For the agent-facing runbook, see [`skills/ego-browser/SKILL.md`](./skills/ego-browser/SKILL.md) (or [`SKILL.zh.md`](./skills/ego-browser/SKILL.zh.md)). For repo-level guidance, see [`AGENTS.md`](./AGENTS.md).
 
@@ -43,7 +43,7 @@ ego-lite/
 │   │   ├── run.ts              # stdin executor, CLI entry
 │   │   ├── helpers.ts          # Public helper surface composition
 │   │   ├── browser-runtime.ts  # CDP transport and session cache
-│   │   ├── element-resolver.ts # @eN / CSS / XPath / ARIA resolution
+│   │   ├── element-resolver.ts # @N / CSS / XPath / ARIA resolution
 │   │   ├── cdp-eval.ts         # cdp() / js() helpers
 │   │   ├── state.ts            # Shared mutable runtime state (singleton)
 │   │   ├── env.ts              # Environment variables
@@ -83,7 +83,7 @@ ego-lite/
 | Language | TypeScript (`tsc --noEmit` for typecheck only) |
 | Runtime | Node.js **>= 22**, ESM only (`"type": "module"`) |
 | Package manager | npm (commit `package-lock.json`) |
-| Bundler | esbuild + rollup (output: `artifacts/ego-browser/index.js`) |
+| Bundler | esbuild + rollup (output: `dist/out/index.js`) |
 | Tests | Node built-in `node --test` + `node:assert/strict` |
 | Runtime deps | Only `acorn` (lightweight parsing) |
 | Browser transport | Chrome DevTools Protocol (CDP) directly — **no Puppeteer / Playwright** |
@@ -99,7 +99,7 @@ ego-lite/
 cd package/ego-browser
 npm ci
 
-# 2. Build (produces dist/ and artifacts/ego-browser/index.js)
+# 2. Build (produces dist/out/index.js)
 npm run build
 
 # 3. Typecheck
@@ -115,7 +115,7 @@ npm run validate:site-skills    # alias: validate:learnings
 **Calling the CLI directly** (for local debugging):
 
 ```bash
-node artifacts/ego-browser/index.js <<'JS'
+node dist/out/index.js <<'JS'
 await waitForLoadState()
 console.log(await pageInfo())
 JS
@@ -195,7 +195,7 @@ Control (`agent` ↔ `user`) is handed off via the `handOffTaskSpace` / `takeOve
 | `src/run.ts` | Reads stdin, builds an `AsyncFunction`, and invokes it with helpers as named arguments |
 | `src/helpers.ts` | Composes and exports the helper set exposed to heredocs |
 | `src/browser-runtime.ts` | Maintains the CDP connection, session cache, and event buffer for the browser's ego runtime |
-| `src/element-resolver.ts` | Resolves `@eN` refs, CSS, XPath, and ARIA/role to backend nodeIds |
+| `src/element-resolver.ts` | Resolves `@N` refs, CSS, XPath, and ARIA/role to backend nodeIds |
 | `src/cdp-eval.ts` | `cdp()` raw CDP calls + `js()` in-page evaluation |
 | `src/state.ts` | Shared mutable state singleton (`send`, `platform`, `agentWorkspace`, session caches). Tests can inject stubs via `setOverrides()` |
 | `src/driver/*` | Minimal-dependency primitives per capability; only call into `cdp()` |
@@ -271,7 +271,7 @@ npm run validate:site-skills   # if learnings changed
 - **TypeScript non-strict mode**: `strict: false`, but keep explicit type signatures
 - **Shared state goes through the `state.ts` singleton** — do not thread `connection` / `send` through function parameters
 - **Helpers are injected, not imported**: agent scripts do not `import`; all helpers are placed in scope by `run.ts`
-- **Snapshot refs (`@eN`) are short-lived**: re-snapshot after any DOM mutation; for long-lived values use `loc=...` or stable CSS / ARIA
+- **Snapshot refs (`@N`) are short-lived**: re-snapshot after any DOM mutation; for long-lived values use `loc=...` or stable CSS / ARIA (`@21`, not `@e21`)
 - **No lint / prettier**: style is enforced by convention and code review. When editing, blend in with the surrounding code instead of introducing a new style
 
 ---
@@ -341,7 +341,7 @@ This repo strongly endorses the four principles below (see [`AGENTS.md`](./AGENT
 
 ## Feedback & Contact
 
-- Issues / discussions: <https://github.com/CitroLabs/ego-lite/issues>
+- Issues / discussions: <https://github.com/opencue/agenticbrowser/issues>
 - License: MIT © 2026 CitroLabs
 
 Issues, PRs, and new site learnings are all welcome — make ego-browser smarter with your next contribution.
