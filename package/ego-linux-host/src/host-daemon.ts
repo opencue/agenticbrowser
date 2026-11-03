@@ -258,55 +258,68 @@ export async function startDaemon(
     detachForward = runtime.attachCdpForwarding();
   }
 
+  /** In-progress reconnect promise; concurrent callers join the same attempt. */
+  let reconnectPromise: Promise<void> | null = null;
+
   /**
    * If Chrome/CDP died, respawn via ensureChrome and reconnect the bridge.
    * Ego methods call this so a dead browser surfaces as a clear
    * EGO_BROWSER_UNAVAILABLE (or recovers when spawn succeeds).
+   * Concurrent callers join the in-flight reconnect rather than racing.
    */
   async function ensureBrowserReady(): Promise<void> {
     if (options.skipChrome) return;
 
-    if (cdp && (await isCdpUp(config.cdpPort))) {
-      return;
-    }
+    // Serialise concurrent reconnects: join an in-progress attempt.
+    if (reconnectPromise) return reconnectPromise;
 
-    if (detachForward) {
-      detachForward();
-      detachForward = undefined;
-    }
-    if (cdp) {
-      try {
-        await cdp.close();
-      } catch {
-        // ignore
+    reconnectPromise = (async () => {
+      if (cdp && (await isCdpUp(config.cdpPort))) {
+        return;
       }
-      cdp = null;
-    }
 
-    try {
-      // ensureChrome attaches if CDP is already back, otherwise respawns Chrome.
-      chrome = await ensureChromeFn(config);
-      cdp = await connectCdpFn(config.cdpPort);
-      detachForward = runtime.attachCdpForwarding();
-    } catch (err) {
-      const code =
-        err &&
-        typeof err === "object" &&
-        typeof (err as { error_code?: string }).error_code === "string"
-          ? (err as { error_code: string }).error_code
-          : undefined;
-      if (code === "EGO_BROWSER_UNAVAILABLE") throw err;
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : String(err);
-      throw makeEgoError(
-        "EGO_BROWSER_UNAVAILABLE",
-        `Browser/CDP unavailable: ${message}. Chrome may have exited; the host will try to respawn on the next request.`,
-      );
-    }
+      if (detachForward) {
+        detachForward();
+        detachForward = undefined;
+      }
+      if (cdp) {
+        try {
+          await cdp.close();
+        } catch {
+          // ignore
+        }
+        cdp = null;
+      }
+
+      try {
+        // ensureChrome attaches if CDP is already back, otherwise respawns Chrome.
+        chrome = await ensureChromeFn(config);
+        cdp = await connectCdpFn(config.cdpPort);
+        detachForward = runtime.attachCdpForwarding();
+      } catch (err) {
+        const code =
+          err &&
+          typeof err === "object" &&
+          typeof (err as { error_code?: string }).error_code === "string"
+            ? (err as { error_code: string }).error_code
+            : undefined;
+        if (code === "EGO_BROWSER_UNAVAILABLE") throw err;
+        const message =
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : String(err);
+        throw makeEgoError(
+          "EGO_BROWSER_UNAVAILABLE",
+          `Browser/CDP unavailable: ${message}. Chrome may have exited; the host will try to respawn on the next request.`,
+        );
+      }
+    })().finally(() => {
+      reconnectPromise = null;
+    });
+
+    return reconnectPromise;
   }
 
   const clients = new Set<Socket>();
@@ -473,7 +486,14 @@ export async function startDaemon(
     const lineBuf = new LineBuffer();
 
     socket.on("data", (chunk) => {
-      const lines = lineBuf.push(chunk);
+      let lines: string[];
+      try {
+        lines = lineBuf.push(chunk);
+      } catch {
+        clients.delete(socket);
+        socket.destroy();
+        return;
+      }
       for (const line of lines) {
         void (async () => {
           let id = -1;

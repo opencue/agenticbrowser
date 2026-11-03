@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer, type IncomingMessage } from "node:http";
 import type { Socket } from "node:net";
+import type { Duplex } from "node:stream";
 import {
   createCdpSession,
   createCdpBridge,
@@ -406,4 +407,53 @@ test("connectCdp throws EGO_CDP_CHANNEL_UNAVAILABLE when port closed", async () 
       return true;
     },
   );
+});
+
+test("connectCdp times out when WebSocket hangs without sending open/error", async () => {
+  // An HTTP server that serves /json/version but never completes the WS upgrade
+  const httpServer = createServer((req, res) => {
+    if (req.url === "/json/version") {
+      const host = req.headers.host || "127.0.0.1";
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(
+        JSON.stringify({
+          Browser: "Stall/1.0",
+          "Protocol-Version": "1.3",
+          webSocketDebuggerUrl: `ws://${host}/devtools/browser/stall`,
+        }),
+      );
+      return;
+    }
+    res.writeHead(404);
+    res.end();
+  });
+  // Accept the TCP upgrade but never reply — WS hangs at handshake
+  const hangingSockets: Duplex[] = [];
+  httpServer.on("upgrade", (_req, socket) => {
+    hangingSockets.push(socket);
+    // No response written, no socket.destroy() — deliberately stalled
+  });
+
+  await new Promise<void>((resolve) =>
+    httpServer.listen(0, "127.0.0.1", resolve),
+  );
+  const addr = httpServer.address();
+  assert.ok(addr && typeof addr === "object");
+  const port = (addr as { port: number }).port;
+
+  try {
+    await assert.rejects(
+      () => connectCdp(port, { wsConnectTimeoutMs: 80 }),
+      (err: Error & { error_code?: string }) => {
+        assert.equal(err.error_code, "EGO_CDP_CHANNEL_UNAVAILABLE");
+        assert.match(err.message, /timed out/i);
+        return true;
+      },
+    );
+  } finally {
+    for (const s of hangingSockets) s.destroy();
+    await new Promise<void>((resolve, reject) =>
+      httpServer.close((err) => (err ? reject(err) : resolve())),
+    );
+  }
 });

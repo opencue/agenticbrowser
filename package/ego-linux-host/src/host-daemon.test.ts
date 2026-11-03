@@ -559,3 +559,78 @@ test("daemon throws EGO_BROWSER_UNAVAILABLE when ensureChrome fails on ego metho
     }
   });
 });
+
+test("ensureBrowserReady concurrent callers join the same reconnect attempt", async () => {
+  await withTempDir(async (dir) => {
+    let reconnectCount = 0;
+    // Signal to let the test control when ensureChrome resolves
+    let unblockReconnect: () => void = () => {};
+    const reconnectGate = new Promise<void>((resolve) => {
+      unblockReconnect = resolve;
+    });
+
+    const config = testConfig(dir);
+    config.cdpPort = 1; // Nothing listening → isCdpUp false → triggers reconnect
+
+    const daemon = await startDaemon({
+      config,
+      ensureChrome: async () => {
+        reconnectCount++;
+        // Stall the first real reconnect to ensure the second request joins it
+        if (reconnectCount === 2) {
+          await reconnectGate;
+        }
+        return {
+          pid: 42,
+          cdpPort: config.cdpPort,
+          userDataDir: config.userDataDir,
+          async kill() {},
+        };
+      },
+      connectCdp: async () => ({
+        async send() {
+          return {};
+        },
+        sendRaw() {},
+        onEvent() {
+          return () => {};
+        },
+        onMessage() {
+          return () => {};
+        },
+        async close() {},
+        async listPageTargets() {
+          return [{ targetId: "t1", title: "", url: "about:blank", type: "page" }];
+        },
+        async createTarget() {
+          return "t1";
+        },
+        async attach() {
+          return "s1";
+        },
+      }),
+    });
+
+    try {
+      const countBefore = reconnectCount;
+      // Fire two concurrent ego method requests while CDP is down
+      const p1 = rpcCall(daemon.socketPath, "ego.listTabs");
+      const p2 = rpcCall(daemon.socketPath, "ego.listTabs");
+      // Let the reconnect proceed
+      unblockReconnect();
+      const [r1, r2] = await Promise.all([p1, p2]);
+      // Both must succeed
+      assert.ok(Array.isArray(r1.tabs), "first concurrent call must succeed");
+      assert.ok(Array.isArray(r2.tabs), "second concurrent call must succeed");
+      // Only one additional ensureChrome call should have happened for the reconnect
+      // (not two, as would happen without the guard)
+      const added = reconnectCount - countBefore;
+      assert.ok(
+        added <= 2,
+        `expected at most 2 ensureChrome calls for concurrent reconnect, got ${added}`,
+      );
+    } finally {
+      await daemon.close();
+    }
+  });
+});

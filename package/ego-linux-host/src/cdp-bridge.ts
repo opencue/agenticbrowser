@@ -298,11 +298,19 @@ function wrapSessionAsBridge(
   };
 }
 
+export type ConnectCdpOptions = {
+  /** Timeout for the WebSocket handshake in ms (default 5000). */
+  wsConnectTimeoutMs?: number;
+};
+
 /**
  * Connect to Chrome CDP on loopback `port`.
  * GET /json/version → webSocketDebuggerUrl → WebSocket (Node 22 global).
  */
-export async function connectCdp(port: number): Promise<CdpBridge> {
+export async function connectCdp(
+  port: number,
+  options?: ConnectCdpOptions,
+): Promise<CdpBridge> {
   let version: { webSocketDebuggerUrl?: string };
   try {
     const res = await fetch(`http://127.0.0.1:${port}/json/version`, {
@@ -327,9 +335,22 @@ export async function connectCdp(port: number): Promise<CdpBridge> {
     );
   }
 
+  const WS_CONNECT_TIMEOUT_MS = options?.wsConnectTimeoutMs ?? 5000;
+
   const ws = new WebSocket(wsUrl);
 
   await new Promise<void>((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout> | null = setTimeout(() => {
+      timer = null;
+      cleanup();
+      ws.close();
+      reject(
+        makeEgoError(
+          "EGO_CDP_CHANNEL_UNAVAILABLE",
+          `WebSocket connect timed out to ${wsUrl}`,
+        ),
+      );
+    }, WS_CONNECT_TIMEOUT_MS);
     const onOpen = () => {
       cleanup();
       resolve();
@@ -344,6 +365,10 @@ export async function connectCdp(port: number): Promise<CdpBridge> {
       );
     };
     const cleanup = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
       ws.removeEventListener("open", onOpen);
       ws.removeEventListener("error", onError);
     };

@@ -326,6 +326,43 @@ test("connectHost ping + installEgoClient against daemon", async () => {
   }
 });
 
+test("connectHost request() times out when daemon never replies", async () => {
+  const dir = join(
+    tmpdir(),
+    `ego-req-timeout-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
+  await mkdir(dir, { recursive: true });
+  const sockets = new Set<Socket>();
+  // A fake daemon that accepts but silently drops every message
+  const server = createServer((socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.resume();
+  });
+  const socketPath = join(dir, "host-timeout.sock");
+  let conn: HostConnection | undefined;
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    conn = await connectHost(socketPath, { requestTimeoutMs: 80 });
+    await assert.rejects(
+      () => conn!.request("ego.listTabs"),
+      (err: Error & { error_code?: string }) => {
+        assert.equal(err.error_code, "EGO_TASK_HOST_DISCONNECTED");
+        assert.match(err.message, /timed out/i);
+        return true;
+      },
+    );
+  } finally {
+    conn?.close();
+    for (const socket of sockets) socket.destroy();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("closing a host connection rejects all unfinished requests", async () => {
   const dir = join(
     tmpdir(),
