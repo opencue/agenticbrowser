@@ -140,12 +140,12 @@ create_dirs_and_symlink() {
 }
 
 detect_chrome() {
-  if [ -n "${EGO_LINUX_CHROME:-}" ]; then
-    if [ -x "$EGO_LINUX_CHROME" ]; then
-      log "Chrome: EGO_LINUX_CHROME=$EGO_LINUX_CHROME"
+  if [ -n "${EGO_CHROME_PATH:-}" ]; then
+    if [ -x "$EGO_CHROME_PATH" ]; then
+      log "Chrome: EGO_CHROME_PATH=$EGO_CHROME_PATH"
       return 0
     fi
-    log "warning: EGO_LINUX_CHROME is set but not executable: $EGO_LINUX_CHROME"
+    log "warning: EGO_CHROME_PATH is set but not executable: $EGO_CHROME_PATH"
   fi
 
   local candidate found=""
@@ -186,8 +186,8 @@ warning: Chrome/Chromium not found on PATH.
     # Debian/Ubuntu
     sudo apt-get install -y chromium-browser
     # or Google Chrome from https://www.google.com/chrome/
-  Then set EGO_LINUX_CHROME if the binary is non-standard:
-    export EGO_LINUX_CHROME=/path/to/chrome
+  Then set EGO_CHROME_PATH if the binary is non-standard:
+    export EGO_CHROME_PATH=/path/to/chrome
 
   Headed mode needs a display (native Linux or WSLg). For headless:
     export EGO_HEADLESS=1
