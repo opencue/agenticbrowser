@@ -876,7 +876,11 @@ test("resolveElementObjectId classifies missing objectId as transient after AX f
     () => resolveElementObjectId(cdp, undefined, refMap, "@5"),
     (error) => {
       assert.ok(error instanceof ElementResolutionError);
-      assert.equal(error.kind, "transient", "mid-detach node must be transient, not permanent");
+      assert.equal(
+        error.kind,
+        "transient",
+        "mid-detach node must be transient, not permanent",
+      );
       assert.match(error.message, /No objectId for ref/);
       return true;
     },
@@ -921,9 +925,18 @@ test("resolveLocatorObjectId uses a single CDP call for count and fetch", async 
     }
     return {};
   });
-  const result = await resolveElementObjectId(cdp, undefined, new RefMap(), "loc=css:.item");
+  const result = await resolveElementObjectId(
+    cdp,
+    undefined,
+    new RefMap(),
+    "loc=css:.item",
+  );
   assert.equal(result.objectId, "element-1");
-  assert.equal(evaluateCalls, 1, "must use exactly one Runtime.evaluate call (not count + find)");
+  assert.equal(
+    evaluateCalls,
+    1,
+    "must use exactly one Runtime.evaluate call (not count + find)",
+  );
 });
 
 // Finding 7 (nth): nth locator with sufficient elements returns the nth element
@@ -937,7 +950,10 @@ test("resolveLocatorObjectId with nth returns the indexed element atomically", a
   });
   // internal:nth=1 picks the second match; mock returns a handle regardless.
   const result = await resolveElementObjectId(
-    cdp, undefined, new RefMap(), "internal:nth=1;loc=css:.item",
+    cdp,
+    undefined,
+    new RefMap(),
+    "internal:nth=1;loc=css:.item",
   );
   assert.equal(result.objectId, "element-1");
 });
@@ -948,9 +964,23 @@ test("AX tree is cached within the TTL for the same cdp instance", async () => {
   const cdp = fakeCdpWithAx(AX_TREE, async (method) => {
     if (method === "Accessibility.getFullAXTree") axTreeCalls += 1;
   });
-  await resolveElementCenter(cdp, undefined, new RefMap(), 'loc=role:button[name="ok"]');
-  await resolveElementCenter(cdp, undefined, new RefMap(), 'loc=role:button[name="ok"]');
-  assert.equal(axTreeCalls, 1, "AX tree must be fetched only once within the TTL");
+  await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    'loc=role:button[name="ok"]',
+  );
+  await resolveElementCenter(
+    cdp,
+    undefined,
+    new RefMap(),
+    'loc=role:button[name="ok"]',
+  );
+  assert.equal(
+    axTreeCalls,
+    1,
+    "AX tree must be fetched only once within the TTL",
+  );
 });
 
 test("AX tree cache is not shared across different cdp instances", async () => {
@@ -962,8 +992,18 @@ test("AX tree cache is not shared across different cdp instances", async () => {
   const cdp2 = fakeCdpWithAx(AX_TREE, async (method) => {
     if (method === "Accessibility.getFullAXTree") calls2 += 1;
   });
-  await resolveElementCenter(cdp1, undefined, new RefMap(), 'loc=role:button[name="ok"]');
-  await resolveElementCenter(cdp2, undefined, new RefMap(), 'loc=role:button[name="ok"]');
+  await resolveElementCenter(
+    cdp1,
+    undefined,
+    new RefMap(),
+    'loc=role:button[name="ok"]',
+  );
+  await resolveElementCenter(
+    cdp2,
+    undefined,
+    new RefMap(),
+    'loc=role:button[name="ok"]',
+  );
   assert.equal(calls1, 1, "cdp1 must fetch the AX tree");
   assert.equal(calls2, 1, "cdp2 must fetch the AX tree independently");
 });

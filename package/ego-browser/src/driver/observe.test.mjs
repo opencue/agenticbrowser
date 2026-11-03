@@ -227,7 +227,14 @@ test("screenshot reads DPR only once per session across multiple calls", async (
     const dprRuntime = {
       async listTabs() {
         return {
-          tabs: [{ targetId: "target-dpr", active: true, title: "Example", url: "https://example.com/" }],
+          tabs: [
+            {
+              targetId: "target-dpr",
+              active: true,
+              title: "Example",
+              url: "https://example.com/",
+            },
+          ],
         };
       },
       sendCDPMessage(payload) {
@@ -252,25 +259,32 @@ test("screenshot reads DPR only once per session across multiple calls", async (
     globalThis.ego = dprRuntime;
 
     // Bring up a fresh session.
-    const { invalidateSession } = await import("../../dist/src/browser-runtime.js");
+    const { invalidateSession } =
+      await import("../../dist/src/browser-runtime.js");
     invalidateSession();
 
     try {
       await screenshot({ path: "/tmp/ego-browser-dpr-shot-1.png" });
       const dprAfterFirst = sent.filter(
-        (r) => r.method === "Runtime.evaluate" &&
-               JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
+        (r) =>
+          r.method === "Runtime.evaluate" &&
+          JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
       ).length;
       sent.length = 0;
 
       await screenshot({ path: "/tmp/ego-browser-dpr-shot-2.png" });
       const dprAfterSecond = sent.filter(
-        (r) => r.method === "Runtime.evaluate" &&
-               JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
+        (r) =>
+          r.method === "Runtime.evaluate" &&
+          JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
       ).length;
 
       assert.equal(dprAfterFirst, 1, "first screenshot must fetch DPR");
-      assert.equal(dprAfterSecond, 0, "second screenshot in same session must reuse cached DPR");
+      assert.equal(
+        dprAfterSecond,
+        0,
+        "second screenshot in same session must reuse cached DPR",
+      );
     } finally {
       invalidateSession();
       if (previous === undefined) delete globalThis.ego;

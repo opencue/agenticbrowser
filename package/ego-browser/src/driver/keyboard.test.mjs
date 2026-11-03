@@ -708,7 +708,11 @@ test("pressSequentially sends emoji via insertText, not dispatchKeyEvent", async
   const keyCalls = calls.filter((c) => c.method === "Input.dispatchKeyEvent");
   assert.equal(insertCalls.length, 1, "emoji must go through Input.insertText");
   assert.equal(insertCalls[0].params.text, "😀");
-  assert.equal(keyCalls.length, 0, "emoji must not go through Input.dispatchKeyEvent");
+  assert.equal(
+    keyCalls.length,
+    0,
+    "emoji must not go through Input.dispatchKeyEvent",
+  );
 });
 
 test("pressSequentially sends ASCII through dispatchKeyEvent", async () => {
@@ -726,7 +730,10 @@ test("pressSequentially sends ASCII through dispatchKeyEvent", async () => {
   }
 
   const keyCalls = calls.filter((c) => c.method === "Input.dispatchKeyEvent");
-  assert.ok(keyCalls.length >= 2, "ASCII chars must go through dispatchKeyEvent");
+  assert.ok(
+    keyCalls.length >= 2,
+    "ASCII chars must go through dispatchKeyEvent",
+  );
   assert.equal(
     calls.some((c) => c.method === "Input.insertText"),
     false,
