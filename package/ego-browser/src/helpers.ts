@@ -147,6 +147,36 @@ type ChallengeOptions = {
   cancelLabel?: string;
   timeout?: number;
 };
+type TaskExecutionContext = {
+  task: TaskSpace;
+  attempt: number;
+  maxAttempts: number;
+  previousVerification: { ok: boolean; [key: string]: any } | null;
+};
+type TaskExecutionOptions = {
+  /** One-line description of what the task achieves (used in the receipt). */
+  goal?: string;
+  /** Safety policy. Automatic retries require "read-only". */
+  risk: TaskExecutionRisk;
+  /** The automation to run each attempt. Receives task, attempt, maxAttempts, previousVerification. */
+  work: (context: TaskExecutionContext) => Promise<any> | any;
+  /** Returns true / { ok: true, ... } when work succeeded; false / { ok: false, ... } to retry. */
+  verify: (
+    context: TaskExecutionContext & { result: any },
+  ) => Promise<boolean | { ok: boolean; [key: string]: any }> | boolean | { ok: boolean; [key: string]: any };
+  /** Retry policy. max 0–5 attempts (only for read-only), delay in ms, on which failure kinds. */
+  retries?: {
+    max?: number;
+    delay?: number;
+    on?: Array<TaskExecutionRetryKind>;
+  };
+  /** Pass { keep: boolean } behaviour through to completeTaskSpace on success. */
+  keep?: boolean;
+  /** Temporarily sets page helper timeouts in milliseconds for the duration of each attempt. */
+  timeout?: number;
+  /** Set false to skip automatic task-space completion after success. */
+  complete?: boolean;
+};
 
 const MAX_TASK_EXECUTION_RETRIES = 5;
 const TASK_EXECUTION_CONTRACT_CODE = "EGO_TASK_EXECUTION_CONTRACT";
@@ -537,7 +567,11 @@ export async function bringToFrontTaskSpace(
     ? await ego.presentTaskSpace(id, { focus: true })
     : await ego.presentTaskSpace(id);
   assertNoEgoError(result, "bringToFrontTaskSpace");
-  return result;
+  return {
+    done: true,
+    visible: result?.visible !== false,
+    ...(typeof result?.reason === "string" ? { reason: result.reason } : {}),
+  };
 }
 
 /**
@@ -550,7 +584,7 @@ export async function bringToFrontTaskSpace(
  * focus stays on `taskSpaces.bringToFront(..., { focus: true })`.
  * @param {string|number} nameOrId Task space id or name.
  * @param {RequestUserActionOptions} [options] Human instruction, target, labels, and wait settings. Supplying instruction defaults wait to true.
- * @returns {Promise<object>}
+ * @returns {Promise<{done:true,visible:boolean,presentation:"hand-off"|"bring-to-front",actionKey?:string,focused?:boolean,requestId?:string}|{done:true,visible:boolean,presentation:"hand-off"|"bring-to-front",actionKey?:string,focused?:boolean,requestId?:string,userResult:"cancel",resumed:false}|{done:true,visible:boolean,presentation:"hand-off"|"bring-to-front",actionKey?:string,focused?:boolean,requestId?:string,userResult:"done",resumed:true}>} No-wait: `{done,visible,presentation,...}`; wait+cancel: `{...base,userResult:"cancel",resumed:false}`; wait+done: `{...base,userResult:"done",resumed:true}`.
  */
 export async function requestUserActionTaskSpace(
   nameOrId: TaskSpaceNameOrId,
@@ -809,7 +843,7 @@ export async function loginPreflightTaskSpace(
  * receives the one-shot user-action panel and focus flow.
  * @param {string|number} nameOrId Task space id or name.
  * @param {ChallengeOptions} [options] Automatic wait, poll interval, instruction, labels, and manual timeout in seconds.
- * @returns {Promise<object>}
+ * @returns {Promise<{detected:false,handled:false}|{detected:true,provider:string,kind:string,handled:false,resolvedAutomatically:true}|{detected:true,provider:string,kind:string,handled:true,done:true,visible:boolean,presentation:"hand-off"|"bring-to-front",userResult?:"done"|"cancel",resumed?:boolean}>} No challenge: `{detected:false,handled:false}`; resolved automatically: `{detected:true,...,resolvedAutomatically:true}`; user resolved: `{detected:true,...,handled:true,...requestUserActionResult}`.
  */
 export async function handleChallengeTaskSpace(
   nameOrId: TaskSpaceNameOrId,
@@ -1190,7 +1224,6 @@ export async function runTaskSpace(
   try {
     result = await fn(task);
   } catch (error) {
-    if (isEgoHardStopError(error)) throw error;
     throw error;
   } finally {
     if (hasTimeout) {
@@ -1218,7 +1251,7 @@ export async function runTaskSpace(
  */
 export async function executeTaskSpace(
   nameOrId: TaskSpaceNameOrId,
-  options: any,
+  options: TaskExecutionOptions,
 ) {
   const config = normalizeTaskExecutionOptions(options);
   const receipt: any = {
@@ -1620,6 +1653,12 @@ function currentAgentSession() {
   return session || null;
 }
 
+/**
+ * Return site skills for an explicit URL. Unlike siteSkills(), the URL is
+ * always required and the current page is not consulted.
+ * @param {string} url URL to inspect for site skills.
+ * @returns {Promise<Array<object|string>>}
+ */
 export async function siteSkillsForUrl(url) {
   return siteSkillsForUrlCore(url, {
     agentWorkspace: state.agentWorkspace(),
@@ -2025,7 +2064,7 @@ function createSiteFacade() {
 }
 
 const FACADE_HELP: Record<string, string> = {
-  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), page.mouse.click(x, y), and page.mouse.drag(from, to, options?). waitForURL predicates receive URL objects and waitUntil defaults to load.',
+  page: 'page: Playwright-style page facade. page.url() asynchronously returns the current URL; always call await page.url() before using the string. Use page.goto(url), page.locator(selector), page.getByText(text), page.getByLabel(text), page.getByPlaceholder(text), page.getByTestId(testId), page.setDefaultTimeout(ms), page.waitForEvent("download"), page.waitForLoadState(state, options), page.waitForURL(url, options), page.waitForRequest(urlOrPredicate, options), page.waitForResponse(urlOrPredicate, options), page.evaluate(expression), page.screenshot(options), page.debug(options), page.trace(options), page.screencast.start({ path, size, quality }), page.screencast.stop(), page.keyboard.press(key), page.keyboard.type(text), page.mouse.click(x, y), page.mouse.drag(from, to, options?), page.fastObserve(options?) for a lightweight snapshot alternative, and page.fastAct(instruction, options?) for an observation-driven action. waitForURL predicates receive URL objects and waitUntil defaults to load.',
   "page.locator":
     "page.locator(selector) => Locator: create a strict, auto-waiting locator for CSS, XPath, text, loc=..., or @ref selectors. loc=testid:foo matches data-testid=\"foo\" exactly by default. Example: await page.locator('loc=testid:settings__visibilityToggle__topics-/map').click()",
   "page.getByTestId":
@@ -2052,6 +2091,24 @@ const FACADE_HELP: Record<string, string> = {
     "taskSpaces.handleChallenge(nameOrId, { waitForAutomatic?, interval?, instruction?, doneLabel?, cancelLabel?, timeout? }?) => Promise<object>: detect common visible Cloudflare, hCaptcha, and reCAPTCHA challenges without focusing; wait briefly for automatic completion, then show the one-shot Done/Cancel action panel and notify the user without taking focus if the challenge persists.",
   "taskSpaces.takeOver":
     "taskSpaces.takeOver(nameOrId?) => Promise<void>: after explicit user confirmation, take control back. When nameOrId points at a user-owned space, it claims that space before selecting it and calling the native take-over overlay.",
+  "taskSpaces.run":
+    "taskSpaces.run(nameOrId, fn, options?) => Promise<{task,result,completion}>: run fn inside a selected-or-created task space and auto-complete it on success. options: keep (bool passed to completeTaskSpace), timeout (ms for page helpers during fn), complete:false to skip auto-completion. Hard-stop errors rethrow unchanged; ordinary errors leave the space open for debugging. Use taskSpaces.execute when the result must be explicitly verified.",
+  "taskSpaces.list":
+    "taskSpaces.list() => Promise<Array<{taskId,id,name,createdBy?,ownership?,recentTabTitles?}>>: return all current task spaces.",
+  "taskSpaces.switch":
+    "taskSpaces.switch(nameOrId) => Promise<{taskId,id,name,...}>: select an existing agent-owned task space by id or name for the current Node invocation. Throws when the space is user-owned.",
+  "taskSpaces.new":
+    "taskSpaces.new(name) => Promise<{taskId,id,name,...}>: create an agent-owned task space with the given name and select it.",
+  "taskSpaces.claim":
+    "taskSpaces.claim(nameOrId) => Promise<{taskId,id,name,...}>: transfer ownership of a user-owned space to the agent and select it. Prefer takeOver when an explicit user confirmation overlay is appropriate.",
+  "taskSpaces.complete":
+    "taskSpaces.complete(nameOrId, { keep }) => Promise<{done,visible?,reason?,skipped?}>: complete (keep:true) or close (keep:false) the task space. User-owned spaces return { done:false, skipped:\"user-owned\" }.",
+  "taskSpaces.handOff":
+    "taskSpaces.handOff(nameOrId?) => Promise<{done,visible?,reason?,skipped?}>: hand the space back to the user and hide the agent overlay without taking focus. User-owned spaces return { done:false, skipped:\"user-owned\" }.",
+  "taskSpaces.waitForAgentControl":
+    "taskSpaces.waitForAgentControl(nameOrId, options?) => Promise<void>: block until the agent regains control of the space. options: interval (poll seconds, default 20), timeout (max wait seconds, default 600). Read-only — does not call takeOver or claim.",
+  "taskSpaces.isHardStopError":
+    "taskSpaces.isHardStopError(error) => boolean: return true when error is an EGO_TASK_SPACE_USER_IN_CONTROL hard-stop that must not be retried.",
   site: "site: learned site-skill facade. Use site.skills(url), site.skillsForUrl(url), site.runTool(siteId, toolName, args), site.runBrowserTool(siteId, toolName, args), and site.learnContext(url).",
   fetch:
     "fetch: network facade. Use fetch.server(url, options) for Node-side fetch and fetch.browser(url, options) for browser-origin fetch.",

@@ -3139,3 +3139,84 @@ test("waitForAgentControl rejects invalid polling options", async () => {
     },
   );
 });
+
+// ── regression tests for audit findings 16-22 ────────────────────────────────
+
+test("help returns non-'Unknown helper' strings for all 9 previously-missing taskSpaces sub-methods", () => {
+  const ctx = helperContext();
+  const missing = [
+    "taskSpaces.run",
+    "taskSpaces.list",
+    "taskSpaces.switch",
+    "taskSpaces.new",
+    "taskSpaces.claim",
+    "taskSpaces.complete",
+    "taskSpaces.handOff",
+    "taskSpaces.waitForAgentControl",
+    "taskSpaces.isHardStopError",
+  ];
+  for (const name of missing) {
+    const result = ctx.help(name);
+    assert.notEqual(
+      result,
+      `Unknown helper: ${name}`,
+      `help('${name}') should return a description, not 'Unknown helper'`,
+    );
+    assert.equal(typeof result, "string");
+    assert.ok(result.length > 0, `help('${name}') must be non-empty`);
+  }
+});
+
+test("help page entry mentions fastObserve and fastAct", () => {
+  const ctx = helperContext();
+  const pageHelp = ctx.help("page");
+  assert.match(pageHelp, /fastObserve/, "page help must mention fastObserve");
+  assert.match(pageHelp, /fastAct/, "page help must mention fastAct");
+});
+
+test("bringToFrontTaskSpace normalises the return shape when native result lacks done", async () => {
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [
+            { taskId: "t", id: 7, name: "t", ownership: "agent" },
+          ],
+        };
+      },
+      // Return a raw native result without a `done` field and with a `reason`.
+      async presentTaskSpace() {
+        return { visible: true, reason: "headless" };
+      },
+    },
+    async () => {
+      const result = await bringToFrontTaskSpace("t");
+      assert.equal(result.done, true, "done must always be true after normalisation");
+      assert.equal(result.visible, true);
+      assert.equal(result.reason, "headless");
+    },
+  );
+});
+
+test("runTaskSpace rethrows ordinary errors without swallowing them (finding 17 regression)", async () => {
+  const boom = new Error("ordinary failure");
+  await withEgo(
+    {
+      async listTaskSpaces() {
+        return {
+          taskSpaces: [{ taskId: "t", id: 1, name: "t", ownership: "agent" }],
+        };
+      },
+      async useTaskSpace() {
+        return { done: true };
+      },
+    },
+    async () => {
+      await assert.rejects(
+        () => runTaskSpace("t", async () => { throw boom; }),
+        (err) => err === boom,
+        "runTaskSpace must rethrow the original error unchanged",
+      );
+    },
+  );
+});
