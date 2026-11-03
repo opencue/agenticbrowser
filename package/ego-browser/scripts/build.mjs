@@ -89,8 +89,10 @@ try {
   await cp(skillSourceDir, bundledSkillDir, { recursive: true });
   await chmod(bundledCli, 0o755);
 } finally {
-  await lock.close();
-  await rm(buildLock, { force: true });
+  await lock
+    .close()
+    .catch(() => {})
+    .finally(() => rm(buildLock, { force: true }));
 }
 
 async function embedHelpDocs(...files) {

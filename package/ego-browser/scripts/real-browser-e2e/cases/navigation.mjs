@@ -1,7 +1,6 @@
-export function navigationCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    const home = await resetHome();
+import { caseBody } from "./shared.mjs";
+
+export const navigationCase = caseBody(`const home = await resetHome();
 
     const info = await page.info();
     assertEqual(info.title, "ego-lite helper e2e", "pageInfo reads fixture title");
@@ -104,5 +103,4 @@ export function navigationCase() {
     assert(frame === null || (typeof frame === "string" && frame.length > 0), "iframeTarget returns a non-empty session id or null");
     const missingFrame = await browser.iframeTarget("/missing-frame-for-e2e");
     assertEqual(missingFrame, null, "iframeTarget returns null for missing frames");
-  `;
-}
+`);

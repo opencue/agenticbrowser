@@ -1,7 +1,6 @@
-export function runtimeRegressionCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const runtimeRegressionCase = homeCase(`
 
     /* Issue 2: waitForSelector shares the unified resolver — xpath= must resolve a
        static element (official runtime.mjs only exercises CSS selectors here). */
@@ -87,5 +86,4 @@ export function runtimeRegressionCase() {
       Date.now() - slowStart >= 1000,
       "waitForLoadState blocks until the slow document loads"
     );
-  `;
-}
+`);

@@ -1,7 +1,6 @@
-export function observationCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const observationCase = homeCase(`
 
     const raw = await page.snapshotRaw({ includeStableLocator: true });
     assertIncludes(raw.content || "", "Helper e2e fixture", "snapshotRaw contains fixture content");
@@ -140,5 +139,4 @@ export function observationCase() {
     } else {
       console.log(JSON.stringify({ iframeWarning: "iframe target not available, skipping iframe tests" }));
     }
-  `;
-}
+`);

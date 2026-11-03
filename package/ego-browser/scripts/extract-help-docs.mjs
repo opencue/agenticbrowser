@@ -74,13 +74,18 @@ export function extractHelpDocs(source) {
   return [...docs.values()];
 }
 
-function walkFunctions(node, visitor) {
+function walkFunctions(node, visitor, _parentDeclaratorName) {
   if (!node || typeof node !== "object") return;
   if (
     node.type === "FunctionDeclaration" ||
     node.type === "FunctionExpression"
   ) {
     visitor(node);
+  } else if (node.type === "ArrowFunctionExpression") {
+    // Synthesize a minimal id so extractFunctionName can return a name.
+    if (_parentDeclaratorName) {
+      visitor({ ...node, id: { name: _parentDeclaratorName } });
+    }
   }
   for (const key of Object.keys(node)) {
     if (key === "type" || key === "loc" || key === "start" || key === "end")
@@ -91,7 +96,17 @@ function walkFunctions(node, visitor) {
         if (item && typeof item.type === "string") walkFunctions(item, visitor);
       }
     } else if (child && typeof child.type === "string") {
-      walkFunctions(child, visitor);
+      // When descending into a VariableDeclarator's init, carry the declared
+      // name so an arrow function can be identified.
+      if (
+        node.type === "VariableDeclarator" &&
+        key === "init" &&
+        node.id?.type === "Identifier"
+      ) {
+        walkFunctions(child, visitor, node.id.name);
+      } else {
+        walkFunctions(child, visitor);
+      }
     }
   }
 }

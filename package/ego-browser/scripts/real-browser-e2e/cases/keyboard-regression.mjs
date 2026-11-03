@@ -1,7 +1,6 @@
-export function keyboardRegressionCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const keyboardRegressionCase = homeCase(`
 
     /* Issue 1: fill on type=email replaces the prior value without crashing.
        Before the fix, clearFirst's setSelectionRange threw InvalidStateError on
@@ -46,5 +45,4 @@ export function keyboardRegressionCase() {
     assertEqual(controlledValue, "hello-react", "fill persists value on a react-style controlled input");
     const controlledState = await page.evaluate(() => document.querySelector('#controlled-state').textContent);
     assert(controlledState.startsWith("hello-react"), "controlled state mirror reflects the filled value");
-  `;
-}
+`);

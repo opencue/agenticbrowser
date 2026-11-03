@@ -362,10 +362,6 @@ function caseResultPath(tempDir) {
   return join(tempDir, "case-result.json");
 }
 
-async function readCaseAssertionCount(tempDir, stdout) {
-  return (await readCaseResult(tempDir, stdout)).assertions;
-}
-
 async function readCaseResult(tempDir, stdout) {
   const resultPath = caseResultPath(tempDir);
   try {
