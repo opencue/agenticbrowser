@@ -99,3 +99,34 @@ test("an empty tree renders empty content", () => {
   assert.equal(content, "");
   assert.deepEqual(refs, []);
 });
+
+// --- finding 49: INTERACTIVE_ROLES additions ---
+
+test("image role with no accessible name gets a ref mark", () => {
+  // Icon buttons (role=image, no alt text) must be reachable via @ref.
+  const { content, refs } = renderAxTree([
+    node("1", "RootWebArea", "Page", { backendDOMNodeId: 1, childIds: ["2"] }),
+    node("2", "image", "", { backendDOMNodeId: 42, childIds: [] }),
+  ]);
+  assert.match(content, /image \[@42\]/);
+  assert.equal(refs.length, 1);
+  assert.equal(refs[0].backendNodeId, 42);
+});
+
+test("dialog role with no accessible name is rendered and ref-marked", () => {
+  const { content, refs } = renderAxTree([
+    node("1", "RootWebArea", "Page", { backendDOMNodeId: 1, childIds: ["2"] }),
+    node("2", "dialog", "", { backendDOMNodeId: 99, childIds: [] }),
+  ]);
+  assert.match(content, /dialog \[@99\]/);
+  assert.equal(refs.length, 1);
+});
+
+test("heading with no accessible name is rendered when in INTERACTIVE_ROLES", () => {
+  const { content, refs } = renderAxTree([
+    node("1", "RootWebArea", "Page", { backendDOMNodeId: 1, childIds: ["2"] }),
+    node("2", "heading", "", { backendDOMNodeId: 77, childIds: [] }),
+  ]);
+  assert.match(content, /heading \[@77\]/);
+  assert.equal(refs.length, 1);
+});

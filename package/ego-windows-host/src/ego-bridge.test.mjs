@@ -417,3 +417,108 @@ test("createTaskSpace removes the zombie space when Target.createTarget fails", 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+// --- finding 47: snapshot() wraps CDP errors in EGO_SNAPSHOT_FAILED ---
+
+test("snapshot() wraps a Target.attachToTarget failure in EGO_SNAPSHOT_FAILED", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ego-host-bridge-snap-err-"));
+  try {
+    const hostConnection = fakeConnection(async (method) => {
+      if (method === "Target.createTarget")
+        return { targetId: "t-snap-err" };
+      if (method === "Target.attachToTarget")
+        throw new Error("CDP timeout");
+      return {};
+    });
+    const agentConnection = fakeConnection();
+    const registry = new TaskSpaceRegistry(dir);
+    const ego = createEgoBridge({ hostConnection, agentConnection, registry });
+    const created = await ego.createTaskSpace("snap-err");
+    await ego.useTaskSpace(created.id);
+    await assert.rejects(
+      () => ego.snapshot(),
+      (err) => {
+        assert.equal(
+          err.error_code,
+          "EGO_SNAPSHOT_FAILED",
+          "plain CDP error must be wrapped",
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("snapshot() throws EGO_SNAPSHOT_FAILED when getFullAXTree returns no nodes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ego-host-bridge-snap-nodes-"));
+  try {
+    const hostConnection = fakeConnection(async (method) => {
+      if (method === "Target.createTarget")
+        return { targetId: "t-snap-nodes" };
+      if (method === "Target.attachToTarget")
+        return { sessionId: "sess-nodes" };
+      if (method === "Accessibility.getFullAXTree")
+        return {}; // missing nodes key
+      return {};
+    });
+    const agentConnection = fakeConnection();
+    const registry = new TaskSpaceRegistry(dir);
+    const ego = createEgoBridge({ hostConnection, agentConnection, registry });
+    const created = await ego.createTaskSpace("snap-nodes");
+    await ego.useTaskSpace(created.id);
+    await assert.rejects(
+      () => ego.snapshot(),
+      (err) => {
+        assert.equal(
+          err.error_code,
+          "EGO_SNAPSHOT_FAILED",
+          "missing nodes must produce EGO_SNAPSHOT_FAILED",
+        );
+        return true;
+      },
+    );
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// --- finding 52: completeTaskSpace / handOffTaskSpace return visible ---
+
+test("completeTaskSpace returns visible:true in headed mode", async () => {
+  await withBridge(async ({ ego }) => {
+    await selectFreshSpace(ego);
+    const result = await ego.completeTaskSpace();
+    assert.equal(result.visible, true);
+  });
+});
+
+test("completeTaskSpace returns visible:false when headless:true", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "ego-host-bridge-headless-"));
+  try {
+    const hostConnection = fakeConnection(hostHandler());
+    const agentConnection = fakeConnection();
+    const registry = new TaskSpaceRegistry(dir);
+    const ego = createEgoBridge({
+      hostConnection,
+      agentConnection,
+      registry,
+      headless: true,
+    });
+    const created = await ego.createTaskSpace("hl");
+    await ego.useTaskSpace(created.id);
+    const result = await ego.completeTaskSpace();
+    assert.equal(result.visible, false);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("handOffTaskSpace returns visible:true in headed mode", async () => {
+  await withBridge(async ({ ego }) => {
+    await selectFreshSpace(ego);
+    const result = await ego.handOffTaskSpace();
+    assert.equal(result.visible, true);
+  });
+});
