@@ -45,7 +45,10 @@ export function browserDisplayFlags({
   const requested = (env.EGO_LINUX_WINDOW_BACKEND || "").toLowerCase();
   if (requested === "wayland") return ["--ozone-platform=wayland"];
   if (requested === "x11") return ["--ozone-platform=x11"];
-  if (env.XDG_SESSION_TYPE === "wayland" && env.DISPLAY) {
+  if (
+    (env.XDG_SESSION_TYPE === "wayland" || env.WAYLAND_DISPLAY) &&
+    env.DISPLAY
+  ) {
     return ["--ozone-platform=x11"];
   }
   return [];
@@ -220,7 +223,7 @@ export async function activateWindowByClass(
   const activation = await run("xdotool", ["windowactivate", windowId]);
   if (!activation.ok) return false;
 
-  for (let attempt = 0; attempt < 12; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     const active = await run("xdotool", ["getactivewindow"]);
     if (active.ok && active.stdout.trim()) {
       const owner = await run("xdotool", [
@@ -400,9 +403,24 @@ function powerShellJson(script, { sync = false, timeoutMs = 6000 } = {}) {
   });
 }
 
-/** WQL string literals escape the backslash and the quote, and nothing else. */
+/**
+ * Escape a value for use inside a WQL string literal that is itself embedded
+ * in a PowerShell double-quoted string.
+ *
+ * Two layers require escaping:
+ *   - PowerShell double-quote metacharacters: backtick (escape char → ``) and
+ *     dollar (variable interpolation → `$), which are active even inside the
+ *     single-quoted WQL literal because the enclosing PS string is double-quoted.
+ *   - WQL string literal metacharacters: backslash (→ \\) and single-quote (→ '').
+ *
+ * Backtick must be escaped first to avoid double-escaping the backticks we add.
+ */
 function wqlLiteral(value) {
-  return value.replace(/\\/g, "\\\\").replace(/'/g, "''");
+  return value
+    .replace(/`/g, "``")
+    .replace(/\$/g, "`$")
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "''");
 }
 
 async function exists(target) {
@@ -746,29 +764,35 @@ export function createPlatform({
    * call, so the answer is cached: a process's own ancestry does not change.
    */
   let cachedWindowsAncestry = null;
+  let cachedLinuxAncestry = null;
 
   function processAncestry(limit = 12) {
     if (isWindows) return windowsAncestry(limit);
 
-    const names = [];
-    let pid = "self";
-    for (let depth = 0; depth < limit; depth += 1) {
-      let comm;
-      let status;
-      try {
-        comm = readFileSync(`/proc/${pid}/comm`, "utf8").trim();
-        status = readFileSync(`/proc/${pid}/status`, "utf8");
-      } catch {
-        // The process exited under us, or this is not Linux. Either way the
-        // walk is over and what we have is what we know.
-        break;
+    // A process's ancestry is constant for its lifetime; cache the full walk
+    // and slice to the requested limit, mirroring the Windows branch.
+    if (!cachedLinuxAncestry) {
+      const names = [];
+      let pid = "self";
+      for (let depth = 0; depth < 12; depth += 1) {
+        let comm;
+        let status;
+        try {
+          comm = readFileSync(`/proc/${pid}/comm`, "utf8").trim();
+          status = readFileSync(`/proc/${pid}/status`, "utf8");
+        } catch {
+          // The process exited under us, or this is not Linux. Either way the
+          // walk is over and what we have is what we know.
+          break;
+        }
+        if (comm) names.push(comm);
+        const parent = /^PPid:\s*(\d+)/m.exec(status)?.[1];
+        if (!parent || parent === "0") break;
+        pid = parent;
       }
-      if (comm) names.push(comm);
-      const parent = /^PPid:\s*(\d+)/m.exec(status)?.[1];
-      if (!parent || parent === "0") break;
-      pid = parent;
+      cachedLinuxAncestry = names;
     }
-    return names;
+    return cachedLinuxAncestry.slice(0, limit);
   }
 
   function windowsAncestry(limit) {

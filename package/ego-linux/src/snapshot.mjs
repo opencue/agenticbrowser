@@ -204,6 +204,7 @@ function decodeDocument(document, strings) {
   const decoded = [];
   const children = new Map();
   const byId = new Map();
+  const labelForId = new Map();
 
   for (let i = 0; i < count; i += 1) {
     const attributes = {};
@@ -232,12 +233,16 @@ function decodeDocument(document, strings) {
       children.get(node.parent).push(i);
     }
     if (node.attributes.id) byId.set(node.attributes.id, node);
+    if (node.tag === "label" && node.attributes.for) {
+      labelForId.set(node.attributes.for, node);
+    }
   }
 
   return {
     nodes: decoded,
     children,
     byId,
+    labelForId,
     scrollX: document.scrollOffsetX || 0,
     scrollY: document.scrollOffsetY || 0,
     url: str(document.documentURL),
@@ -302,14 +307,8 @@ function accessibleName(doc, node, role) {
     node.tag === "select"
   ) {
     if (attrs.id) {
-      for (const candidate of doc.nodes) {
-        if (
-          candidate.tag === "label" &&
-          candidate.attributes.for === attrs.id
-        ) {
-          return subtreeText(doc, candidate.index);
-        }
-      }
+      const label = doc.labelForId.get(attrs.id);
+      if (label) return subtreeText(doc, label.index);
     }
     // A wrapping <label> is the other half of the native label association.
     let parent = node.parent;
@@ -472,10 +471,14 @@ function renderDocument(doc, documents, options, out, refs, depth, seenDocs) {
       // A name-from-content node has already printed its whole subtree as its
       // name; recursing would repeat it. Containers must never take this path —
       // their children are where the refs live.
+      // When no aria-label/labelledby override is present, accessibleName()
+      // returns subtreeText() for NAME_FROM_CONTENT roles, so the name equals
+      // the subtree text without recomputing it here.
       if (
         name &&
         NAME_FROM_CONTENT.has(role) &&
-        subtreeText(doc, index) === name
+        !node.attributes["aria-label"] &&
+        !node.attributes["aria-labelledby"]
       ) {
         return;
       }

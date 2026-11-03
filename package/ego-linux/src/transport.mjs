@@ -23,6 +23,7 @@ const OPEN_TIMEOUT_MS = 10000;
 const CALL_TIMEOUT_MS = 30000;
 const INTERNAL_ID_BASE = 1_000_000;
 const DESKTOP_VIEWPORT_MIN_WIDTH = 1000;
+const binaryDecoder = new TextDecoder();
 
 /**
  * A fixed desktop viewport inside a visible Chrome window creates a smaller
@@ -257,7 +258,7 @@ export async function connectCdp(
     const text =
       typeof event.data === "string"
         ? event.data
-        : new TextDecoder().decode(event.data);
+        : binaryDecoder.decode(event.data);
 
     let data;
     try {
