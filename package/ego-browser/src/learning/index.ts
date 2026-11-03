@@ -128,15 +128,32 @@ function isLearningNotePath(siteDir: string, notePath: string) {
   );
 }
 
+// Finding #15: simple in-process cache for findSiteSkill to avoid O(N) manifest-parse
+// scan on every tool call.  Key: "<root>:<siteId>".  Cleared when the root changes
+// (uncommon) or via clearFindSiteSkillCache() for tests.
+const _findSiteSkillCache = new Map<string, { siteDir: string; manifest: LearningManifest }>();
+
+/** @internal exposed for testing only */
+export function clearFindSiteSkillCache(): void {
+  _findSiteSkillCache.clear();
+}
+
 export async function findSiteSkill(
   siteId: string,
   options: any = {},
 ): Promise<{ siteDir: string; manifest: LearningManifest }> {
   const root = options.root || siteSkillsRoot(options.agentWorkspace);
+  const cacheKey = `${root}:${siteId}`;
+  const cached = _findSiteSkillCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
   for (const siteDir of await iterLearningDirs(root)) {
     const manifest = await loadLearningManifest(siteDir);
     if (manifest.id === siteId) {
-      return { siteDir, manifest };
+      const entry = { siteDir, manifest };
+      _findSiteSkillCache.set(cacheKey, entry);
+      return entry;
     }
   }
   throw siteSkillNotFoundError(siteId, root);
