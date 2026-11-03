@@ -1,7 +1,6 @@
-export function pointerClickCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const pointerClickCase = homeCase(`
     console.log(JSON.stringify({ pointerStep: "click ready" }));
 
     assertEqual(await page.evaluate(() => window.__fixtureState.clicks), 0, "click fixture starts at zero");
@@ -48,13 +47,9 @@ export function pointerClickCase() {
       "window.__fixtureState.doubleClicks > " + JSON.stringify(doubleClicksBefore),
       "dblclick fires a DOM dblclick"
     );
-  `;
-}
+`);
 
-export function pointerHoverDragCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+export const pointerHoverDragCase = homeCase(`
     console.log(JSON.stringify({ pointerStep: "hover drag ready" }));
 
     await page.evaluate(() => { window.__fixtureState.hovered = false; });
@@ -67,13 +62,9 @@ export function pointerHoverDragCase() {
     await page.evaluate(() => { window.__fixtureState.dragged = false; });
     await page.mouse.drag(["#drag-source", "#drag-target"], { delay: 10 });
     await waitForJsValue("window.__fixtureState.dragged", true, "drag fires drag source and target events");
-  `;
-}
+`);
 
-export function scrollHelpersCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+export const scrollHelpersCase = homeCase(`
     console.log(JSON.stringify({ pointerStep: "scroll ready" }));
 
     // page.mouse.wheel() routes through CDP while the tab is visible AND focused; otherwise it
@@ -144,14 +135,9 @@ export function scrollHelpersCase() {
       "document.querySelector('#bottom-marker').getBoundingClientRect().top < innerHeight",
       "scrollIntoViewIfNeeded reveals an off-screen element"
     );
-  `;
-}
+`);
 
-export function pointerValidationCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-
+export const pointerValidationCase = homeCase(`
     await assertRejects(
       () => page.mouse.drag(["#drag-source"]),
       "at least two points",
@@ -182,13 +168,9 @@ export function pointerValidationCase() {
       "invalid mouse offset",
       "wheel validates numeric scroll deltas"
     );
-  `;
-}
+`);
 
-export function pointerInteractionRegressionCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+export const pointerInteractionRegressionCase = homeCase(`
     console.log(JSON.stringify({ pointerStep: "interaction regression ready" }));
 
     const rightClickBefore = await page.evaluate(() => window.__fixtureState.pointerEvents.length);
@@ -222,5 +204,4 @@ export function pointerInteractionRegressionCase() {
     await waitForJsValue("window.__fixtureState.checkboxChecked", true, "first click checks the checkbox");
     await page.locator("#checkbox").click();
     await waitForJsValue("window.__fixtureState.checkboxChecked", false, "second click unchecks the checkbox");
-  `;
-}
+`);

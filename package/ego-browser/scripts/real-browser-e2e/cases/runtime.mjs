@@ -1,8 +1,6 @@
-export function waitHelpersCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
 
+export const waitHelpersCase = homeCase(`
     const waitedAt = Date.now();
     await page.waitForTimeout(100);
     assert(Date.now() - waitedAt >= 50, "waitForTimeout pauses for a measurable duration");
@@ -20,14 +18,9 @@ export function waitHelpersCase() {
       false,
       "waitForSelector state:visible rejects hidden elements"
     );
-  `;
-}
+`);
 
-export function fetchHelpersCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-
+export const fetchHelpersCase = homeCase(`
     const serverText = await fetch.server(baseUrl + "/api/text", { timeout: 5 });
     assertEqual(serverText, "server text fixture", "serverFetch reads fixture API");
 
@@ -90,14 +83,9 @@ export function fetchHelpersCase() {
       "HTTP 500",
       "browserFetch reports HTTP errors"
     );
-  `;
-}
+`);
 
-export function cdpJsHelpCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
-
+export const cdpJsHelpCase = homeCase(`
     await cdp("Network.enable");
     await page.evaluate(
       "window.__slowText = '';" +
@@ -148,5 +136,4 @@ export function cdpJsHelpCase() {
 
     const unknownHelp = help("missingHelperForE2E");
     assertIncludes(unknownHelp, "Unknown helper", "help reports unknown helpers");
-  `;
-}
+`);

@@ -1,7 +1,6 @@
-export function keyboardCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const keyboardCase = homeCase(`
 
     await page.locator("#text-input").fill("filled", { timeout: 3000 });
     let value = await page.locator("#text-input").inputValue();
@@ -138,5 +137,4 @@ export function keyboardCase() {
       "three rapid Backspaces delete three characters",
       "window.__fixtureState.keyEvents"
     );
-  `;
-}
+`);

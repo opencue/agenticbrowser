@@ -319,6 +319,13 @@ function main() {
     let killed = 0;
     let survived = 0;
 
+    // Restore the original source on SIGINT so dist/ is never left mutated.
+    const sigintHandler = () => {
+      writeFileSync(srcPath, source, "utf-8");
+      process.exit(130);
+    };
+    process.once("SIGINT", sigintHandler);
+
     for (let i = 0; i < mutations.length; i++) {
       const m = mutations[i];
       const mutated = applyMutation(source, m);
@@ -351,6 +358,9 @@ function main() {
         writeFileSync(srcPath, source, "utf-8");
       }
     }
+
+    // Mutation loop complete — remove the SIGINT guard for this file.
+    process.off("SIGINT", sigintHandler);
 
     totalMutations += mutations.length;
 

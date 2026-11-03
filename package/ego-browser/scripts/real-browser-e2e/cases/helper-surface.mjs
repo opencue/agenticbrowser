@@ -1,7 +1,6 @@
-export function helperSurfaceCase() {
-  return `
-    await taskSpaces.useOrCreate(taskName);
-    await resetHome();
+import { homeCase } from "./shared.mjs";
+
+export const helperSurfaceCase = homeCase(`
     assertEqual(typeof globalThis.page, "object", "page facade is installed");
     assertEqual(typeof page.goto, "function", "page.goto is installed");
     assertEqual(typeof page.locator, "function", "page.locator is installed");
@@ -89,5 +88,4 @@ export function helperSurfaceCase() {
     assertEqual(extracted[0].button, "Click counter", "evaluateAll reads nested text");
     assertIncludes(extracted[0].nav, "/nav-target", "evaluateAll reads nested attributes");
     assertEqual(extracted[0].missing, null, "evaluateAll returns null for missing nested selectors");
-  `;
-}
+`);

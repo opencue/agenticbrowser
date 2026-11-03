@@ -210,8 +210,13 @@ export async function startFixtureServer(taskName) {
       res.end();
       return;
     }
-    res.writeHead(200, { "content-type": "text/html" });
-    res.end(pageHtml("home"));
+    if (url.pathname === "/") {
+      res.writeHead(200, { "content-type": "text/html" });
+      res.end(pageHtml("home"));
+      return;
+    }
+    res.writeHead(404, { "content-type": "text/plain" });
+    res.end("fixture: no route for " + url.pathname);
   });
 
   await new Promise((resolve, reject) => {
