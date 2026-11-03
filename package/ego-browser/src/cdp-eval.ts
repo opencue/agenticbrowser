@@ -74,7 +74,14 @@ export async function evaluate(pageFunction, arg = undefined) {
   if (hasReturnStatement(expression) && !expression.trim().startsWith("(")) {
     expression = `(function(){${expression}})()`;
   }
-  return runtimeEvaluate(expression, sessionId, true);
+  try {
+    return await runtimeEvaluate(expression, sessionId, true);
+  } finally {
+    if (sessionId !== undefined) {
+      // Release the ad-hoc session created for the legacy string-targetId form.
+      await cdp("Target.detachFromTarget", { sessionId }).catch(() => {});
+    }
+  }
 }
 
 async function runtimeEvaluate(
@@ -202,6 +209,11 @@ export function hasReturnStatement(expression) {
   let i = 0;
   let stateName = "code";
   let quote = "";
+  // Tracks the last non-whitespace character seen while in code state.
+  // Used to distinguish regex literals (/…/) from division (a / b): a '/'
+  // that follows a value-producing token (identifier, digit, closing bracket
+  // or closing quote) is division; otherwise it opens a regex literal.
+  let lastCodeChar = "";
   while (i < expression.length) {
     const ch = expression[i];
     const next = expression[i + 1] || "";
@@ -209,6 +221,7 @@ export function hasReturnStatement(expression) {
       if (ch === "'" || ch === '"' || ch === "`") {
         stateName = "string";
         quote = ch;
+        lastCodeChar = ch;
         i += 1;
         continue;
       }
@@ -222,12 +235,21 @@ export function hasReturnStatement(expression) {
         i += 2;
         continue;
       }
+      // Regex literal: '/' not following a value-producing token.
+      if (ch === "/" && !/[A-Za-z0-9_)\]'"]/.test(lastCodeChar)) {
+        stateName = "regex_literal";
+        i += 1;
+        continue;
+      }
       if (expression.startsWith("return", i)) {
         const before = i > 0 ? expression[i - 1] : "";
         const after = expression[i + 6] || "";
         if (!/[A-Za-z0-9_]/.test(before) && !/[A-Za-z0-9_]/.test(after)) {
           return true;
         }
+      }
+      if (ch !== " " && ch !== "\t" && ch !== "\n" && ch !== "\r") {
+        lastCodeChar = ch;
       }
       i += 1;
       continue;
@@ -255,9 +277,51 @@ export function hasReturnStatement(expression) {
       }
       if (ch === quote) {
         stateName = "code";
+        lastCodeChar = quote; // closing quote signals a value token
         quote = "";
       }
       i += 1;
+      continue;
+    }
+    if (stateName === "regex_literal") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "[") {
+        stateName = "regex_char_class";
+        i += 1;
+        continue;
+      }
+      if (ch === "/") {
+        stateName = "code";
+        // A regex literal is a value; mark it so the next '/' is treated as
+        // division, not another regex start.
+        lastCodeChar = ")";
+        i += 1;
+        // Skip regex flags (g, i, m, s, u, v, y, d)
+        while (
+          i < expression.length &&
+          expression[i] >= "a" &&
+          expression[i] <= "z"
+        ) {
+          i += 1;
+        }
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+    if (stateName === "regex_char_class") {
+      if (ch === "\\") {
+        i += 2;
+        continue;
+      }
+      if (ch === "]") {
+        stateName = "regex_literal";
+      }
+      i += 1;
+      continue;
     }
   }
   return false;

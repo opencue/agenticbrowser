@@ -499,3 +499,80 @@ test("evaluate attaches to a target session when legacy target id is given", asy
     restore();
   }
 });
+
+test("evaluate detaches the ad-hoc session after evaluate with target id (finding [0])", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "sess-detach" };
+      }
+      if (method === "Runtime.evaluate") {
+        return { result: { type: "number", value: 1 } };
+      }
+      return {};
+    },
+  });
+  try {
+    await evaluate("1", "target-xyz");
+    const detach = calls.find(([m]) => m === "Target.detachFromTarget");
+    assert.ok(detach, "Target.detachFromTarget must be called");
+    assert.deepEqual(detach[1], { sessionId: "sess-detach" });
+  } finally {
+    restore();
+  }
+});
+
+test("evaluate detaches the session even when evaluate throws (finding [0])", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride: async (method, params, sessionId) => {
+      calls.push([method, params, sessionId]);
+      if (method === "Target.attachToTarget") {
+        return { sessionId: "sess-detach-err" };
+      }
+      if (method === "Runtime.evaluate") {
+        return {
+          result: { type: "object", subtype: "error" },
+          exceptionDetails: { text: "Uncaught" },
+        };
+      }
+      return {};
+    },
+  });
+  try {
+    await assert.rejects(() => evaluate("throw 1", "target-err"));
+    const detach = calls.find(([m]) => m === "Target.detachFromTarget");
+    assert.ok(detach, "Target.detachFromTarget called on error path");
+    assert.deepEqual(detach[1], { sessionId: "sess-detach-err" });
+  } finally {
+    restore();
+  }
+});
+
+/* ------------------------------------------------------------------ */
+/*  hasReturnStatement — regex literal handling (finding [4])         */
+/* ------------------------------------------------------------------ */
+
+test("hasReturnStatement does not false-positive on regex literals containing 'return'", () => {
+  assert.equal(hasReturnStatement("/return\\b/i.test(expr)"), false);
+  assert.equal(hasReturnStatement("/return/g"), false);
+  assert.equal(hasReturnStatement("const re = /return/; re.test(x)"), false);
+});
+
+test("hasReturnStatement still detects return after a regex literal", () => {
+  // regex literal followed by actual return statement
+  assert.equal(hasReturnStatement("/return/.test(x); return x"), true);
+});
+
+test("hasReturnStatement handles regex with character classes containing 'return'", () => {
+  assert.equal(hasReturnStatement("/[return]/"), false);
+});
+
+test("hasReturnStatement handles division (not a regex)", () => {
+  // Division after an identifier: a / b — the '/' follows 'a' (identifier char)
+  // so it is NOT treated as a regex start.
+  assert.equal(hasReturnStatement("a / b"), false);
+  assert.equal(hasReturnStatement("a / return"), true);
+});
