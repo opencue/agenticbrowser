@@ -589,7 +589,6 @@ export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
 
 async function launch({ headless }) {
   const binary = await resolveBrowserBinary();
-  const debugPort = await allocateDebugPort();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
@@ -601,7 +600,12 @@ async function launch({ headless }) {
     ...LAUNCH_FLAGS,
     ...browserDisplayFlags({ headless }),
     `${PROFILE_FLAG}${PROFILE_DIR}`,
-    `--remote-debugging-port=${debugPort}`,
+    // Let Chrome pick a free port (0 = OS-assigned). The actual port is
+    // discovered by reading DevToolsActivePort, which waitForEndpoint does on
+    // every attempt. This avoids the TOCTOU window that a pre-allocated port
+    // creates between release and Chrome binding, and also handles the
+    // ProcessSingleton race where Chrome may restart on a different port.
+    "--remote-debugging-port=0",
     "--remote-debugging-address=127.0.0.1",
     ...browserStartupFlags({ headless }),
   ];
@@ -612,9 +616,7 @@ async function launch({ headless }) {
   );
   child.unref();
 
-  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR, {
-    port: debugPort,
-  });
+  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR);
   await writeBrowserState({
     port,
     wsUrl,

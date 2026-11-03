@@ -1,9 +1,12 @@
+import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { browserStatus } from "./chrome.mjs";
 import { PROFILE_DIR, STATE_DIR, TASK_SPACE_FILE } from "./paths.mjs";
 import {
   browserExecutableVersion,
+  dataRoot,
   IS_WINDOWS,
   resolveBrowserBinary,
 } from "./platform.mjs";
@@ -76,6 +79,33 @@ export async function collectDoctor({
 
   const harnessBuilt = Boolean(harnessPath) && (await exists(harnessPath));
   if (!harnessBuilt) issues.push(`harness build missing: ${harnessPath}`);
+
+  // On Linux, verify that the Node.js binary pinned in the installed desktop
+  // entry still exists and is executable. A node version switch via nvm/fnm/asdf
+  // silently points process.execPath somewhere else and breaks clicking the icon.
+  if (!IS_WINDOWS) {
+    const desktopEntryPath = join(
+      dataRoot(),
+      "applications",
+      "ego-lite-linux.desktop",
+    );
+    try {
+      const entryText = await readFile(desktopEntryPath, "utf8");
+      const execLine = entryText.split("\n").find((l) => l.startsWith("Exec="));
+      if (execLine) {
+        const execBinary = execLine.slice("Exec=".length).split(" ")[0];
+        try {
+          await access(execBinary, constants.X_OK);
+        } catch {
+          issues.push(
+            `desktop entry node binary not found: ${execBinary}; re-run --install-desktop-entry`,
+          );
+        }
+      }
+    } catch {
+      // No desktop entry installed — nothing to check.
+    }
+  }
 
   const nodeMajor = Number(process.versions.node.split(".", 1)[0]);
   if (nodeMajor < 22)

@@ -63,7 +63,7 @@ describe("the cursor survives a navigation", () => {
     // A navigation replaces the document the overlay lives in. This is the
     // event that has to put it back.
     cdp.events.get("Page.loadEventFired")();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise(setImmediate);
 
     const drawn = renderedPayloads(cdp);
     assert.ok(drawn.length > before, "the load triggers a render");
@@ -85,7 +85,7 @@ describe("the cursor survives a navigation", () => {
     await cursor.watchPage();
     await cursor.watchPage();
     cursor.moveTo(10, 10);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise(setImmediate);
 
     assert.deepEqual(cdp.claimed, ["session-1"]);
     assert.equal(
@@ -100,7 +100,7 @@ describe("the cursor survives a navigation", () => {
     const cursor = createCursorApi(cdp, { listTabs });
 
     cursor.reading();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise(setImmediate);
     assert.equal(
       renderedPayloads(cdp).at(-1)?.visible,
       true,
@@ -110,7 +110,11 @@ describe("the cursor survives a navigation", () => {
     await cursor.dismiss();
 
     const last = renderedPayloads(cdp).at(-1);
-    assert.equal(last?.visible, false, "the final render removes agent presence");
+    assert.equal(
+      last?.visible,
+      false,
+      "the final render removes agent presence",
+    );
     assert.equal(last?.read, null, "no reading sweep survives dismissal");
   });
 });
