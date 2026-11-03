@@ -48,7 +48,11 @@ test("validateLearning accepts hostname without port", async () => {
   const root = await mkdtemp(join(tmpdir(), "ego-val-test-"));
   const siteDir = await makeSiteDir(root, "site-ok", BASE_MANIFEST("site-ok"));
   const errors = await validateLearning(siteDir);
-  assert.equal(errors.length, 0, `Unexpected errors: ${JSON.stringify(errors)}`);
+  assert.equal(
+    errors.length,
+    0,
+    `Unexpected errors: ${JSON.stringify(errors)}`,
+  );
 });
 
 // Finding #12: browser-tool source must be a bare function expression
@@ -75,7 +79,9 @@ test("validateLearning rejects browser tool with export statement", async () => 
   );
   const errors = await validateLearning(siteDir);
   assert.ok(
-    errors.some((e) => e.includes("my_tool") && e.includes("bare function expression")),
+    errors.some(
+      (e) => e.includes("my_tool") && e.includes("bare function expression"),
+    ),
     `Expected source-shape error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -110,7 +116,7 @@ test("validateLearning rejects unknown top-level keys", async () => {
   const root = await mkdtemp(join(tmpdir(), "ego-val-test-"));
   const siteDir = await makeSiteDir(root, "site-unk", {
     ...BASE_MANIFEST("site-unk"),
-    nodeTool: {},  // typo — should be nodeTools
+    nodeTool: {}, // typo — should be nodeTools
   });
   const errors = await validateLearning(siteDir);
   assert.ok(
@@ -128,7 +134,9 @@ test("validateLearning flags redundant explicit subdomain covered by wildcard", 
   });
   const errors = await validateLearning(siteDir);
   assert.ok(
-    errors.some((e) => e.includes("www.example.com") && e.includes("redundant")),
+    errors.some(
+      (e) => e.includes("www.example.com") && e.includes("redundant"),
+    ),
     `Expected redundancy error, got: ${JSON.stringify(errors)}`,
   );
 });
@@ -136,8 +144,16 @@ test("validateLearning flags redundant explicit subdomain covered by wildcard", 
 // Finding #10: cross-site domain collision
 test("validateLearnings detects cross-site domain collision", async () => {
   const root = await mkdtemp(join(tmpdir(), "ego-val-test-"));
-  await makeSiteDir(root, "site-x", { ...BASE_MANIFEST("site-x"), domains: ["clash.com"] });
-  await makeSiteDir(root, "site-y", { ...BASE_MANIFEST("site-y"), id: "site-y", name: "Site Y", domains: ["clash.com"] });
+  await makeSiteDir(root, "site-x", {
+    ...BASE_MANIFEST("site-x"),
+    domains: ["clash.com"],
+  });
+  await makeSiteDir(root, "site-y", {
+    ...BASE_MANIFEST("site-y"),
+    id: "site-y",
+    name: "Site Y",
+    domains: ["clash.com"],
+  });
   const errors = await validateLearnings(root);
   assert.ok(
     errors.some((e) => e.includes("collision") && e.includes("clash.com")),

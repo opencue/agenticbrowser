@@ -131,7 +131,10 @@ function isLearningNotePath(siteDir: string, notePath: string) {
 // Finding #15: simple in-process cache for findSiteSkill to avoid O(N) manifest-parse
 // scan on every tool call.  Key: "<root>:<siteId>".  Cleared when the root changes
 // (uncommon) or via clearFindSiteSkillCache() for tests.
-const _findSiteSkillCache = new Map<string, { siteDir: string; manifest: LearningManifest }>();
+const _findSiteSkillCache = new Map<
+  string,
+  { siteDir: string; manifest: LearningManifest }
+>();
 
 /** @internal exposed for testing only */
 export function clearFindSiteSkillCache(): void {
