@@ -221,29 +221,11 @@ If `command -v` fails, put `~/.local/bin` on `PATH` (see below) and retry.
 
 ---
 
-## Install steps (macOS only)
+## macOS is not supported by this fork
 
-The install script lives at `scripts/install.sh` in this skill and supports **macOS only**. It will:
+This repository (`opencue/agenticbrowser`) is the Linux and Windows port. macOS is not supported here — the install script that was previously listed in this section rejects non-Linux systems at startup.
 
-- Download the ego lite installer (a DMG) for your CPU architecture (arm64 / x64).
-- Install `ego lite.app` to `/Applications` (falling back to `~/Applications` when needed).
-- Strip the quarantine attribute to keep Gatekeeper from blocking the first launch.
-- After installing, launch the `ego lite` app.
-
-Run the script (use the script's actual path under this skill's directory):
-
-```bash
-sh skills/ego-browser/scripts/install.sh
-```
-
-After installing, the script opens the ego lite app directly. If ego lite is already installed, the script skips the download and opens the app directly.
-
-After the script opens the ego lite app, the user completes the first-run onboarding in the app:
-
-- Choose to import data from Chrome or another browser as needed.
-- Onboarding registers the `ego-browser` command on the PATH (usually under `~/.local/bin`).
-
-Onboarding is a step the user completes in the GUI. After the script opens ego lite, wait for the user to confirm they've finished onboarding before continuing.
+For macOS, use the upstream ego lite app from <https://lite.ego.app/>.
 
 ---
 

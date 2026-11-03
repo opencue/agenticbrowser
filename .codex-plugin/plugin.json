@@ -1,14 +1,14 @@
 {
   "name": "ego-lite",
-  "version": "1.2.5",
+  "version": "1.2.6-linux.1",
   "description": "Browser automation for AI agents through ego lite.",
   "author": {
     "name": "CitroLabs",
     "email": "contact@citrolabs.ai",
     "url": "https://github.com/citrolabs"
   },
-  "homepage": "https://lite.ego.app/document/",
-  "repository": "https://github.com/citrolabs/ego-lite",
+  "homepage": "https://github.com/opencue/agenticbrowser",
+  "repository": "https://github.com/opencue/agenticbrowser",
   "license": "MIT",
   "keywords": ["browser-automation", "ai-agents", "ego-browser"],
   "skills": "./skills/",
