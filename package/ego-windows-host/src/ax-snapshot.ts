@@ -26,6 +26,17 @@ const INTERACTIVE_ROLES = new Set([
   "switch",
   "tab",
   "textbox",
+  // Structural/container roles that should appear even without an accessible
+  // name — absent from the original set but present in the linux-host list.
+  // Icon buttons (role=image, no alt text) and unlabeled dialogs are common in
+  // toolbar-heavy web apps and must be reachable via @ref.
+  "alert",
+  "alertdialog",
+  "dialog",
+  "heading",
+  "image",
+  "img",
+  "treeitem",
 ]);
 
 // Roles that carry no information of their own; their children are promoted.

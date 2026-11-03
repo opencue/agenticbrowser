@@ -56,6 +56,8 @@ type BridgeOptions = {
   agentConnection: CdpConnection;
   registry: TaskSpaceRegistry;
   browserVersion?: string;
+  /** True when the browser was launched headless; used to report visible:false. */
+  headless?: boolean;
 };
 
 export function createEgoBridge(options: BridgeOptions) {
@@ -207,7 +209,7 @@ export function createEgoBridge(options: BridgeOptions) {
         return NOT_SELECTED;
       }
       registry.setOwnership(space.id, "agentDelegatedToUser");
-      return {};
+      return { visible: !options.headless };
     },
 
     async takeOverTaskSpace() {
@@ -226,7 +228,7 @@ export function createEgoBridge(options: BridgeOptions) {
         return NOT_SELECTED;
       }
       registry.setOwnership(space.id, "agentDelegatedToUser");
-      return {};
+      return { visible: !options.headless };
     },
 
     async closeTaskSpace() {
@@ -260,25 +262,43 @@ export function createEgoBridge(options: BridgeOptions) {
           error_code: "EGO_SNAPSHOT_FAILED",
         });
       }
-      const attached = await hostConnection.request("Target.attachToTarget", {
-        targetId,
-        flatten: true,
-      });
-      const sessionId = attached.sessionId;
+      // Outer try/catch ensures every failure path — including a CDP timeout
+      // or socket drop on Target.attachToTarget — surfaces as EGO_SNAPSHOT_FAILED
+      // rather than a plain Error without error_code. Already-coded ego errors
+      // (e.g. EGO_TASK_SPACE_USER_IN_CONTROL) are re-thrown unchanged.
       try {
-        await hostConnection.request("Accessibility.enable", {}, sessionId);
-        const tree = await hostConnection.request(
-          "Accessibility.getFullAXTree",
-          {},
-          sessionId,
-        );
-        return renderAxTree(tree.nodes || [], {
-          maxResultLength: snapshotOptions.maxResultLength,
+        const attached = await hostConnection.request("Target.attachToTarget", {
+          targetId,
+          flatten: true,
         });
-      } finally {
-        hostConnection
-          .request("Target.detachFromTarget", { sessionId })
-          .catch(() => {});
+        const sessionId = attached.sessionId;
+        try {
+          await hostConnection.request("Accessibility.enable", {}, sessionId);
+          const tree = await hostConnection.request(
+            "Accessibility.getFullAXTree",
+            {},
+            sessionId,
+          );
+          if (!Array.isArray(tree.nodes)) {
+            throw egoError({
+              error: "Accessibility.getFullAXTree returned no nodes",
+              error_code: "EGO_SNAPSHOT_FAILED",
+            });
+          }
+          return renderAxTree(tree.nodes, {
+            maxResultLength: snapshotOptions.maxResultLength,
+          });
+        } finally {
+          hostConnection
+            .request("Target.detachFromTarget", { sessionId })
+            .catch(() => {});
+        }
+      } catch (err: any) {
+        if (err?.error_code) throw err;
+        throw egoError({
+          error: String(err?.message ?? err),
+          error_code: "EGO_SNAPSHOT_FAILED",
+        });
       }
     },
 

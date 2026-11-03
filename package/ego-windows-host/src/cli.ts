@@ -94,6 +94,7 @@ export async function main(argv = process.argv.slice(2)) {
     agentConnection,
     registry,
     browserVersion: `${endpoint.Browser || "chromium"} (ego-windows-host)`,
+    headless: config.headless,
   });
 
   // The runtime reads globalThis.ego at call time, so the bridge must exist
