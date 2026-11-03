@@ -771,7 +771,7 @@ test("ensureSession lazily creates the first background target when a space is e
   }
 });
 
-test("ensureSession always re-attaches when TTL has expired, even for the same target", async () => {
+test("ensureSession keeps the session for the same target when TTL has expired", async () => {
   const calls = installAutoEgo();
   try {
     state.sessionId = "existing";
@@ -779,14 +779,12 @@ test("ensureSession always re-attaches when TTL has expired, even for the same t
     state.sessionAt = Date.now() - 3000; // force re-entry past TTL
 
     const result = await ensureSession();
-    const attach = calls.find((c) => c.method === "Target.attachToTarget");
-    assert.ok(
-      attach,
-      "re-attaches even when target unchanged to verify liveness",
+    // A re-attach would mint a new session id and orphan the old one.
+    assert.equal(
+      calls.find((c) => c.method === "Target.attachToTarget"),
+      undefined,
     );
-    assert.equal(attach.params.targetId, "tab-1");
-    assert.equal(typeof result, "string");
-    assert.ok(result.length > 0);
+    assert.equal(result, "existing");
   } finally {
     cleanup();
   }

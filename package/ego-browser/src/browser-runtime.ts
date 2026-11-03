@@ -215,24 +215,27 @@ export async function ensureSession() {
         throw new Error("no active tab to attach session");
       }
       const targetId = active.targetId;
-      // Always re-attach when TTL has expired: Chrome reuses the existing
-      // session cheaply and confirms liveness, catching silent renderer crashes
-      // that did not send Target.detachedFromTarget.
-      const attached = await rawCdp(
-        "Target.attachToTarget",
-        { targetId, flatten: true },
-        undefined,
-      );
-      const sid = attached.result?.sessionId;
-      if (!sid) {
-        throw new Error("Target.attachToTarget returned no sessionId");
-      }
-      state.sessionId = sid;
-      state.sessionTargetId = targetId;
-      // Propagate a per-target crash mark to the new session so a re-attach
-      // after TTL expiry or invalidateSession() does not bypass the guard.
-      if (crashedTargets.has(targetId)) {
-        crashedSessions.set(sid, crashedTargets.get(targetId)!);
+      // Same target on TTL expiry keeps its session: every attach mints a new
+      // session id (dropping domain state and session-scoped subscribers) and
+      // the old one is never detached. A dead session is caught by
+      // browserCdp's "Session not found" retry, which invalidates and re-attaches.
+      if (targetId !== state.sessionTargetId || !state.sessionId) {
+        const attached = await rawCdp(
+          "Target.attachToTarget",
+          { targetId, flatten: true },
+          undefined,
+        );
+        const sid = attached.result?.sessionId;
+        if (!sid) {
+          throw new Error("Target.attachToTarget returned no sessionId");
+        }
+        state.sessionId = sid;
+        state.sessionTargetId = targetId;
+        // Propagate a per-target crash mark to the new session so a re-attach
+        // after TTL expiry or invalidateSession() does not bypass the guard.
+        if (crashedTargets.has(targetId)) {
+          crashedSessions.set(sid, crashedTargets.get(targetId)!);
+        }
       }
       await enablePageEvents(state.sessionId);
       state.sessionAt = Date.now();
