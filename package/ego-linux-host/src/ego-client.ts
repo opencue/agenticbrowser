@@ -60,7 +60,14 @@ export async function connectHost(
   }
 
   function onData(chunk: Buffer | string): void {
-    for (const line of lineBuf.push(chunk)) {
+    let lines: string[];
+    try {
+      lines = lineBuf.push(chunk);
+    } catch {
+      socket.destroy();
+      return;
+    }
+    for (const line of lines) {
       let msg: unknown;
       try {
         msg = decodeLine(line);

@@ -486,7 +486,14 @@ export async function startDaemon(
     const lineBuf = new LineBuffer();
 
     socket.on("data", (chunk) => {
-      const lines = lineBuf.push(chunk);
+      let lines: string[];
+      try {
+        lines = lineBuf.push(chunk);
+      } catch {
+        clients.delete(socket);
+        socket.destroy();
+        return;
+      }
       for (const line of lines) {
         void (async () => {
           let id = -1;
