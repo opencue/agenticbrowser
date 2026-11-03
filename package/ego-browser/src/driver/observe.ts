@@ -12,6 +12,7 @@ import {
   ensureSession,
   isBrowserRuntime,
   pendingDialog,
+  subscribeBrowserEvent,
 } from "../browser-runtime.js";
 import { buildEgoError } from "../ego-errors.js";
 import { resolveElementCenter } from "../element-resolver.js";
@@ -46,6 +47,20 @@ type ScreenshotOptions = {
 // CDP response deadline. Keep the larger allowance local to screenshot capture
 // so a stalled command elsewhere still fails fast.
 const SCREENSHOT_TIMEOUT_MS = 60000;
+
+// DPR (devicePixelRatio) is stable for the lifetime of a browser session: it
+// only changes when Emulation.setDeviceMetricsOverride is called.  Cache the
+// value after the first read, keyed by sessionId so that a tab switch (which
+// produces a new sessionId via ensureSession()) causes a fresh read while
+// repeated screenshots within the same session skip the Runtime.evaluate
+// round-trip.  Invalidate when the Emulation override changes; as those
+// commands are not CDP push events we also reset on Page.frameNavigated so
+// any emulation change applied around a navigation is reflected.
+type DprCache = { sessionId: string | undefined; value: number };
+let dprCache: DprCache | null = null;
+subscribeBrowserEvent("Page.frameNavigated", undefined, () => {
+  dprCache = null;
+});
 
 /**
  * Drain the page/CDP events buffered since the last call.
@@ -137,7 +152,13 @@ export async function screenshot(options: ScreenshotOptions = {}) {
     // Skip the Runtime.evaluate/pageInfo sizing probes in that mode and use the
     // exact Page.captureScreenshot allowlisted by the Linux transport.
     if (!state.taskSpaceReadOnly && !pendingDialog()) {
-      const dpr = Number(await evaluate("window.devicePixelRatio")) || 1;
+      let dpr: number;
+      if (dprCache && dprCache.sessionId === state.sessionId) {
+        dpr = dprCache.value;
+      } else {
+        dpr = Number(await evaluate("window.devicePixelRatio")) || 1;
+        dprCache = { sessionId: state.sessionId, value: dpr };
+      }
       const cssScale = 1 / dpr;
       if (options.clip) {
         params.clip = { scale: cssScale, ...options.clip };

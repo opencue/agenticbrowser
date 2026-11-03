@@ -200,3 +200,83 @@ test("drainEvents returns a thenable, so .then/.catch chain instead of throwing"
   assert.equal(typeof pending.catch, "function");
   assert.ok(Array.isArray(await pending.catch(() => "unreachable")));
 });
+
+// Finding 91: DPR must be read only once per session (cached).
+// We extend withCdpRuntime's sendCDPMessage to return a proper pageInfo JSON
+// for Runtime.evaluate calls that don't look like the DPR probe.
+test("screenshot reads DPR only once per session across multiple calls", async () => {
+  const writes = [];
+  const restore = setOverrides({
+    async writeFile(path, data) {
+      writes.push({ path, data });
+    },
+  });
+  const pageInfoJson = JSON.stringify({
+    url: "https://example.com/",
+    title: "Example",
+    w: 1280,
+    h: 800,
+    sx: 0,
+    sy: 0,
+    pw: 1280,
+    ph: 800,
+  });
+  try {
+    const previous = globalThis.ego;
+    const sent = [];
+    const dprRuntime = {
+      async listTabs() {
+        return {
+          tabs: [{ targetId: "target-dpr", active: true, title: "Example", url: "https://example.com/" }],
+        };
+      },
+      sendCDPMessage(payload) {
+        const request = JSON.parse(payload);
+        sent.push(request);
+        let result = {};
+        if (request.method === "Target.attachToTarget") {
+          result = { sessionId: "session-dpr" };
+        } else if (request.method === "Page.captureScreenshot") {
+          result = { data: Buffer.from("png").toString("base64") };
+        } else if (request.method === "Runtime.evaluate") {
+          // DPR probe returns a number string; pageInfo probe returns the JSON object.
+          result = request.params?.expression?.includes("devicePixelRatio")
+            ? { result: { value: 2 } }
+            : { result: { value: pageInfoJson } };
+        }
+        queueMicrotask(() =>
+          dprRuntime.onCDPMessage(JSON.stringify({ id: request.id, result })),
+        );
+      },
+    };
+    globalThis.ego = dprRuntime;
+
+    // Bring up a fresh session.
+    const { invalidateSession } = await import("../../dist/src/browser-runtime.js");
+    invalidateSession();
+
+    try {
+      await screenshot({ path: "/tmp/ego-browser-dpr-shot-1.png" });
+      const dprAfterFirst = sent.filter(
+        (r) => r.method === "Runtime.evaluate" &&
+               JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
+      ).length;
+      sent.length = 0;
+
+      await screenshot({ path: "/tmp/ego-browser-dpr-shot-2.png" });
+      const dprAfterSecond = sent.filter(
+        (r) => r.method === "Runtime.evaluate" &&
+               JSON.stringify(r.params?.expression).includes("devicePixelRatio"),
+      ).length;
+
+      assert.equal(dprAfterFirst, 1, "first screenshot must fetch DPR");
+      assert.equal(dprAfterSecond, 0, "second screenshot in same session must reuse cached DPR");
+    } finally {
+      invalidateSession();
+      if (previous === undefined) delete globalThis.ego;
+      else globalThis.ego = previous;
+    }
+  } finally {
+    restore();
+  }
+});

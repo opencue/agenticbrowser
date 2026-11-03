@@ -688,3 +688,48 @@ test("setInputValue assigns .value and dispatches input and change events", asyn
     "setInputValue dispatches events",
   );
 });
+
+// Finding 9: supplementary-plane codepoints (emoji) must use Input.insertText
+test("pressSequentially sends emoji via insertText, not dispatchKeyEvent", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      return {};
+    },
+  });
+  try {
+    await pressSequentially("😀");
+  } finally {
+    restore();
+  }
+
+  const insertCalls = calls.filter((c) => c.method === "Input.insertText");
+  const keyCalls = calls.filter((c) => c.method === "Input.dispatchKeyEvent");
+  assert.equal(insertCalls.length, 1, "emoji must go through Input.insertText");
+  assert.equal(insertCalls[0].params.text, "😀");
+  assert.equal(keyCalls.length, 0, "emoji must not go through Input.dispatchKeyEvent");
+});
+
+test("pressSequentially sends ASCII through dispatchKeyEvent", async () => {
+  const calls = [];
+  const restore = setOverrides({
+    cdpOverride(method, params) {
+      calls.push({ method, params });
+      return {};
+    },
+  });
+  try {
+    await pressSequentially("ab");
+  } finally {
+    restore();
+  }
+
+  const keyCalls = calls.filter((c) => c.method === "Input.dispatchKeyEvent");
+  assert.ok(keyCalls.length >= 2, "ASCII chars must go through dispatchKeyEvent");
+  assert.equal(
+    calls.some((c) => c.method === "Input.insertText"),
+    false,
+    "ASCII chars must not use insertText",
+  );
+});

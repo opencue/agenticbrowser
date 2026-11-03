@@ -10,6 +10,27 @@ import {
 } from "../dist/src/element-resolver.js";
 import { RefMap } from "../dist/src/ref-map.js";
 
+// ---------------------------------------------------------------------------
+// Helpers shared by multiple tests
+// ---------------------------------------------------------------------------
+
+function fakeCdpWithAx(axTree, extraHandler) {
+  return new FakeCDP(async (method, params) => {
+    if (extraHandler) {
+      const r = await extraHandler(method, params);
+      if (r !== undefined) return r;
+    }
+    if (method === "Accessibility.getFullAXTree") return axTree;
+    if (method === "DOM.getBoxModel") {
+      return { model: { content: [10, 20, 30, 20, 30, 60, 10, 60] } };
+    }
+    if (method === "DOM.resolveNode") {
+      return { object: { objectId: "resolved-object" } };
+    }
+    return {};
+  });
+}
+
 class FakeCDP {
   constructor(handler) {
     this.calls = [];
@@ -780,4 +801,169 @@ test("scoped locator center uses the matched descendant", async () => {
     selector,
   );
   assert.deepEqual(point, { x: 30, y: 40, sessionId: undefined });
+});
+
+// ---------------------------------------------------------------------------
+// Regression tests for audit findings
+// ---------------------------------------------------------------------------
+
+// Finding 5: non-stale errors must not fall through to role/name lookup
+test("transport error in resolveElementCenter does not fall through to role/name lookup", async () => {
+  const refMap = new RefMap();
+  refMap.add("5", 100, "button", "ok");
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "DOM.getBoxModel") {
+      throw new Error("WebSocket connection dropped");
+    }
+    return {};
+  });
+  await assert.rejects(
+    () => resolveElementCenter(cdp, undefined, refMap, "@5"),
+    (error) => {
+      assert.match(error.message, /WebSocket connection dropped/);
+      return true;
+    },
+  );
+  assert.ok(
+    !cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+    "transport error must not fall back to role/name lookup",
+  );
+});
+
+test("transport error in resolveElementObjectId does not fall through to role/name lookup", async () => {
+  const refMap = new RefMap();
+  refMap.add("5", 100, "button", "ok");
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "DOM.resolveNode") {
+      throw new Error("WebSocket connection dropped");
+    }
+    return {};
+  });
+  await assert.rejects(
+    () => resolveElementObjectId(cdp, undefined, refMap, "@5"),
+    (error) => {
+      assert.match(error.message, /WebSocket connection dropped/);
+      return true;
+    },
+  );
+  assert.ok(
+    !cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+    "transport error must not fall back to role/name lookup",
+  );
+});
+
+// Finding 8: missing objectId after AX fallback must be transient, not permanent
+test("resolveElementObjectId classifies missing objectId as transient after AX fallback", async () => {
+  const refMap = new RefMap();
+  refMap.add("5", 100, "button", "ok");
+  let resolveNodeCalls = 0;
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "DOM.resolveNode") {
+      resolveNodeCalls += 1;
+      if (resolveNodeCalls === 1) {
+        // First call: stale node, triggers AX-tree fallback
+        throw new Error("No node with given id found");
+      }
+      // Second call: found in AX tree but DOM.resolveNode returns no objectId
+      return { object: {} };
+    }
+    if (method === "Accessibility.getFullAXTree") {
+      return AX_TREE;
+    }
+    return {};
+  });
+  await assert.rejects(
+    () => resolveElementObjectId(cdp, undefined, refMap, "@5"),
+    (error) => {
+      assert.ok(error instanceof ElementResolutionError);
+      assert.equal(error.kind, "transient", "mid-detach node must be transient, not permanent");
+      assert.match(error.message, /No objectId for ref/);
+      return true;
+    },
+  );
+});
+
+// Finding 5 (extension): "Could not compute box model" is a stale-detach error
+// that must trigger the role/name fallback, not propagate as a transport failure.
+test("Could not compute box model falls back to role/name lookup", async () => {
+  const refMap = new RefMap();
+  refMap.add("5", 100, "button", "ok");
+  let boxModelCalls = 0;
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "DOM.getBoxModel") {
+      boxModelCalls += 1;
+      if (boxModelCalls === 1) {
+        throw new Error("Could not compute box model.");
+      }
+      return { model: { content: [0, 0, 10, 0, 10, 10, 0, 10] } };
+    }
+    if (method === "Accessibility.getFullAXTree") {
+      return AX_TREE;
+    }
+    return {};
+  });
+  const point = await resolveElementCenter(cdp, undefined, refMap, "@5");
+  assert.equal(point.x, 5);
+  assert.equal(point.y, 5);
+  assert.ok(
+    cdp.calls.some(([method]) => method === "Accessibility.getFullAXTree"),
+    "detached node must trigger the role/name fallback",
+  );
+});
+
+// Finding 7: resolveLocatorObjectId must use a single Runtime.evaluate call
+test("resolveLocatorObjectId uses a single CDP call for count and fetch", async () => {
+  let evaluateCalls = 0;
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "Runtime.evaluate") {
+      evaluateCalls += 1;
+      return { result: { objectId: "element-1" } };
+    }
+    return {};
+  });
+  const result = await resolveElementObjectId(cdp, undefined, new RefMap(), "loc=css:.item");
+  assert.equal(result.objectId, "element-1");
+  assert.equal(evaluateCalls, 1, "must use exactly one Runtime.evaluate call (not count + find)");
+});
+
+// Finding 7 (nth): nth locator with sufficient elements returns the nth element
+// without requiring strict uniqueness.
+test("resolveLocatorObjectId with nth returns the indexed element atomically", async () => {
+  const cdp = new FakeCDP(async (method) => {
+    if (method === "Runtime.evaluate") {
+      return { result: { objectId: "element-1" } };
+    }
+    return {};
+  });
+  // internal:nth=1 picks the second match; mock returns a handle regardless.
+  const result = await resolveElementObjectId(
+    cdp, undefined, new RefMap(), "internal:nth=1;loc=css:.item",
+  );
+  assert.equal(result.objectId, "element-1");
+});
+
+// Finding 87: Accessibility.getFullAXTree must be cached within one cdp instance
+test("AX tree is cached within the TTL for the same cdp instance", async () => {
+  let axTreeCalls = 0;
+  const cdp = fakeCdpWithAx(AX_TREE, async (method) => {
+    if (method === "Accessibility.getFullAXTree") axTreeCalls += 1;
+  });
+  await resolveElementCenter(cdp, undefined, new RefMap(), 'loc=role:button[name="ok"]');
+  await resolveElementCenter(cdp, undefined, new RefMap(), 'loc=role:button[name="ok"]');
+  assert.equal(axTreeCalls, 1, "AX tree must be fetched only once within the TTL");
+});
+
+test("AX tree cache is not shared across different cdp instances", async () => {
+  let calls1 = 0;
+  let calls2 = 0;
+  const cdp1 = fakeCdpWithAx(AX_TREE, async (method) => {
+    if (method === "Accessibility.getFullAXTree") calls1 += 1;
+  });
+  const cdp2 = fakeCdpWithAx(AX_TREE, async (method) => {
+    if (method === "Accessibility.getFullAXTree") calls2 += 1;
+  });
+  await resolveElementCenter(cdp1, undefined, new RefMap(), 'loc=role:button[name="ok"]');
+  await resolveElementCenter(cdp2, undefined, new RefMap(), 'loc=role:button[name="ok"]');
+  assert.equal(calls1, 1, "cdp1 must fetch the AX tree");
+  assert.equal(calls2, 1, "cdp2 must fetch the AX tree independently");
 });
