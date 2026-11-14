@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { replaceFile } from "./atomic-write.mjs";
 import { BROWSER_STATE_FILE, PROFILE_DIR } from "./paths.mjs";
 import { acquireDirectoryLock } from "./launch-lock.mjs";
+import { LOW_MEMORY_FLAGS } from "./low-memory.mjs";
 import { writePrivateStateFile } from "./private-state.mjs";
 import {
   browserDisplayFlags,
@@ -587,7 +588,7 @@ export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
   await clearStaleCrashMark(profileDir);
 }
 
-async function launch({ headless }) {
+async function launch({ headless, lowMemory = false }) {
   const binary = await resolveBrowserBinary();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
@@ -598,6 +599,7 @@ async function launch({ headless }) {
 
   const args = [
     ...LAUNCH_FLAGS,
+    ...(lowMemory ? LOW_MEMORY_FLAGS : []),
     ...browserDisplayFlags({ headless }),
     `${PROFILE_FLAG}${PROFILE_DIR}`,
     // Let Chrome pick a free port (0 = OS-assigned). The actual port is
@@ -633,7 +635,10 @@ async function launch({ headless }) {
  * already has open when possible. Each heredoc runs in its own short-lived Node
  * process, so the browser — not this process — is what has to persist.
  */
-export async function ensureBrowser({ headless = false } = {}) {
+export async function ensureBrowser({
+  headless = false,
+  lowMemory = false,
+} = {}) {
   if (process.env.EGO_LINUX_CDP_URL) {
     return { wsUrl: process.env.EGO_LINUX_CDP_URL, launched: false };
   }
@@ -663,7 +668,7 @@ export async function ensureBrowser({ headless = false } = {}) {
   try {
     const winner = await runningBrowser();
     if (winner) return winner;
-    return await launch({ headless });
+    return await launch({ headless, lowMemory });
   } finally {
     await release();
   }
