@@ -21,6 +21,7 @@ import { cleanupExpiredArtifacts } from "../src/artifact-retention.mjs";
 import { installDesktopEntry, launchTargets } from "../src/desktop.mjs";
 import { runDoctor } from "../src/doctor.mjs";
 import { acquireLaunchLock } from "../src/launch-lock.mjs";
+import { availableMemoryMb, isLowMemory } from "../src/low-memory.mjs";
 import {
   CHROME_CONFIG_CANDIDATES,
   PROFILE_DIR,
@@ -82,6 +83,9 @@ Port commands:
                             EGO_LINUX_HEADLESS=1 makes that the default, so the
                             agent window never opens over your work; --open
                             still gives you a visible one when you want it
+                            With EGO_LINUX_HEADLESS unset, a launch with less
+                            than EGO_LINUX_LOW_MEMORY_MB (default 4096, 0 = off)
+                            of available memory is headless and trimmed
 `;
 
 async function importChromeProfile() {
@@ -696,7 +700,21 @@ async function main() {
   const envHeadless = !["", "0", "false", "no"].includes(
     (process.env.EGO_LINUX_HEADLESS ?? "").toLowerCase(),
   );
-  const headless = argv.includes("--headless") || envHeadless;
+  // Short on memory, a visible window is the first thing to give up: the browser
+  // starts headless and trimmed instead of being killed mid-task. An explicit
+  // EGO_LINUX_HEADLESS (either way) is the owner's answer and is left alone.
+  // A browser that is already running keeps the mode it was started in.
+  const lowMemory =
+    process.env.EGO_LINUX_HEADLESS === undefined &&
+    isLowMemory(await availableMemoryMb()) &&
+    !(await browserStatus()).running;
+  const headless = argv.includes("--headless") || envHeadless || lowMemory;
+  if (lowMemory) {
+    process.stderr.write(
+      "ego-browser: low on memory, starting the browser headless; " +
+        "run `ego-browser --open` for a visible one\n",
+    );
+  }
   const rest = argv.filter((arg) => arg !== "--headless");
 
   // `--sdk-path <file>` selects which harness bundle to run. Upstream's real
@@ -717,7 +735,7 @@ async function main() {
   // Site skills and learnings live in the repo's skill directory.
   process.env.EGO_BROWSER_AGENT_WORKSPACE ||= SKILL_WORKSPACE.pathname;
 
-  const shim = await createEgoShim({ headless });
+  const shim = await createEgoShim({ headless, lowMemory });
   globalThis.ego = shim.ego;
 
   const { runMain } = await import(harness);

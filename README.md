@@ -351,6 +351,7 @@ Both roots follow `XDG_DATA_HOME` / `XDG_STATE_HOME` when those are set.
 | `EGO_LINUX_CDP_URL`             | Attach to an already-running DevTools endpoint instead of launching one.                        |
 | `EGO_LINUX_BIN_DIR`             | Where `install.sh` links the CLI. Defaults to `~/.local/bin`.                                  |
 | `EGO_LINUX_HEADLESS`            | `1` makes the browser launch headless by default; `--open` still gives a visible window.       |
+| `EGO_LINUX_LOW_MEMORY_MB`       | With `EGO_LINUX_HEADLESS` unset, a launch with less available memory than this (default `4096`) is headless and trimmed; `0` turns it off. |
 | `EGO_LINUX_TASK_SPACE_STORAGE`  | `isolated` or `isolated-sync` to opt into the older context-backed task-space storage.          |
 | `EGO_LINUX_CURSOR`              | `0` hides the agent cursor overlay in screenshots.                                              |
 | `EGO_BROWSER_ARTIFACT_TTL_HOURS`| How long screenshots, failure artifacts, and temp download dirs are kept. Default is 24 hours. |

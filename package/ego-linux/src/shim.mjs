@@ -25,9 +25,15 @@ import {
  * one of them is implemented or explicitly degraded here. See README.md for the
  * per-method fidelity table.
  */
-export async function createEgoShim({ headless = false } = {}) {
+export async function createEgoShim({
+  headless = false,
+  lowMemory = false,
+} = {}) {
   const startupFocus = headless ? null : await captureDesktopFocus();
-  const { wsUrl, port, pid, launched } = await ensureBrowser({ headless });
+  const { wsUrl, port, pid, launched } = await ensureBrowser({
+    headless,
+    lowMemory,
+  });
   const desktopFocus = createDesktopFocusGuard({
     browserPid: pid,
     getActiveWindow: headless ? async () => null : () => captureDesktopFocus(),
