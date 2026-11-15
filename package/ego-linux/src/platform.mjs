@@ -293,6 +293,17 @@ export function processIsAlive(pid) {
   }
 }
 
+/** MemAvailable in MiB, or null where /proc/meminfo does not exist (Windows). */
+export async function availableMemoryMb() {
+  try {
+    const meminfo = await readFile("/proc/meminfo", "utf8");
+    const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(meminfo);
+    return match ? Math.floor(Number(match[1]) / 1024) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Spawn options for a child that must outlive the process starting it.
  *
