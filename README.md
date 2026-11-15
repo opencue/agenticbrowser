@@ -169,6 +169,25 @@ Spaces whose tabs you close by hand are reconciled away on the next call.
 > page operations fail with `EGO_TASK_SPACE_USER_IN_CONTROL` until control is
 > handed back.
 
+#### The v2 runtime (upstream API)
+
+The CLI also ships the newer upstream harness. It is chosen automatically when a
+script calls `taskSpace(` or `profiles(`; everything above keeps running on v1.
+
+```bash
+ego-browser <<'JS'
+const task = await taskSpace('research task')
+const page = task.page('p1')          // every new space opens with page p1
+await page.goto('https://example.com')
+console.log(await page.snapshot())
+await task.finish({ keep: [] })       // or keep: ['p1'] to leave it open for you
+JS
+```
+
+Pages get permanent labels (`p1`, `p2`, …); `task.newPage()` opens another and
+`task.handOff()` passes the space to you. Set `EGO_BROWSER_RUNTIME=v1` or `v2`
+to force a runtime. Details: [package/ego-linux/README.md](package/ego-linux/README.md#two-runtimes).
+
 ### 5. Put it on your app launcher (Linux)
 
 ```bash
