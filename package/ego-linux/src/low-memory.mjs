@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+// The procfs read lives in platform.mjs; re-exported so callers keep one import.
+export { availableMemoryMb } from "./platform.mjs";
 
 /** Below this much available memory a visible browser is not worth its cost. */
 export const DEFAULT_LOW_MEMORY_MB = 4096;
@@ -12,17 +13,6 @@ export const LOW_MEMORY_FLAGS = [
   "--renderer-process-limit=2",
   "--disable-extensions",
 ];
-
-/** MemAvailable in MiB, or null where /proc/meminfo does not exist. */
-export async function availableMemoryMb() {
-  try {
-    const meminfo = await readFile("/proc/meminfo", "utf8");
-    const match = /^MemAvailable:\s+(\d+)\s+kB/m.exec(meminfo);
-    return match ? Math.floor(Number(match[1]) / 1024) : null;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * True when the machine is short enough on memory that the browser should
