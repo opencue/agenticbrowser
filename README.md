@@ -157,7 +157,7 @@ succeeds. For multi-step work, drive the lifecycle yourself:
 
 | Call                                | Owner afterwards       | What it means                                                  |
 | ----------------------------------- | ---------------------- | -------------------------------------------------------------- |
-| `taskSpaces.useOrCreate(name)`      | `agent`                | Reuse the named space or create it; use this every round.      |
+| `taskSpaces.useOrCreate(name)`      | `agent` / unchanged    | Reuse the named space or create it; use this every round. A space you control is only selected (read-only) until a confirmed `takeOver`. |
 | `taskSpaces.handOff(name)`          | `agentDelegatedToUser` | Pass it to you (login, captcha, manual confirmation).          |
 | `taskSpaces.takeOver(name)`         | `agent`                | The agent takes it back, only after you confirm.               |
 | `taskSpaces.claim(id)`              | `agent`                | Claim an existing space.                                       |
@@ -278,7 +278,7 @@ Bridge internals, method by method, are in
 | ------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | `ego-browser --status`                | Connection state of the backing browser, as JSON.                                                  |
 | `ego-browser --open`                  | Open or raise the shared agent browser window.                                                     |
-| `ego-browser --launch [url …]`        | Open each URL in a tab and raise the window; no arguments shows the Spaces overview.               |
+| `ego-browser --launch [url\|file …]`  | Open each URL or file in a tab and raise the window; no arguments shows the Spaces overview.       |
 | `ego-browser --spaces`                | Open the Spaces overview panel.                                                                    |
 | `ego-browser --doctor [--json]`       | Inspect installation and runtime state without starting or attaching to the browser.               |
 | `ego-browser --cleanup-session`       | Close this agent session's spaces and stop its recognised dev servers.                             |
