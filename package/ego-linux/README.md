@@ -445,9 +445,9 @@ Two costs are Windows-specific and worth knowing:
 
 Two harness builds ship side by side and share this shim:
 
-| Runtime | Package                  | Picked when                                   | API                                             |
-| ------- | ------------------------ | --------------------------------------------- | ----------------------------------------------- |
-| v1      | `package/ego-browser`    | default                                       | `page`, `browser`, `taskSpaces`, locators       |
+| Runtime | Package                  | Picked when                                  | API                                               |
+| ------- | ------------------------ | -------------------------------------------- | ------------------------------------------------- |
+| v1      | `package/ego-browser`    | default                                      | `page`, `browser`, `taskSpaces`, locators         |
 | v2      | `package/ego-browser-v2` | the script calls `taskSpace(` or `profiles(` | `taskSpace(name)` → `task.page(label)` (upstream) |
 
 `EGO_BROWSER_RUNTIME=v1|v2` overrides the detection (`src/runtime-select.mjs`).

@@ -5,7 +5,10 @@ import { selectRuntime } from "../src/runtime-select.mjs";
 
 describe("runtime selection", () => {
   it("keeps v1 for the page / taskSpaces API", () => {
-    assert.equal(selectRuntime("await page.goto('https://example.com')", {}), "v1");
+    assert.equal(
+      selectRuntime("await page.goto('https://example.com')", {}),
+      "v1",
+    );
     assert.equal(
       selectRuntime("await taskSpaces.run('x', async () => {})", {}),
       "v1",

@@ -1,0 +1,3 @@
+# The v2 runtime's build parses Markdown frontmatter with "\n" line endings;
+# a Windows checkout with core.autocrlf would hand it CRLF and fail the build.
+package/ego-browser-v2/** text=auto eol=lf

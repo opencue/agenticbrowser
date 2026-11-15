@@ -541,9 +541,7 @@ async function openPages(urls) {
   // to show, so trade it for a visible one.
   const status = await browserStatus();
   if (status.running && status.headless) {
-    process.stderr.write(
-      "replacing the headless browser with a visible one\n",
-    );
+    process.stderr.write("replacing the headless browser with a visible one\n");
     await stopBrowser();
   }
   const shim = await createEgoShim({ headless: false });
@@ -569,9 +567,7 @@ async function openPages(urls) {
     // The window usually already exists — it is just behind everything else.
     // Clicking a launcher icon has to raise it, not quietly confirm it is
     // running, which looks identical to nothing happening.
-    await shim.cdp
-      .call("Target.activateTarget", { targetId })
-      .catch(() => {});
+    await shim.cdp.call("Target.activateTarget", { targetId }).catch(() => {});
     const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
       targetId,
       flatten: true,
