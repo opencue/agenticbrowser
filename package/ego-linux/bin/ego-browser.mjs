@@ -35,11 +35,17 @@ import {
   writePrivateStateFile,
 } from "../src/private-state.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
+import { selectRuntime } from "../src/runtime-select.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { stopSessionDevServers } from "../src/session-cleanup.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
 const HARNESS = new URL("../../ego-browser/dist/out/index.js", import.meta.url);
+// Upstream's v2 page-model runtime; see src/runtime-select.mjs.
+const HARNESS_V2 = new URL(
+  "../../ego-browser-v2/dist/out/index.js",
+  import.meta.url,
+);
 const SKILL_WORKSPACE = new URL("../../../skills/ego-browser", import.meta.url);
 const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 
@@ -535,9 +541,7 @@ async function openPages(urls) {
   // to show, so trade it for a visible one.
   const status = await browserStatus();
   if (status.running && status.headless) {
-    process.stderr.write(
-      "replacing the headless browser with a visible one\n",
-    );
+    process.stderr.write("replacing the headless browser with a visible one\n");
     await stopBrowser();
   }
   const shim = await createEgoShim({ headless: false });
@@ -563,9 +567,7 @@ async function openPages(urls) {
     // The window usually already exists — it is just behind everything else.
     // Clicking a launcher icon has to raise it, not quietly confirm it is
     // running, which looks identical to nothing happening.
-    await shim.cdp
-      .call("Target.activateTarget", { targetId })
-      .catch(() => {});
+    await shim.cdp.call("Target.activateTarget", { targetId }).catch(() => {});
     const { sessionId } = await shim.cdp.call("Target.attachToTarget", {
       targetId,
       flatten: true,
@@ -735,12 +737,24 @@ async function main() {
   // Site skills and learnings live in the repo's skill directory.
   process.env.EGO_BROWSER_AGENT_WORKSPACE ||= SKILL_WORKSPACE.pathname;
 
-  const shim = await createEgoShim({ headless, lowMemory });
+  // A plain script run (no harness flags, no --sdk-path) picks v1 or v2 from the
+  // script itself, so stdin is read here and handed to the harness as text.
+  let stdinText;
+  if (rest.length === 0 && sdkFlag === -1) {
+    stdinText = await readStdin();
+    if (selectRuntime(stdinText) === "v2") harness = HARNESS_V2.href;
+  }
+
+  const shim = await createEgoShim({
+    headless,
+    lowMemory,
+    defaultSpaceTab: harness === HARNESS_V2.href,
+  });
   globalThis.ego = shim.ego;
 
   const { runMain } = await import(harness);
   try {
-    return await runMain({ argv: rest });
+    return await runMain({ argv: rest, stdinText });
   } finally {
     // A script that creates a Task Space but returns or throws before its first
     // navigation must not strand its targetless state record.
@@ -749,6 +763,13 @@ async function main() {
     await shim.cleanupCreatedEmptySpaces().catch(() => {});
     shim.close();
   }
+}
+
+async function readStdin() {
+  let data = "";
+  process.stdin.setEncoding("utf8");
+  for await (const chunk of process.stdin) data += chunk;
+  return data;
 }
 
 main()

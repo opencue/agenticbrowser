@@ -20,6 +20,13 @@ metadata:
 > every request for the user to click something impossible to satisfy — see the
 > visibility rule under Task spaces.
 
+> **Two runtimes.** Everything below documents the default runtime (`page`,
+> `browser`, `taskSpaces`, locators). A script that calls `taskSpace(` or
+> `profiles(` runs on upstream's v2 page-model runtime instead
+> (`const task = await taskSpace("name"); await task.page("p1").goto(url)`;
+> `console.log(help())` there prints its API). Don't mix the two in one script.
+> `EGO_BROWSER_RUNTIME=v1|v2` forces a choice.
+
 > **Routing invariant:** use the `ego-browser` CLI for every browser task. Never
 > fall back to Codex's Browser/Chrome plugins, a Chrome-extension automation
 > tool, or a direct Chrome/Playwright launch. On Linux and Windows the Ego host may use

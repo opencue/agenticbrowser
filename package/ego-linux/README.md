@@ -441,9 +441,25 @@ Two costs are Windows-specific and worth knowing:
 - **Detached children are launched with `windowsHide`.** Without it every
   heredoc that starts the Spaces daemon flashes a console window on the desktop.
 
+## Two runtimes
+
+Two harness builds ship side by side and share this shim:
+
+| Runtime | Package                  | Picked when                                  | API                                               |
+| ------- | ------------------------ | -------------------------------------------- | ------------------------------------------------- |
+| v1      | `package/ego-browser`    | default                                      | `page`, `browser`, `taskSpaces`, locators         |
+| v2      | `package/ego-browser-v2` | the script calls `taskSpace(` or `profiles(` | `taskSpace(name)` → `task.page(label)` (upstream) |
+
+`EGO_BROWSER_RUNTIME=v1|v2` overrides the detection (`src/runtime-select.mjs`).
+`package/ego-browser-v2` is an unmodified copy of upstream
+`citrolabs/ego-lite`'s `package/ego-browser`; refresh it with
+`git read-tree` from an upstream ref rather than editing it. For v2 the shim
+adds `ego.listProfiles()` (one profile, `Default`) and opens one `about:blank`
+tab in every new space, because v2 waits for that default tab.
+
 ## Fidelity
 
-The harness uses 15 native methods plus 2 callbacks. All are implemented. The
+The v1 harness uses 15 native methods plus 2 callbacks. All are implemented. The
 remaining differences are structural rather than unfinished native methods.
 
 | Native surface                                            | Backed by                                             | Fidelity                                                                                                                                                                                     |

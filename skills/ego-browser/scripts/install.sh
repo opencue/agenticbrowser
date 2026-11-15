@@ -71,6 +71,10 @@ fi
 log "Building the upstream harness in $harness_dir ..."
 (cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
 	die "harness build failed"
+# Scripts that call taskSpace()/profiles() run on upstream's v2 runtime.
+log "Building the v2 runtime in $harness_dir-v2 ..."
+(cd "$harness_dir-v2" && CI=true npm ci && CI=true npm run build) ||
+	die "v2 runtime build failed"
 log "Installing MCP runtime dependencies in $port_dir ..."
 (cd "$port_dir" && CI=true npm ci --omit=dev --ignore-scripts) ||
 	die "MCP dependency install failed"
