@@ -61,6 +61,17 @@ finally {
   Pop-Location
 }
 
+# Scripts that call taskSpace()/profiles() run on upstream's v2 runtime.
+Write-Host "Building ego-browser v2 runtime..."
+Push-Location "$harness-v2"
+try {
+  Invoke-Checked -Command $npmCommand.Source -Arguments @("ci", "--ignore-scripts")
+  Invoke-Checked -Command $npmCommand.Source -Arguments @("run", "build")
+}
+finally {
+  Pop-Location
+}
+
 Write-Host "Installing MCP runtime dependencies..."
 Push-Location $port
 try {

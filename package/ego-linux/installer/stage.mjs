@@ -24,6 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = join(HERE, "..");
 const HARNESS = join(PORT, "..", "ego-browser", "dist", "out");
+const HARNESS_V2 = join(PORT, "..", "ego-browser-v2", "dist", "out");
 const LOCKFILE = join(PORT, "package-lock.json");
 
 /**
@@ -42,6 +43,21 @@ const LAYOUT = [
     from: join(HARNESS, "ego-browser"),
     to: join("package", "ego-browser", "dist", "out", "ego-browser"),
     why: "the skill package the runtime reads learnings and helpers from",
+  },
+  {
+    from: join(HARNESS_V2, "index.js"),
+    to: join("package", "ego-browser-v2", "dist", "out", "index.js"),
+    why: "upstream's v2 runtime, for scripts that call taskSpace()/profiles()",
+  },
+  {
+    from: join(HARNESS_V2, "ego-browser"),
+    to: join("package", "ego-browser-v2", "dist", "out", "ego-browser"),
+    why: "the v2 runtime's skill package",
+  },
+  {
+    from: join(HARNESS_V2, "agent-skills"),
+    to: join("package", "ego-browser-v2", "dist", "out", "agent-skills"),
+    why: "the bundled entry Skill the v2 runtime resolves at startup",
   },
   {
     from: join(PORT, "bin"),
@@ -147,6 +163,12 @@ export async function stage({ out, nodeExe = null } = {}) {
     throw new Error(
       `the harness is not built: ${join(HARNESS, "index.js")} is missing.\n` +
         `Run: cd ../ego-browser && CI=true npm ci && npm run build`,
+    );
+  }
+  if (!(await exists(join(HARNESS_V2, "index.js")))) {
+    throw new Error(
+      `the v2 runtime is not built: ${join(HARNESS_V2, "index.js")} is missing.\n` +
+        `Run: cd ../ego-browser-v2 && CI=true npm ci && npm run build`,
     );
   }
 

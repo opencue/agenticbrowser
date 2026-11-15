@@ -17,6 +17,9 @@ import {
   createCollaborationStore,
 } from "./collaboration-store.mjs";
 
+/** The single profile id `ego.listProfiles()` reports and `createTaskSpace` accepts. */
+const AGENT_PROFILE_ID = "Default";
+
 /**
  * Build the `globalThis.ego` object the ego-browser harness expects, backed by a
  * plain Chromium over CDP instead of the macOS-only ego lite app.
@@ -28,6 +31,9 @@ import {
 export async function createEgoShim({
   headless = false,
   lowMemory = false,
+  // v2 waits for a new space's default tab; v1 keeps spaces targetless until
+  // their first navigation.
+  defaultSpaceTab = false,
 } = {}) {
   const startupFocus = headless ? null : await captureDesktopFocus();
   const { wsUrl, port, pid, launched } = await ensureBrowser({
@@ -154,12 +160,24 @@ export async function createEgoShim({
 
     // --- Task spaces --------------------------------------------------------
     listTaskSpaces: taskSpaces.listTaskSpaces,
-    // Arming on Page.navigate is too late for that same navigation — the claim
-    // and Page.enable race the load and usually lose. Targetless spaces simply
-    // skip this cosmetic watcher; the navigation callback arms the newly created
-    // destination tab as soon as it exists.
-    async createTaskSpace(name) {
+    // The port drives one agent profile, so it is the only (and default) entry.
+    listProfiles: async () => ({
+      profiles: [{ id: AGENT_PROFILE_ID, name: "agent", isDefault: true }],
+    }),
+    // The v2 harness waits for a new space's single default tab (the native app
+    // opens one); with defaultSpaceTab the space gets an about:blank tab right
+    // away instead of staying targetless until the first navigation.
+    async createTaskSpace(name, profileId) {
+      if (profileId !== undefined && profileId !== AGENT_PROFILE_ID) {
+        return {
+          error: `unknown profile id ${JSON.stringify(profileId)}; this port has only "${AGENT_PROFILE_ID}"`,
+          error_code: "EGO_PROFILE_NOT_FOUND",
+        };
+      }
       const result = await taskSpaces.createTaskSpace(name);
+      if (defaultSpaceTab && !result?.error) {
+        await taskSpaces.createTabInSelectedSpace(tabs, "about:blank");
+      }
       void cursor.watchPage().catch(() => {});
       return result;
     },

@@ -43,12 +43,16 @@ jobs:
           cache: npm
           cache-dependency-path: |
             package/ego-browser/package-lock.json
+            package/ego-browser-v2/package-lock.json
             package/ego-linux/package-lock.json
       # The CLI runs the harness's build output, so the harness has to be built
       # before the port can be tested. CI=true is already set by Actions, which
       # is what lets `npm ci` skip the lefthook install in the prepare script.
       - name: Build the harness the port runs
         working-directory: package/ego-browser
+        run: npm ci && npm run build
+      - name: Build the v2 runtime
+        working-directory: package/ego-browser-v2
         run: npm ci && npm run build
       # The suite drives a real headless Chromium. The runner image ships one;
       # failing here rather than inside a test says so plainly.
