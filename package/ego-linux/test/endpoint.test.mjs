@@ -57,6 +57,22 @@ describe("waitForEndpoint", () => {
     }
   });
 
+  it("falls back to the port file when the explicit port never answers", async () => {
+    const profileDir = await mkdtemp(join(tmpdir(), "ego-endpoint-"));
+    const live = await startFakeDevTools();
+    await writeFile(join(profileDir, PORT_FILE), portFile(live.port));
+    try {
+      const endpoint = await waitForEndpoint(profileDir, {
+        timeoutMs: 2000,
+        port: await deadPort(),
+      });
+      assert.equal(endpoint.port, live.port);
+    } finally {
+      await new Promise((resolve) => live.server.close(resolve));
+      await rm(profileDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps probing when Chrome rewrites its port file", async () => {
     const profileDir = await mkdtemp(join(tmpdir(), "ego-endpoint-"));
     // A launch that loses the ProcessSingleton race publishes a port that never
