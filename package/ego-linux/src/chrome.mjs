@@ -590,6 +590,7 @@ export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
 
 async function launch({ headless, lowMemory = false }) {
   const binary = await resolveBrowserBinary();
+  const debugPort = await allocateDebugPort();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
@@ -602,12 +603,11 @@ async function launch({ headless, lowMemory = false }) {
     ...(lowMemory ? LOW_MEMORY_FLAGS : []),
     ...browserDisplayFlags({ headless }),
     `${PROFILE_FLAG}${PROFILE_DIR}`,
-    // Let Chrome pick a free port (0 = OS-assigned). The actual port is
-    // discovered by reading DevToolsActivePort, which waitForEndpoint does on
-    // every attempt. This avoids the TOCTOU window that a pre-allocated port
-    // creates between release and Chrome binding, and also handles the
-    // ProcessSingleton race where Chrome may restart on a different port.
-    "--remote-debugging-port=0",
+    // A concrete port, never 0: Chrome 148 reports navigator.webdriver === true
+    // to every page when it binds an OS-assigned debugging port, and Cloudflare
+    // (chatgpt.com, …) then loops forever on "Just a moment…". A fixed port
+    // keeps navigator.webdriver false.
+    `--remote-debugging-port=${debugPort}`,
     "--remote-debugging-address=127.0.0.1",
     ...browserStartupFlags({ headless }),
   ];
@@ -618,7 +618,9 @@ async function launch({ headless, lowMemory = false }) {
   );
   child.unref();
 
-  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR);
+  const { port, wsUrl } = await waitForEndpoint(PROFILE_DIR, {
+    port: debugPort,
+  });
   await writeBrowserState({
     port,
     wsUrl,
