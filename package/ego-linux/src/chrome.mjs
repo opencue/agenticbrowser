@@ -318,6 +318,10 @@ async function profileBrowser() {
  * restarted internally, and the process that survives publishes a different
  * port. Probing whatever the file said first therefore names a port that never
  * listens — so re-read it on every attempt and keep probing until one answers.
+ *
+ * An explicit `port` is probed first, but the port file is still consulted when
+ * it does not answer: the launch may have handed off to a process that owns the
+ * profile on another port, or another process may have taken the port.
  */
 export async function waitForEndpoint(
   profileDir,
@@ -327,16 +331,18 @@ export async function waitForEndpoint(
   const deadline = Date.now() + timeoutMs;
   let lastPort = expectedPort;
   while (Date.now() < deadline) {
-    let port = expectedPort;
-    if (!port) {
-      try {
-        const [line] = (await readFile(path, "utf8")).split("\n");
-        port = Number(line.trim()) || null;
-      } catch {
-        // not written yet
-      }
+    if (expectedPort) {
+      const wsUrl = await probe(expectedPort);
+      if (wsUrl) return { port: expectedPort, wsUrl };
     }
-    if (port) {
+    let port = null;
+    try {
+      const [line] = (await readFile(path, "utf8")).split("\n");
+      port = Number(line.trim()) || null;
+    } catch {
+      // not written yet
+    }
+    if (port && port !== expectedPort) {
       lastPort = port;
       const wsUrl = await probe(port);
       if (wsUrl) return { port, wsUrl };
