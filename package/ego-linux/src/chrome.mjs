@@ -473,17 +473,27 @@ export async function useSystemTitleBar(
   profileDir,
   { displayFlags = browserDisplayFlags(), env = process.env } = {},
 ) {
-  if (env.EGO_LINUX_SYSTEM_TITLEBAR === "0") return false;
   if (!displayFlags.includes("--ozone-platform=x11")) return false;
+  const optedOut = env.EGO_LINUX_SYSTEM_TITLEBAR === "0";
   const defaultDir = join(profileDir, "Default");
   const path = join(defaultDir, "Preferences");
   let prefs;
   try {
     prefs = JSON.parse(await readFile(path, "utf8"));
   } catch (error) {
-    if (error?.code !== "ENOENT") return false;
+    if (error?.code !== "ENOENT" || optedOut) return false;
     prefs = {};
     await mkdir(defaultDir, { recursive: true });
+  }
+  if (optedOut) {
+    // An earlier launch may already have seeded the preference, and the
+    // switch has to undo that or it only works on a profile it never touched.
+    // Dropping the key hands the choice back to Chrome's own default.
+    if (prefs.browser?.custom_chrome_frame !== false) return false;
+    const { custom_chrome_frame: _seeded, ...browser } = prefs.browser;
+    prefs.browser = browser;
+    await replaceFile(path, JSON.stringify(prefs));
+    return true;
   }
   if (prefs.browser?.custom_chrome_frame === false) return false;
   prefs.browser = { ...prefs.browser, custom_chrome_frame: false };

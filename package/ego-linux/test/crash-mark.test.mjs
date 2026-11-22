@@ -342,4 +342,21 @@ describe("useSystemTitleBar", () => {
       await assert.rejects(read(dir), { code: "ENOENT" });
     });
   });
+
+  it("hands the frame back to Chrome when opted out after seeding", async () => {
+    await withProfile(async (dir) => {
+      const optedOut = { ...xwayland, env: { EGO_LINUX_SYSTEM_TITLEBAR: "0" } };
+      await mkdir(join(dir, "Default"), { recursive: true });
+      await writeFile(
+        join(dir, "Default", "Preferences"),
+        JSON.stringify({ browser: { show_home_button: true } }),
+      );
+      assert.equal(await useSystemTitleBar(dir, xwayland), true);
+      assert.equal(await useSystemTitleBar(dir, optedOut), true);
+      assert.equal(await useSystemTitleBar(dir, optedOut), false);
+      assert.deepEqual(await read(dir), {
+        browser: { show_home_button: true },
+      });
+    });
+  });
 });
