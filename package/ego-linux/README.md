@@ -80,6 +80,11 @@ no-page Spaces use compact rows instead of blank screenshot cards. Set
 reliable programmatic application activation, so focused presentation may
 report `raise-failed` instead.
 
+Through XWayland the managed browser uses the system title bar rather than
+Chrome's own frame: Chrome's client-side frame is resized in two steps when the
+window is maximized, which flashes an unpainted band across the top. Set
+`EGO_LINUX_SYSTEM_TITLEBAR=0` to keep the compact frame.
+
 The CDP endpoint uses a randomly allocated non-zero loopback port. Chrome treats
 `--remote-debugging-port=0` as an automation signal and exposes
 `navigator.webdriver=true`, which can trigger Google sign-in rejection and

@@ -449,6 +449,49 @@ export async function suppressPasswordSavePrompts(profileDir) {
 }
 
 /**
+ * Let the window manager draw the title bar when Chrome runs through XWayland.
+ *
+ * Chrome's own frame is a client-side decoration: the X window is larger than
+ * what the user sees, padded by an invisible shadow margin published as
+ * _GTK_FRAME_EXTENTS. Maximizing drops that margin, and under Mutter the two
+ * halves do not land together — the window is resized to its maximized size
+ * while Chrome still paints the old, inset frame, then resized again once the
+ * margin is gone. In between, the top of the window shows an unpainted band
+ * with the tab strip pushed down beneath it; every maximize flashes.
+ *
+ * With `browser.custom_chrome_frame=false` there is no margin to renegotiate:
+ * the window manager owns the title bar and one resize does the job. Measured
+ * on GNOME 46/XWayland with a burst of window captures: the client-side frame
+ * passes through a 2514x1578 intermediate on its way to 2498x1568, the system
+ * frame goes straight to its final size.
+ *
+ * Only for the XWayland route, which is where the race was observed, and
+ * opt-out with EGO_LINUX_SYSTEM_TITLEBAR=0 for anyone who prefers the compact
+ * frame over a steady one.
+ */
+export async function useSystemTitleBar(
+  profileDir,
+  { displayFlags = browserDisplayFlags(), env = process.env } = {},
+) {
+  if (env.EGO_LINUX_SYSTEM_TITLEBAR === "0") return false;
+  if (!displayFlags.includes("--ozone-platform=x11")) return false;
+  const defaultDir = join(profileDir, "Default");
+  const path = join(defaultDir, "Preferences");
+  let prefs;
+  try {
+    prefs = JSON.parse(await readFile(path, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") return false;
+    prefs = {};
+    await mkdir(defaultDir, { recursive: true });
+  }
+  if (prefs.browser?.custom_chrome_frame === false) return false;
+  prefs.browser = { ...prefs.browser, custom_chrome_frame: false };
+  await replaceFile(path, JSON.stringify(prefs));
+  return true;
+}
+
+/**
  * Clear a stale crash mark before launching.
  *
  * Chrome stamps `profile.exit_type` "Crashed" while it runs and rewrites it to
@@ -587,10 +630,16 @@ async function clearProfileLock(profileDir) {
 }
 
 /** Stop any live owner before editing Chrome's Preferences file. */
-export async function prepareProfileForLaunch(profileDir = PROFILE_DIR) {
+export async function prepareProfileForLaunch(
+  profileDir = PROFILE_DIR,
+  { headless = false } = {},
+) {
   await clearProfileLock(profileDir);
   await neutralizeZoom(profileDir);
   await suppressPasswordSavePrompts(profileDir);
+  await useSystemTitleBar(profileDir, {
+    displayFlags: browserDisplayFlags({ headless }),
+  });
   await clearStaleCrashMark(profileDir);
 }
 
@@ -600,7 +649,7 @@ async function launch({ headless, lowMemory = false }) {
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
   await reapOrphanedBrowsers();
-  await prepareProfileForLaunch(PROFILE_DIR);
+  await prepareProfileForLaunch(PROFILE_DIR, { headless });
   // A stale port file would be read as this launch's port.
   await rm(join(PROFILE_DIR, PORT_FILE), { force: true });
 

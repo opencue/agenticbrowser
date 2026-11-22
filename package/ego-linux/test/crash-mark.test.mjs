@@ -16,6 +16,7 @@ import {
   clearStaleCrashMark,
   neutralizeZoom,
   suppressPasswordSavePrompts,
+  useSystemTitleBar,
 } from "../src/chrome.mjs";
 
 /**
@@ -283,5 +284,62 @@ describe("Preferences writes are atomic (no scratch files left behind)", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("useSystemTitleBar", () => {
+  const xwayland = { displayFlags: ["--ozone-platform=x11"], env: {} };
+  const read = async (dir) =>
+    JSON.parse(await readFile(join(dir, "Default", "Preferences"), "utf8"));
+
+  it("turns Chrome's client-side frame off for an XWayland launch", async () => {
+    await withProfile(async (dir) => {
+      assert.equal(await useSystemTitleBar(dir, xwayland), true);
+      assert.equal((await read(dir)).browser.custom_chrome_frame, false);
+    });
+  });
+
+  it("preserves existing preferences and is idempotent", async () => {
+    await withProfile(async (dir) => {
+      await mkdir(join(dir, "Default"), { recursive: true });
+      await writeFile(
+        join(dir, "Default", "Preferences"),
+        JSON.stringify({
+          browser: { custom_chrome_frame: true, show_home_button: true },
+          profile: { name: "existing" },
+        }),
+      );
+
+      assert.equal(await useSystemTitleBar(dir, xwayland), true);
+      assert.equal(await useSystemTitleBar(dir, xwayland), false);
+      assert.deepEqual(await read(dir), {
+        browser: { custom_chrome_frame: false, show_home_button: true },
+        profile: { name: "existing" },
+      });
+    });
+  });
+
+  it("leaves the profile alone off XWayland and when opted out", async () => {
+    await withProfile(async (dir) => {
+      assert.equal(
+        await useSystemTitleBar(dir, { displayFlags: [], env: {} }),
+        false,
+      );
+      assert.equal(
+        await useSystemTitleBar(dir, {
+          displayFlags: ["--ozone-platform=wayland"],
+          env: {},
+        }),
+        false,
+      );
+      assert.equal(
+        await useSystemTitleBar(dir, {
+          ...xwayland,
+          env: { EGO_LINUX_SYSTEM_TITLEBAR: "0" },
+        }),
+        false,
+      );
+      await assert.rejects(read(dir), { code: "ENOENT" });
+    });
   });
 });
