@@ -276,6 +276,15 @@ export function notifyUserAction(
   { instruction, reason } = {},
   { spawnProcess = spawn } = {},
 ) {
+  // EGO_LINUX_NOTIFY=0 silences desktop notifications (test suites set it so a
+  // run never pops "Ego Lite needs your input" on the developer's desktop).
+  if (
+    ["0", "false", "no", "off"].includes(
+      String(process.env.EGO_LINUX_NOTIFY ?? "").toLowerCase(),
+    )
+  ) {
+    return { done: true, skipped: "disabled" };
+  }
   const detail = compactText(instruction, MAX_INSTRUCTION_LENGTH);
   const why = compactText(reason, 80);
   const body = detail || "The agent needs a manual browser action.";

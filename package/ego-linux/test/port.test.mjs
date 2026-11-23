@@ -27,6 +27,8 @@ const TEST_ENV = {
   // assertions would pass under Claude and fail under codex — the suite would
   // encode who happened to run it.
   EGO_LINUX_CURSOR_NAME: "Testbot",
+  // Never pop "Ego Lite needs your input" on the developer's desktop.
+  EGO_LINUX_NOTIFY: "0",
 };
 // APP_DIR, not the literal: the directory is named ego-lite-linux on Linux and
 // ego-lite on Windows, so a hardcoded name here reads no state file at all on

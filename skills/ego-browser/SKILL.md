@@ -604,61 +604,20 @@ reach the whole browser profile.
 
 ## Port extensions
 
-This port adds four features on top of the v2 Page and TaskSpace. They are not
-in upstream ego lite.
+This port adds features on top of the v2 Page and TaskSpace that upstream ego
+lite does not have:
+- Playwright-style locators: `page.locator()` and `page.getByRole()` /
+  `getByText()` / `getByLabel()` / … with `count()`, `textContent()`, `fill()`,
+  `waitFor()` and more.
+- `page.fastObserve()` / `page.fastAct()`.
+- `page.debug()`.
+- `task.requestUserAction()`, plus `task.loginPreflight()` and
+  `task.handleChallenge()` for login and captcha flows.
+- `page.waitForRequest()` / `waitForResponse()`.
+- `page.screencast.start()` / `stop()` and `page.trace()`.
 
-**Locators.** `page.locator(selector)` and `page.getByRole(role, { name, exact })`,
-`getByText`, `getByLabel`, `getByPlaceholder`, `getByAltText`, `getByTitle`,
-`getByTestId` return a strict, auto-waiting Locator (default 8 s). It accepts the
-same selectors as Page actions, including the `loc=role:` / `loc=testid:` /
-`text=` values a snapshot prints. Chain with `locator()`, `getBy*()`,
-`filter({ hasText })`, `first()`, `last()`, `nth(i)`. Actions: `click`,
-`dblclick`, `hover`, `focus`, `fill`, `clear`, `press`, `pressSequentially`,
-`check`, `uncheck`, `setChecked`, `selectOption`, `setInputFiles`, `dragTo`,
-`scrollIntoViewIfNeeded`, `dispatchEvent`, `blur`. Reads: `textContent`,
-`innerText`, `innerHTML`, `inputValue`, `getAttribute`, `isChecked`,
-`boundingBox`, `evaluate`, `screenshot`, plus non-strict `count`, `isVisible`,
-`isHidden`, `isEnabled`, `isDisabled`, `isEditable`, `allInnerTexts`,
-`allTextContents`, `evaluateAll`, and `waitFor({ state, timeout })`. A
-locator matching 0 or several elements throws with up to five candidates;
-narrow it with `filter()` before reaching for `nth()`. Reads on `@ref` selectors
-are not supported; actions on them are.
-
-```js
-await page.getByRole("button", { name: "Save" }).click();
-const n = await page.locator("li.result").count();
-await page.getByLabel("Email").fill("user@example.com");
-```
-
-**Fast indexed loop.** `page.fastObserve()` returns `{ url, title, text, table,
-actions, omitted_actions, w, h, scroll }` in one browser call: visible controls
-with ids, names and values. `page.fastAct(obs, id, text?)` runs one entry
-(`fill`, `click`, `select`, `scroll`, `wait`) after re-checking that the page
-and target are unchanged; otherwise it throws `StalePageError`, so observe
-again instead of retrying. Password, file and hidden inputs are never listed;
-shadow roots and iframes are not read, so use `page.snapshot()` there.
-
-```js
-let obs = await page.fastObserve();
-console.log(obs.table);
-await page.fastAct(obs, "e2", "search terms");
-obs = await page.fastObserve();
-```
-
-**`page.debug(options?)`** returns one JSON dump for a stuck task: page info
-(URL secrets redacted), a snapshot excerpt, a screenshot path, and recent
-navigations, failed requests and HTTP errors. It drains the event buffer. Pass
-`{ includeScreenshot: false }` for text only. A part that fails is listed in
-`errors` instead of failing the call.
-
-**`task.requestUserAction({ instruction, target?, actionKey?, doneLabel?,
-cancelLabel?, wait?, timeout? })`** asks the user for one concrete manual step,
-such as a login, passkey or captcha. It hands the space to the user and shows
-an in-page action card, which also appears in the Spaces "Needs You" inbox. It
-sends one desktop notification per `actionKey` and, by default, waits for Done
-or Cancel without taking focus. It throws if the page is not visible (for
-example headless), so never ask a user to act on a page they cannot see.
-Done returns `{ userResult: "done", resumed: true }` with control back to you;
-Cancel returns `{ userResult: "cancel", resumed: false }` and leaves control
-with the user. Match the labels to the user's language, for example Hungarian
-`doneLabel: "Kész"`, `cancelLabel: "Mégsem"`.
+Read `references/port-extensions.md` in the ego-browser Skill directory before
+using them. When you need the user to log in, solve a captcha or confirm
+something by hand, prefer `task.requestUserAction({ instruction })` over a bare
+`task.handOff()`: it shows the user what to do and refuses to ask while the page
+is not visible.
