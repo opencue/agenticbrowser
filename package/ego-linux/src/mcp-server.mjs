@@ -189,7 +189,10 @@ function toolText(result) {
 export function createEgoBrowserMcpServer({
   runner = runEgoBrowserScript,
 } = {}) {
-  const server = new McpServer({ name: "ego-browser", version: "0.1.0" });
+  const server = new McpServer({
+    name: "ego-browser",
+    version: "2.2.1-linux.1",
+  });
   let queue = Promise.resolve();
 
   const enqueue = (input) => {
