@@ -624,10 +624,10 @@ describe("v2 rounds", () => {
     );
     // The scope v2 sees is the browser, not the (different) parent process.
     assert.match(first, /instance browser-[0-9a-f-]+/);
-    assert.match(
-      second,
-      new RegExp(`p1 ${FIXTURE_URL.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`),
-    );
+    // The browser reports the fixture as a normalized file:// URL
+    // (forward slashes on Windows too), so match its tail, not FIXTURE_URL.
+    assert.match(second, /p1 file:\/\/\S*fixture\/index\.html/);
+    assert.match(second, /"closedSpace":true/);
     assert.doesNotMatch(second, /belongs to the user|unknown origin/);
   });
 });
