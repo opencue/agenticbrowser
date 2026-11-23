@@ -77,6 +77,53 @@ describe("runtime selection", () => {
     assert.equal(selectRuntime("taskSpaces.list()", {}), "v1");
   });
 
+  it("reads v1's fetch helpers and optional chaining as v1", () => {
+    assert.equal(selectRuntime("await fetch.server('/api')", {}), "v1");
+    assert.equal(selectRuntime("await fetch.browser('/api')", {}), "v1");
+    assert.equal(selectRuntime("await page?.goto('u')", {}), "v1");
+    // Node's own fetch() and cdp(), which v2 also has, decide nothing.
+    assert.equal(selectRuntime("await fetch('https://x')", {}), "v2");
+    assert.equal(selectRuntime("await cdp('Page.reload')", {}), "v2");
+  });
+
+  it("counts an array-destructured page as declared", () => {
+    assert.equal(
+      selectRuntime(
+        "const [page] = await Promise.all([task.page('p')]); await page.goto('u')",
+        {},
+      ),
+      "v2",
+    );
+  });
+
+  it("ignores markers inside comments and strings", () => {
+    assert.equal(
+      selectRuntime("// open the site. then\nconsole.log('x')", {}),
+      "v2",
+    );
+    assert.equal(selectRuntime('console.log("see the site. ok")', {}), "v2");
+    assert.equal(
+      selectRuntime(
+        "// TODO migrate to taskSpace(name)\nawait page.goto('u')",
+        {},
+      ),
+      "v1",
+    );
+    assert.equal(
+      selectRuntime("console.log('taskSpace(x)'); await page.goto('u')", {}),
+      "v1",
+    );
+    assert.equal(
+      selectRuntime("/* taskSpaces.run */ const t = await taskSpace('x')", {}),
+      "v2",
+    );
+    assert.equal(
+      selectRuntime("console.log(`${browser.x} and site.`)", {}),
+      "v1",
+    );
+    assert.equal(selectRuntime("console.log(`about the site.`)", {}), "v2");
+  });
+
   it("lets EGO_BROWSER_RUNTIME override the detection", () => {
     assert.equal(
       selectRuntime("await page.goto('x')", { EGO_BROWSER_RUNTIME: "v2" }),

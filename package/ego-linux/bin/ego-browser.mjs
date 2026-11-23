@@ -794,7 +794,7 @@ async function readSkillGuide() {
     new URL("SKILL.md", `${SKILL_WORKSPACE.href}/`),
     "utf8",
   );
-  return source.replace(/^---\n[\s\S]*?\n---\n+/, "");
+  return source.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n)+/, "");
 }
 
 async function readStdin() {

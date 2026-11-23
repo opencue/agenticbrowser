@@ -308,6 +308,17 @@ export function createEgoBridge(options: BridgeOptions) {
         updateAvailable: false,
       };
     },
+
+    // The rest of the v2 runtime's ego contract. The host drives one browser
+    // profile, so profiles() reports just that one; the agent-cursor hooks have
+    // nothing to draw on here and are accepted as no-ops.
+    async listProfiles() {
+      return {
+        profiles: [{ id: "Default", name: "agent", isDefault: true }],
+      };
+    },
+    async setAgentTaskState(_taskState?: unknown) {},
+    async animationHighlightMouseToPosition(_x?: number, _y?: number) {},
   };
 
   agentConnection.onMessage((raw) => {
