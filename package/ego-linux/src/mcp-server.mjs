@@ -191,7 +191,7 @@ export function createEgoBrowserMcpServer({
 } = {}) {
   const server = new McpServer({
     name: "ego-browser",
-    version: "2.2.1-linux.1",
+    version: "2.2.1-linux.2",
   });
   let queue = Promise.resolve();
 
@@ -206,7 +206,7 @@ export function createEgoBrowserMcpServer({
     {
       title: "Run Ego Browser",
       description:
-        "Run one complete ego-browser JavaScript program with the standard page, browser, taskSpaces, and site helpers.",
+        "Run one complete ego-browser JavaScript program. The default is the v2 TaskSpace/Page API (`const task = await taskSpace(name); const page = task.page('p1')`); a script that uses the v1 page, taskSpaces, browser, or site globals runs on v1.",
       inputSchema: z.object({
         script: z
           .string()

@@ -1,6 +1,6 @@
 # Task spaces — ownership, handoff, and completion policy
 
-The full contract behind the summary in `SKILL.md`. Read this before any
+v1 runtime: the full contract behind the summary in `v1-api.md`. Read this before any
 claim / handoff / takeover / complete edge case.
 
 ## Naming and reuse
@@ -256,7 +256,7 @@ already user-owned spaces and enforces the availability check.
 | `false` + `reason: "minimized"`          | The managed browser window is minimized and was deliberately not restored over the current app. | Ask the user to restore Ego Lite manually when ready.                                                            |
 | `false` + `reason: "window-unavailable"` | The port could not confirm an on-screen window without trying to focus it.                      | Ask the user to locate the managed browser manually before acting.                                               |
 
-For `reason: "headless"`, follow `references/install.md` to restart the active
+For `reason: "headless"`, follow `install.md` to restart the active
 runtime in headed mode. Do not invoke either package by source path or open a
 desktop launcher unless `readlink` confirms it is the active runtime. Switching
 implementations uses different profile/task-space state. A host restart

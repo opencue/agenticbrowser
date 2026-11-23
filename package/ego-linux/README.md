@@ -42,7 +42,7 @@ there:
 cd package\ego-browser; npm ci; npm run build
 cd ..\ego-linux
 node installer\stage.mjs --node <path to node.exe>
-& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.2.1-linux.1 installer\ego-lite.iss
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.2.1-linux.2 installer\ego-lite.iss
 ```
 
 What the installer _contains_ is decided by `installer/stage.mjs` and checked by
@@ -123,13 +123,17 @@ Set-Content "$bin\ego-browser-mcp.cmd" "@node `"$PWD\bin\ego-browser-mcp.mjs`" %
 Identical to upstream — a heredoc of JS on stdin:
 
 ```bash
-ego-browser <<'JS'
-await taskSpaces.run('research task', async () => {
-  await page.goto('https://example.com')
-  console.log(await page.snapshot())
-})
+ego-browser nodejs <<'JS'
+const task = await taskSpace('research task')
+const page = task.page('p1')
+await page.goto('https://example.com')
+console.log(await page.snapshot())
+await task.finish({ keep: [] })
 JS
 ```
+
+That runs on the v2 runtime, the default; v1 scripts still work (see
+[Two runtimes](#two-runtimes)).
 
 MCP hosts can launch the alternate stdio entry point:
 
@@ -450,12 +454,13 @@ Two costs are Windows-specific and worth knowing:
 
 Two harness builds ship side by side and share this shim:
 
-| Runtime | Package                  | Picked when                                  | API                                               |
-| ------- | ------------------------ | -------------------------------------------- | ------------------------------------------------- |
-| v1      | `package/ego-browser`    | default                                      | `page`, `browser`, `taskSpaces`, locators         |
-| v2      | `package/ego-browser-v2` | the script calls `taskSpace(` or `profiles(` | `taskSpace(name)` → `task.page(label)` (upstream) |
+| Runtime | Package                  | Picked when                                                                                              | API                                               |
+| ------- | ------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| v2      | `package/ego-browser-v2` | default; always when the script calls a v2 entry point (`taskSpace(`, `profiles(`, `claimTaskSpace(`, …) | `taskSpace(name)` → `task.page(label)` (upstream) |
+| v1      | `package/ego-browser`    | the script uses `taskSpaces`, `browser.`, `site.`, or a `page.` it never declares                        | `page`, `browser`, `taskSpaces`, locators         |
 
 `EGO_BROWSER_RUNTIME=v1|v2` overrides the detection (`src/runtime-select.mjs`).
+The same detection applies to `ego-browser nodejs -e '<code>'`.
 `package/ego-browser-v2` is an unmodified copy of upstream
 `citrolabs/ego-lite`'s `package/ego-browser`; refresh it with
 `git read-tree` from an upstream ref rather than editing it. For v2 the shim

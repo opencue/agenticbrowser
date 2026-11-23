@@ -521,3 +521,63 @@ describe("ego-browser Linux port", () => {
     assert.doesNotMatch(out, /saved@example|saved-secret/);
   });
 });
+
+/** Run the real CLI with arguments only, no stdin. */
+function runArgs(args, { timeout = 120000 } = {}) {
+  return new Promise((resolve, reject) => {
+    // Headless through the environment: a leading --headless would hide the
+    // `nodejs` / `skill` word the CLI reads from argv[0].
+    const child = spawn(process.execPath, [BIN, ...args], {
+      env: {
+        ...process.env,
+        ...TEST_ENV,
+        FIXTURE_URL,
+        EGO_LINUX_HEADLESS: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error(`timed out after ${timeout}ms\n${stdout}\n${stderr}`));
+    }, timeout);
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) reject(new Error(`exit ${code}\n${stdout}\n${stderr}`));
+      else resolve(stdout);
+    });
+  });
+}
+
+describe("script forms the usage guide documents", () => {
+  it("runs `nodejs -e '<code>'` on the v2 runtime by default", async () => {
+    const out = await runArgs([
+      "nodejs",
+      "-e",
+      // Read the v1 global through globalThis: a bare `taskSpaces` is itself the
+      // v1 marker, so naming it would pick v1.
+      "console.log('v2:', typeof taskSpace === 'function', 'v1:', typeof globalThis.taskSpaces !== 'undefined')",
+    ]);
+    assert.match(out, /v2: true v1: false/);
+  });
+
+  it("still runs a `-e` script that uses the v1 globals on v1", async () => {
+    const out = await runArgs([
+      "nodejs",
+      "-e",
+      "console.log('v1:', typeof taskSpaces.run === 'function')",
+    ]);
+    assert.match(out, /v1: true/);
+  });
+
+  it("prints the Skill's usage guide for `skill`, without frontmatter", async () => {
+    const out = await runArgs(["skill"]);
+    assert.match(out, /^> \*\*This is the Linux and Windows port\*\*/);
+    assert.match(out, /taskSpace\(/);
+    assert.doesNotMatch(out, /^---\n/);
+  });
+});

@@ -250,11 +250,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package/ego-browser/package-lock.json
+            package/ego-browser-v2/package-lock.json
             package/ego-windows-host/package-lock.json
             package/ego-linux-host/package-lock.json
-      - name: Build the harness the Windows host loads
-        working-directory: package/ego-browser
+      - name: Build the v2 runtime the Windows host loads
+        working-directory: package/ego-browser-v2
         run: npm ci --ignore-scripts && npm run build
       - name: Build the Windows host
         working-directory: package/ego-windows-host

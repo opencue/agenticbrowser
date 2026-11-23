@@ -61,7 +61,7 @@ finally {
   Pop-Location
 }
 
-# Scripts that call taskSpace()/profiles() run on upstream's v2 runtime.
+# The v2 TaskSpace/Page runtime is the default; v1 still serves older scripts.
 Write-Host "Building ego-browser v2 runtime..."
 Push-Location "$harness-v2"
 try {

@@ -1,6 +1,6 @@
 {
   "name": "ego-browser-linux",
-  "version": "2.2.1-linux.1",
+  "version": "2.2.1-linux.2",
   "private": true,
   "description": "Linux and Windows backing layer plus MCP v2 server for the ego-browser harness.",
   "type": "module",
