@@ -60,7 +60,11 @@ EOF
 # Round 2 — only after the user approves the screenshot
 ego-browser nodejs <<'EOF'
 const task = await taskSpace('fb group post') // same space as round 1
-task.page('p1') // the label survives between rounds, so the composer is still on p1
+// Site tools act on the browser's current tab, not on a Page handle. Point it
+// at the composer page first (needed whenever the space holds more than one).
+const page = task.page('p1')
+await page.info() // resolves page.targetId in this process
+await switchTab(page.targetId)
 
 const result = await runSiteTool('facebook', 'post_to_group', {
   text: 'Draft body goes here.',
@@ -75,8 +79,10 @@ context with the composer already where the first round left it.
 
 ## Composer behaviour
 
-> **Verified 2026-08-06** on a private test group, English UI. Draft path only —
-> the `confirm: true` publish branch has still never been run.
+> **Verified 2026-08-06** on a private test group, English UI, with the v1
+> implementation. Draft path only — the `confirm: true` publish branch has still
+> never been run against facebook.com. The v2 port (2026-11-23) was checked on a
+> local Facebook-like fixture only: draft, re-draft without doubling, publish.
 
 The trigger is a `role="button"` whose text is `Write something...`. It opens two
 nested `[role="dialog"]` elements — the outer one is labelled `Create post`, the
@@ -100,14 +106,15 @@ apart.
   `"second run replaces?"` arrives intact — so this is specific to `.`, most likely
   Facebook's own link/domain parser normalizing the text. `post_to_group` returns
   `matchesRequested` so the caller sees the difference instead of guessing.
-- `fill()` injects text without firing the React handlers that enable the publish
-  button. `pressSequentially()` does, which is what the tool uses.
-- Newlines: `Enter` inside the composer inserts a line break, it does not submit.
-  Safe to type multi-line bodies directly.
+- Setting the editor's text directly does not fire the React handlers that enable
+  the publish button. The tool inserts one character at a time through CDP
+  `Input.insertText` (which fires `beforeinput`/`input`).
+- Newlines: the tool presses `Enter` for each `\n`; inside the composer that
+  inserts a line break, it does not submit. Multi-line bodies are passed as-is.
 - **Do not navigate away with an open draft.** Doing so hangs the renderer:
   `Page.navigate` times out, then every `Runtime.evaluate` times out too, and
   `Page.handleJavaScriptDialog` reports "No dialog is showing". The tab is not
-  recoverable in place — close it with `browser.closeTab(...)` and reopen. Press
+  recoverable in place — close it with `page.close()` and open a new page. Press
   `Escape` and confirm the discard *before* navigating.
 - A group with post approval turned on returns success and then queues the post for
   a moderator. The tool cannot distinguish that from a live post — check the group's
