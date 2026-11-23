@@ -16,8 +16,7 @@ Pass the script to `ego-browser nodejs`.
 
 <!-- platform: windows -->
 
-The form depends on the shell that runs the command: heredoc is Bash/Zsh
-syntax and does not exist in PowerShell or cmd.
+Heredoc exists only in Bash/Zsh, so the form depends on your shell.
 
 ### Bash, Zsh, Git Bash
 
@@ -34,45 +33,33 @@ console.log(await page.snapshot());
 EOF
 ```
 
-When a sandbox blocks heredoc input, use `-e` instead. Use single quotes around
-the code and double quotes for JavaScript strings; single quotes within the code
-require shell quoting.
-
-```bash
-ego-browser nodejs -e '
-const task = await taskSpace("inspect example page");
-await task.page("p1").goto("https://example.com");
-console.log(task.spaceId);
-'
-```
+When a sandbox blocks heredoc input, use `ego-browser nodejs -e '<code>'`
+instead. Use single quotes around the code and double quotes for JavaScript
+strings; single quotes within the code require shell quoting.
 
 <!-- platform: windows -->
 
 ### PowerShell
 
-PowerShell has no heredoc, and Windows PowerShell 5.1 drops the double quotes
-inside an argument when it calls a native program, which splits the script into
-several arguments. Do not pass a script that contains double quotes or spans
-several lines to `-e`. Write it to a UTF-8 `.mjs` file instead and evaluate an
-ASCII-only one-line entry point, which needs no double quotes of its own:
+PowerShell has no heredoc, and Windows PowerShell 5.1 strips double quotes from
+native-program arguments, which splits the script. Never pass a multi-line or
+double-quoted script to `-e`. Write a UTF-8 `.mjs` file and evaluate this
+one-line entry point:
 
 ```powershell
 ego-browser nodejs -e "await import('file:///C:/Users/<name>/ego/task.mjs')"
 ```
 
-The imported module runs with the same helpers and `console` as an inline
-script, so the whole task belongs in the `.mjs` file. Use forward slashes in the
-`file:///` URL. Non-ASCII content such as Chinese text must stay inside the
-file: never put it in a `-e` argument.
+The module gets the same helpers and `console` as an inline script, so put the
+whole task in the file. Use forward slashes in the URL, and keep non-ASCII text
+such as Chinese in the file, never in `-e`.
 
-Do not pipe the file in with `Get-Content`. Windows PowerShell 5.1 reads a UTF-8
-file as ANSI and sends ASCII to native programs, which corrupts non-ASCII text
-and truncates strings. PowerShell has no `<` input redirection either.
+Do not pipe the file with `Get-Content`: 5.1 corrupts non-ASCII text and
+truncates strings. PowerShell has no `<` redirection either.
 
 ### cmd
 
-cmd has no heredoc, but it does support input redirection, so it can run the
-same `.mjs` file directly:
+cmd has no heredoc but supports input redirection:
 
 ```bat
 ego-browser nodejs < C:\Users\<name>\ego\task.mjs
@@ -80,21 +67,19 @@ ego-browser nodejs < C:\Users\<name>\ego\task.mjs
 
 ### Later rounds with a script file
 
-Each run is a new process, and earlier rounds have already run. Write a new,
-complete file for every round (`round-01.mjs`, `round-02.mjs`, ...) instead of
-editing the previous one, which would replay old steps. Keep one goal's files in
-a new directory named for the goal plus the date and time, such as
-`C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files written
-in this conversation. Create files with your file tool, not PowerShell
-`Set-Content`, `Out-File`, or `>`, which write ANSI or UTF-16 on 5.1.
+Each run is a new process, so write a new, complete file per round
+(`round-01.mjs`, `round-02.mjs`, ...); editing the previous one replays old
+steps. Keep one goal's files in a new directory named for the goal and time,
+such as `C:/Users/<name>/ego/laptop-prices-20260922-1405/`, and only run files
+written in this conversation. Create files with your file tool: PowerShell
+`Set-Content`, `Out-File`, and `>` write ANSI or UTF-16 on 5.1.
 
 ### When the script fails to parse
 
 `SyntaxError: await is only valid in async functions and the top level bodies of
-modules` almost always means the shell damaged the script before Node received
-it; top-level `await` itself is supported. Do not wrap the code in an async
-IIFE, open a new task space, or resend the same command. Switch to the `.mjs`
-file form above.
+modules` almost always means the shell damaged the script; top-level `await` is
+supported. Do not wrap the code in an async IIFE, open a new task space, or
+resend the command. Switch to the `.mjs` file form.
 
 <!-- /platform -->
 

@@ -237,9 +237,41 @@ jobs:
           path: package/ego-linux/installer/dist/ego-lite-setup.exe*
           if-no-files-found: error
 
+  # The Linux and Windows hosts as standalone archives: built output only, with
+  # the Windows host's ego-browser-v2 link replaced by a real copy of the build.
+  package-hosts:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            package/ego-browser/package-lock.json
+            package/ego-windows-host/package-lock.json
+            package/ego-linux-host/package-lock.json
+      - name: Build the harness the Windows host loads
+        working-directory: package/ego-browser
+        run: npm ci --ignore-scripts && npm run build
+      - name: Build the Windows host
+        working-directory: package/ego-windows-host
+        run: npm ci --ignore-scripts && npm run build
+      - name: Build the Linux host
+        working-directory: package/ego-linux-host
+        run: npm ci && npm run build
+      - name: Package the hosts
+        run: scripts/release/package-hosts.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/hosts"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ego-hosts
+          path: ${{ runner.temp }}/hosts/*
+          if-no-files-found: error
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: [test, test-linux, test-linux-host, test-windows, build-windows-installer]
+    needs: [test, test-linux, test-linux-host, test-windows, build-windows-installer, package-hosts]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -260,6 +292,10 @@ jobs:
         with:
           name: ego-lite-setup
           path: ${{ runner.temp }}/windows-installer
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ego-hosts
+          path: ${{ runner.temp }}/hosts
       - run: npm ci
       - run: npm run build
       - name: Resolve release channel
@@ -276,13 +312,14 @@ jobs:
             prerelease="true"
             latest="false"
             previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*-beta.*' | grep -v "^$release_tag$" | head -1 || true)"
-          elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          elif [[ "$ref_name" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-linux\.[0-9]+)?$ ]]; then
+            # vX.Y.Z-linux.N tracks upstream vX.Y.Z; it is a stable release of this fork.
             release_tag="$ref_name"
             version_tag="$ref_name"
             title="ego lite $ref_name"
             prerelease="false"
             latest="true"
-            previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -v "^$release_tag$" | head -1 || true)"
+            previous_tag="$(git tag --merged HEAD --sort=-creatordate --list 'v*.*.*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-linux\.[0-9]+)?$' | grep -v "^$release_tag$" | head -1 || true)"
           else
             echo "Unsupported release ref: $ref_name"
             supported="false"
@@ -320,6 +357,7 @@ jobs:
           artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
           windows_installer="${RUNNER_TEMP}/windows-installer/ego-lite-setup.exe"
           windows_checksum="${windows_installer}.sha256"
+          hosts=("${RUNNER_TEMP}"/hosts/*)
           notes_file="$(mktemp)"
           release_args=()
           notes_args=()
@@ -355,12 +393,12 @@ jobs:
               --notes-file "$notes_file" \
               "${release_args[@]}"
             gh release upload "$release_tag" \
-              "$artifact" "$windows_installer" "$windows_checksum" --clobber
+              "$artifact" "$windows_installer" "$windows_checksum" "${hosts[@]}" --clobber
           else
             gh release create "$release_tag" \
               --title "$title" \
               --notes-file "$notes_file" \
               --verify-tag \
               "${release_args[@]}" \
-              "$artifact" "$windows_installer" "$windows_checksum"
+              "$artifact" "$windows_installer" "$windows_checksum" "${hosts[@]}"
           fi

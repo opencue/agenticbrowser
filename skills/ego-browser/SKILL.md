@@ -5,7 +5,7 @@ description: >-
   app, including opening URLs, filling forms, running login flows, taking
   screenshots, scraping data, or debugging browser UI with Ego Lite.
 metadata:
-  version: "1.2.6-linux.1"
+  version: "2.2.1-linux.1"
   date: "2026-08-30"
   platform: "linux-windows-port"
 ---
