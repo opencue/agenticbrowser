@@ -16,7 +16,7 @@ domain may have moved.
   `/app/login`** by the SPA. `open_admin` uses exactly this: URL-based
   detection, no login-form selectors to rot.
 - Login is manual, once: the agent hands the task space to the user
-  (`taskSpaces.handOff`), the user signs in, and the session cookie persists in
+  (`task.handOff()`), the user signs in, and the session cookie persists in
   the agent browser profile across heredoc rounds and browser restarts. Do not
   automate credential entry.
 - After login, the page context carries the session, so `fetch` from inside the
@@ -50,9 +50,9 @@ Endpoints used:
 
 ## Recommended flow
 
-1. `site.runTool('medusa-admin', 'open_admin', { domain: 'admin.<shop>.hu' })`
+1. `runSiteTool('medusa-admin', 'open_admin', { domain: 'admin.<shop>.hu' })`
 2. If `authenticated: false` → hand off to the user to log in, then re-run 1.
-3. `site.runBrowserTool('medusa-admin', 'list_orders', { limit: 10 })` or
+3. `runSiteBrowserTool('medusa-admin', 'list_orders', { limit: 10 })` or
    `search_products` — no snapshot round needed for the data itself.
 
 Use `page.snapshot()` only when actually operating the UI (editing an order,

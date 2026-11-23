@@ -24,6 +24,14 @@ const PUBLISH_LABELS = [
 const COMPOSER_SELECTOR =
   'div[role="dialog"] div[role="textbox"][contenteditable="true"]';
 
+// CDP modifier bit for Control (Alt=1, Control=2, Meta=4, Shift=8).
+const CONTROL = 2;
+
+/** Evaluate `fn(arg)` in the page; fn must be self-contained (no closure). */
+function inPage(ctx, fn, arg) {
+  return ctx.js(`(${fn})(${JSON.stringify(arg)})`);
+}
+
 function normalizeLabels(extra) {
   const list = Array.isArray(extra) ? extra : [];
   return list
@@ -42,7 +50,7 @@ export async function postToGroup(ctx, args = {}) {
     ...normalizeLabels(args.submitLabels),
   ];
 
-  const url = await ctx.page.url();
+  const { url } = await ctx.pageInfo();
   if (!url.includes("/groups/")) {
     return {
       status: "failed",
@@ -54,9 +62,13 @@ export async function postToGroup(ctx, args = {}) {
 
   // The composer may already be open from an earlier draft round in the same
   // task space; only click the trigger when it is not.
-  const alreadyOpen = await ctx.page.locator(COMPOSER_SELECTOR).count();
+  const alreadyOpen = await inPage(
+    ctx,
+    (selector) => Boolean(document.querySelector(selector)),
+    COMPOSER_SELECTOR,
+  );
   if (!alreadyOpen) {
-    const opened = await ctx.page.evaluate((labels) => {
+    const opened = await inPage(ctx, (labels) => {
       const norm = (value) =>
         (value || "").replace(/\s+/g, " ").trim().toLowerCase();
 
@@ -86,23 +98,58 @@ export async function postToGroup(ctx, args = {}) {
     }
   }
 
-  const composer = ctx.page.locator(COMPOSER_SELECTOR);
-  await composer.waitFor({ state: "visible", timeout: 15000 });
-  await composer.click();
+  if (!(await ctx.waitForElement(COMPOSER_SELECTOR, { timeout: 15, visible: true }))) {
+    return {
+      status: "failed",
+      draft: "",
+      url,
+      error: "composer did not become visible within 15 seconds",
+    };
+  }
+  await ctx.click(COMPOSER_SELECTOR).catch(() => {});
+  // A pointer click does not always leave focus in the contenteditable; key
+  // input then goes to <body> and nothing is typed. Focus it explicitly and
+  // check before typing.
+  const focused = await inPage(
+    ctx,
+    (selector) => {
+      const box = document.querySelector(selector);
+      if (!box) return false;
+      box.focus();
+      return document.activeElement === box;
+    },
+    COMPOSER_SELECTOR,
+  );
+  if (!focused) {
+    return {
+      status: "failed",
+      draft: "",
+      url,
+      error: "could not focus the composer",
+    };
+  }
 
   // A composer left open by an earlier round still holds its text, and typing
   // into it appends rather than replaces — that silently doubles a retried post.
-  // clear() does not reliably empty a contenteditable, so select-all + delete.
-  await ctx.page.keyboard.press("Control+a");
-  await ctx.page.keyboard.press("Delete");
-  await ctx.page.waitForTimeout(300);
+  // Clearing a contenteditable programmatically is unreliable, so select-all +
+  // delete through real key events.
+  await ctx.pressKey("a", CONTROL);
+  await ctx.pressKey("Delete");
+  await ctx.wait(0.3);
 
-  // fill() injects text without firing the React input events that enable the
-  // publish button. Typing is slower but is what actually arms the composer.
-  await composer.pressSequentially(text);
-  await ctx.page.waitForTimeout(800);
+  // Setting the DOM text does not fire the input events that arm the publish
+  // button. Insert one character at a time through CDP input instead, the way
+  // typing does.
+  for (const character of text) {
+    await ctx.typeText(character);
+  }
+  await ctx.wait(0.8);
 
-  const draft = await composer.innerText();
+  const draft = await inPage(
+    ctx,
+    (selector) => document.querySelector(selector)?.innerText ?? "",
+    COMPOSER_SELECTOR,
+  );
 
   if (!confirm) {
     return {
@@ -116,7 +163,7 @@ export async function postToGroup(ctx, args = {}) {
     };
   }
 
-  const clicked = await ctx.page.evaluate((labels) => {
+  const clicked = await inPage(ctx, (labels) => {
     const dialog = document.querySelector('div[role="dialog"]');
     if (!dialog) return "no-dialog";
 
@@ -146,12 +193,12 @@ export async function postToGroup(ctx, args = {}) {
   }
 
   // The dialog unmounting is the only in-page signal that the post went through.
-  try {
-    await ctx.page.waitForFunction(
-      () => !document.querySelector('div[role="dialog"]'),
-      { timeout: 20000 },
-    );
-  } catch {
+  let closed = false;
+  for (let waited = 0; waited < 20 && !closed; waited += 0.5) {
+    await ctx.wait(0.5);
+    closed = await inPage(ctx, () => !document.querySelector('div[role="dialog"]'));
+  }
+  if (!closed) {
     return {
       status: "failed",
       draft,

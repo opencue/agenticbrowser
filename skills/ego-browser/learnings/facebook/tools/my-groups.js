@@ -7,20 +7,18 @@ function boundedInteger(value, fallback, max) {
 export async function listMyGroups(ctx, args = {}) {
   const maxGroups = boundedInteger(args.maxGroups, 50, 200);
 
-  const url = await ctx.page.url();
+  const { url } = await ctx.pageInfo();
   if (!/facebook\.com\/groups\/joins/.test(url)) {
-    await ctx.page.goto("https://www.facebook.com/groups/joins", {
-      waitUntil: "load",
-    });
+    await ctx.gotoAndWait("https://www.facebook.com/groups/joins");
   }
 
   // The joins list is virtualized like every other Facebook feed.
   for (let round = 0; round < 4; round += 1) {
-    await ctx.page.mouse.wheel(0, 1800);
-    await ctx.page.waitForTimeout(1200);
+    await ctx.scrollBy(1800);
+    await ctx.wait(1.2);
   }
 
-  return ctx.page.evaluate((limit) => {
+  return ctx.js(`(${(limit) => {
     // Nav chrome lives under /groups/ too — these are not joined groups.
     const reserved = new Set([
       "feed",
@@ -52,5 +50,5 @@ export async function listMyGroups(ctx, args = {}) {
     }
 
     return [...seen.values()];
-  }, maxGroups);
+  }})(${JSON.stringify(maxGroups)})`);
 }

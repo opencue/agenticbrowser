@@ -22,11 +22,11 @@ manages to attach its permalink.
 
 ```bash
 ego-browser nodejs <<'EOF'
-const task = await taskSpaces.useOrCreate('fb group watch')
-
+const task = await taskSpace('fb group watch')
+const page = task.page('p1')
 await page.goto('https://www.facebook.com/groups/YOUR_GROUP?sorting_setting=CHRONOLOGICAL', { waitUntil: 'load' })
 
-const posts = await site.runTool('facebook', 'get_group_posts', { maxPosts: 20, scrollRounds: 3 })
+const posts = await runSiteTool('facebook', 'get_group_posts', { maxPosts: 20, scrollRounds: 3 })
 console.log(JSON.stringify(posts, null, 2))
 EOF
 ```
@@ -44,24 +44,25 @@ review step is the entire point.
 ```bash
 # Round 1 — draft, then look at it
 ego-browser nodejs <<'EOF'
-const task = await taskSpaces.useOrCreate('fb group post')
-
+const task = await taskSpace('fb group post')
+const page = task.page('p1')
 await page.goto('https://www.facebook.com/groups/YOUR_GROUP', { waitUntil: 'load' })
 
-const result = await site.runTool('facebook', 'post_to_group', {
+const result = await runSiteTool('facebook', 'post_to_group', {
   text: 'Draft body goes here.',
 })
-console.log(JSON.stringify(result))
-await page.screenshot()
+console.log(JSON.stringify(result), 'task space id:', task.spaceId)
+console.log(await page.screenshot())
 EOF
 ```
 
 ```bash
 # Round 2 — only after the user approves the screenshot
 ego-browser nodejs <<'EOF'
-const task = await taskSpaces.useOrCreate('fb group post')
+const task = await taskSpace('fb group post') // same space as round 1
+task.page('p1') // the label survives between rounds, so the composer is still on p1
 
-const result = await site.runTool('facebook', 'post_to_group', {
+const result = await runSiteTool('facebook', 'post_to_group', {
   text: 'Draft body goes here.',
   confirm: true,
 })
