@@ -43,6 +43,9 @@ for dep in $(node -p 'Object.keys(require(process.argv[1]).dependencies ?? {}).j
   test -d "$pkg/ego-browser-v2/node_modules/$dep" || { echo "missing dependency: $dep (run npm ci in package/ego-browser-v2)" >&2; exit 1; }
   cp -R "$pkg/ego-browser-v2/node_modules/$dep" "$win/node_modules/$dep"
 done
+# The port's v2 extensions, loaded by the host before each script.
+mkdir -p "$win/node_modules/ego-v2-ext"
+cp -R "$pkg/ego-v2-ext/src" "$pkg/ego-v2-ext/package.json" "$win/node_modules/ego-v2-ext/"
 (cd "$stage" && zip -qr "$out/ego-windows-host-$tag.zip" "ego-windows-host-$tag")
 
 (cd "$out" && sha256sum "ego-linux-host-$tag.tgz" "ego-windows-host-$tag.zip" > SHA256SUMS-hosts.txt)

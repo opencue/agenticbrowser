@@ -50,6 +50,10 @@ const HARNESS_V2 = new URL(
   "../../ego-browser-v2/dist/out/index.js",
   import.meta.url,
 );
+const V2_EXTENSIONS = new URL(
+  "../../ego-v2-ext/src/index.mjs",
+  import.meta.url,
+);
 const SKILL_WORKSPACE = new URL("../../../skills/ego-browser", import.meta.url);
 const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 
@@ -792,6 +796,16 @@ async function main() {
 
   const { runMain } = await import(harness);
   try {
+    // v2 gets the port's extensions (locators, fastObserve/fastAct, debug,
+    // requestUserAction) without touching the upstream mirror; see
+    // package/ego-v2-ext/src/index.mjs.
+    if (harness === HARNESS_V2.href && stdinText !== undefined) {
+      const { withExtensions } = await import(V2_EXTENSIONS.href);
+      return await runMain({
+        argv: rest,
+        stdinText: withExtensions(stdinText),
+      });
+    }
     return await runMain({ argv: rest, stdinText });
   } finally {
     // A script that creates a Task Space but returns or throws before its first

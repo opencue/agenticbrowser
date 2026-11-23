@@ -25,6 +25,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = join(HERE, "..");
 const HARNESS = join(PORT, "..", "ego-browser", "dist", "out");
 const HARNESS_V2 = join(PORT, "..", "ego-browser-v2", "dist", "out");
+const V2_EXTENSIONS = join(PORT, "..", "ego-v2-ext", "src");
 const LOCKFILE = join(PORT, "package-lock.json");
 
 /**
@@ -47,7 +48,7 @@ const LAYOUT = [
   {
     from: join(HARNESS_V2, "index.js"),
     to: join("package", "ego-browser-v2", "dist", "out", "index.js"),
-    why: "upstream's v2 runtime, for scripts that call taskSpace()/profiles()",
+    why: "upstream's v2 runtime, the default",
   },
   {
     from: join(HARNESS_V2, "ego-browser"),
@@ -58,6 +59,11 @@ const LAYOUT = [
     from: join(HARNESS_V2, "agent-skills"),
     to: join("package", "ego-browser-v2", "dist", "out", "agent-skills"),
     why: "the bundled entry Skill the v2 runtime resolves at startup",
+  },
+  {
+    from: V2_EXTENSIONS,
+    to: join("package", "ego-v2-ext", "src"),
+    why: "the port's extensions loaded on top of the v2 runtime",
   },
   {
     from: join(PORT, "bin"),
