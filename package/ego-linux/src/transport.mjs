@@ -287,7 +287,17 @@ export async function connectCdp(
     // them would push them into the harness's event buffer, where drainEvents()
     // hands them to the agent — a screencast alone would bury a task's real
     // events under dozens of frames a second.
-    if (data.sessionId && shimSessions.has(data.sessionId)) {
+    //
+    // Responses are not: an id below INTERNAL_ID_BASE answers a harness request.
+    // The v2 runtime adopts any session it sees attached to its target — in a
+    // later round that is often the one the shim opened first — and swallowing
+    // the answers there left every page call hanging until its timeout
+    // ("renderer is probably hung").
+    if (
+      data.sessionId &&
+      shimSessions.has(data.sessionId) &&
+      typeof data.id !== "number"
+    ) {
       shimEvents.get(data.method)?.(data.params || {}, data.sessionId);
       return;
     }

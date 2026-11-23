@@ -33,7 +33,7 @@ import {
 } from "./rpc.js";
 import { SpaceManager } from "./space-manager.js";
 
-export const HOST_VERSION = "2.2.1-linux.2";
+export const HOST_VERSION = "2.2.1-linux.3";
 // macOS sockaddr_un.sun_path is 104 bytes including the trailing NUL.
 const MAX_PORTABLE_UNIX_SOCKET_PATH_BYTES = 103;
 

@@ -13,7 +13,7 @@
   "plugins": [
     {
       "name": "browser-skills",
-      "version": "2.2.1-linux.2",
+      "version": "2.2.1-linux.3",
       "description": "Automates browser interactions for web testing, form filling, screenshots, and data extraction",
       "source": "./",
       "strict": false,
