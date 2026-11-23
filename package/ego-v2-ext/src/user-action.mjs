@@ -113,7 +113,13 @@ export async function requestUserAction(
   if (shown?.visible !== true) {
     const reason =
       typeof shown?.reason === "string" ? shown.reason : "not-visible";
-    if (instruction && typeof ego.notifyUserAction === "function") {
+    // A headless browser has no window: a desktop notice asking the user to
+    // act in it would only mislead them, so say nothing there.
+    if (
+      instruction &&
+      reason !== "headless" &&
+      typeof ego.notifyUserAction === "function"
+    ) {
       await Promise.resolve(
         ego.notifyUserAction({ instruction, reason }),
       ).catch(() => {});

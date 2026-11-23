@@ -129,6 +129,7 @@ it(
     const env = {
       ...process.env,
       EGO_LINUX_HEADLESS: "1",
+      EGO_LINUX_NOTIFY: "0",
       EGO_LINUX_PROFILE: join(sandbox, "profile"),
       XDG_DATA_HOME: join(sandbox, "data"),
       XDG_STATE_HOME: join(sandbox, "state"),

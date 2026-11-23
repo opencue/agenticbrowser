@@ -212,3 +212,22 @@ it("uses notify-send without a shell as the presentation fallback", () => {
   assert.equal(calls[0].options.shell, false);
   assert.match(calls[0].args.join(" "), /Approve the login/);
 });
+
+it("sends no desktop notification when EGO_LINUX_NOTIFY=0", () => {
+  const before = process.env.EGO_LINUX_NOTIFY;
+  process.env.EGO_LINUX_NOTIFY = "0";
+  try {
+    const result = notifyUserAction(
+      { instruction: "Approve the login" },
+      {
+        spawnProcess() {
+          throw new Error("must not spawn notify-send");
+        },
+      },
+    );
+    assert.deepEqual(result, { done: true, skipped: "disabled" });
+  } finally {
+    if (before === undefined) delete process.env.EGO_LINUX_NOTIFY;
+    else process.env.EGO_LINUX_NOTIFY = before;
+  }
+});

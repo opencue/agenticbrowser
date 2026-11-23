@@ -20,6 +20,9 @@ import { installPageLocators } from "./locator.mjs";
 import { installFastLoop } from "./fast.mjs";
 import { installPageDebug } from "./debug.mjs";
 import { installUserAction } from "./user-action.mjs";
+import { installAuthFlows } from "./auth.mjs";
+import { installNetworkWaits } from "./network.mjs";
+import { installRecording } from "./recording.mjs";
 
 const GLOBAL_KEY = "__egoV2Ext";
 
@@ -65,6 +68,8 @@ export function extendPage(page) {
   installPageLocators(proto, defineMethod);
   installFastLoop(proto, defineMethod);
   installPageDebug(proto, defineMethod);
+  installNetworkWaits(proto, defineMethod);
+  installRecording(proto, defineMethod);
   return page;
 }
 
@@ -97,6 +102,7 @@ export function extendTask(task) {
     });
   }
   installUserAction(proto, defineMethod);
+  installAuthFlows(proto, defineMethod);
   return task;
 }
 
