@@ -52,6 +52,7 @@ Every [release](https://github.com/opencue/agenticbrowser/releases/latest) ships
 | `ego-linux-host-<tag>.tgz`     | The Linux host daemon and CLI, built. Needs Node ≥ 22.                                             |
 | `ego-windows-host-<tag>.zip`   | The Windows host with the v2 runtime inside, built. Needs Node ≥ 22.                               |
 | `ego-browser-<tag>.zip`        | The `ego-browser` harness bundle.                                                                  |
+| `*.sha256`, `SHA256SUMS-hosts.txt` | SHA-256 checksums for the installer and the host archives.                                     |
 
 The Windows installer is not code-signed, so SmartScreen asks once: choose
 **More info → Run anyway**.
@@ -95,8 +96,8 @@ ego-browser follow @someone on x.com for me
 
 The agent picks up the `ego-browser` skill, opens the page in its own task
 space, reads a snapshot (the page turned into structured text), acts on the
-page, and reports back, all while your own tabs stay untouched. Everything the
-browser holds stays on your machine.
+page, and reports back, all while your own tabs stay untouched. The browser,
+its profile and the task-space state all run locally; nothing is hosted.
 
 ## Highlights
 
