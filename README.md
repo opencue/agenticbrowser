@@ -2,37 +2,114 @@
 
 <img src="docs/assets/banner.png" alt="agenticbrowser" width="100%" />
 
-**agenticbrowser — a browser you share with your AI agents, on Linux and Windows**
+**A browser you share with your AI agents, on Linux and Windows**
 
 <p>
-  <a href="#install-on-linux"><img src="https://img.shields.io/badge/Install-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Install on Linux" /></a>
-  <a href="#install-on-windows"><img src="https://img.shields.io/badge/Install-Windows%20(beta)-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Install on Windows" /></a>
+  <a href="https://github.com/opencue/agenticbrowser/releases/latest"><img src="https://img.shields.io/badge/Download-Linux-000000?style=for-the-badge&logo=linux&logoColor=white" alt="Download for Linux" /></a>
+  <a href="https://github.com/opencue/agenticbrowser/releases/latest/download/ego-lite-setup.exe"><img src="https://img.shields.io/badge/Download-Windows-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download for Windows" /></a>
+  <a href="https://github.com/opencue/agenticbrowser/releases/latest"><img src="https://img.shields.io/github/v/release/opencue/agenticbrowser?style=for-the-badge&label=Release&color=1E90FF" alt="Latest release" /></a>
   <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node-%E2%89%A5%2022-3DA639?style=for-the-badge&logo=nodedotjs&logoColor=white" alt="Node 22 or newer" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-3DA639?style=for-the-badge" alt="License MIT" /></a>
 </p>
 
 </div>
 
-Your agents (Claude Code, Codex, Cursor or your own) run browser tasks in their
-own **task spaces** inside one shared Chromium, signed in with your real logins,
-while your own tabs stay yours. Instead of a `navigate` → look → `click` → look
-round trip per step, the agent writes **one JavaScript block** that does the
-whole task, so runs finish faster on fewer tokens.
+agenticbrowser is a browser where you and your AI agents work in parallel. Your
+agents (Claude Code, Codex, Cursor or your own) run their browser tasks in their
+own **task spaces**, owned sets of tabs inside one shared Chromium, signed in
+with your real logins, while you keep browsing in yours. And because the agent
+writes **one JavaScript block** for the whole task instead of a `navigate` →
+look → `click` → look round trip per step, runs finish faster on fewer tokens.
 
-- **Stock Chromium, no custom build.** It drives the Chrome, Chromium, Brave or
-  Edge you already have, over the Chrome DevTools Protocol.
-- **Your logins carry over.** Import your Chrome profile once, and agents land on
-  pages already signed in.
-- **Parallel, owned task spaces.** Each task gets its own tabs and an owner, so
-  agents don't collide, and you can take over halfway through.
-- **CLI or MCP.** A heredoc CLI for agents with a shell, and a one-tool MCP server
-  for everyone else.
+It is a Linux-first port of [ego lite](https://github.com/citrolabs/ego-lite):
+the same `ego-browser` skill and harness, driving the stock Chrome, Chromium,
+Brave or Edge you already have over the Chrome DevTools Protocol. No custom
+browser build, and native Windows 10/11 is supported too (beta).
 
 > **Renamed from `opencue/ego-lite-linux`.** GitHub redirects the old URLs; update
 > your remote when convenient:
 > `git remote set-url origin https://github.com/opencue/agenticbrowser.git`.
 > On-disk names (profile directory, `.desktop` entry, icon, window class) keep
 > `ego-lite-linux` on purpose, so existing installs are not orphaned.
+
+## Quick Start
+
+### 1. Install
+
+Pick whichever fits your flow.
+
+**1.1 Download a release**
+
+<a href="https://github.com/opencue/agenticbrowser/releases/latest/download/ego-lite-setup.exe"><img src="https://img.shields.io/badge/⬇%20Windows-.exe-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download the Windows installer" /></a>
+<a href="https://github.com/opencue/agenticbrowser/releases/latest"><img src="https://img.shields.io/badge/⬇%20Linux%20host-.tgz-000000?style=for-the-badge&logo=linux&logoColor=white" alt="Download the Linux host" /></a>
+<a href="https://github.com/opencue/agenticbrowser/releases/latest"><img src="https://img.shields.io/badge/⬇%20Windows%20host-.zip-000000?style=for-the-badge&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0iI2ZmZiIgZD0iTTAgMGgxMS4zNzd2MTEuMzcySDB6bTEyLjYyMyAwSDI0djExLjM3MkgxMi42MjN6TTAgMTIuNjIzaDExLjM3N1YyNEgwem0xMi42MjMgMEgyNFYyNEgxMi42MjN6Ii8%2BPC9zdmc%2B" alt="Download the Windows host" /></a>
+
+Every [release](https://github.com/opencue/agenticbrowser/releases/latest) ships:
+
+| Asset                          | What it is                                                                                         |
+| ------------------------------ | -------------------------------------------------------------------------------------------------- |
+| `ego-lite-setup.exe`           | Windows installer. Bundles Node, puts `ego-browser` on your `PATH`, drives the Edge you already have. |
+| `ego-linux-host-<tag>.tgz`     | The Linux host daemon and CLI, built. Needs Node ≥ 22.                                             |
+| `ego-windows-host-<tag>.zip`   | The Windows host with the v2 runtime inside, built. Needs Node ≥ 22.                               |
+| `ego-browser-<tag>.zip`        | The `ego-browser` harness bundle.                                                                  |
+| `*.sha256`, `SHA256SUMS-hosts.txt` | SHA-256 checksums for the installer and the host archives.                                     |
+
+The Windows installer is not code-signed, so SmartScreen asks once: choose
+**More info → Run anyway**.
+
+**1.2 Add the skill with npx**
+
+Install just the `ego-browser` skill:
+
+```bash
+npx skills add opencue/agenticbrowser
+```
+
+The first time your agent runs a browser task, the skill walks it through
+installing the runtime.
+
+**1.3 Let your agent set it up**
+
+Paste this into your agent:
+
+```
+Set up agenticbrowser for me: https://github.com/opencue/agenticbrowser
+
+Read `skills/ego-browser/references/install.md` and follow the steps for my operating system.
+```
+
+**1.4 From a checkout**
+
+`git clone` and one installer script; see [Install](#install) below.
+
+### 2. Try your first task
+
+Bring your logins across once, then ask your agent in plain language:
+
+```bash
+ego-browser --import-chrome-profile
+```
+
+```
+ego-browser follow @someone on x.com for me
+```
+
+The agent picks up the `ego-browser` skill, opens the page in its own task
+space, reads a snapshot (the page turned into structured text), acts on the
+page, and reports back, all while your own tabs stay untouched. The browser,
+its profile and the task-space state all run locally; nothing is hosted.
+
+## Highlights
+
+| Feature                                   | What it does                                                                                                                                                                                       |
+| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Code-based, not CLI-based**             | The browser is exposed as JavaScript functions the agent calls directly. It composes a multi-step task into one block instead of a "run a command, look, run another" loop: fewer tool calls, fewer tokens. |
+| **Stock Chromium, no custom build**       | Drives the Chrome, Chromium, Brave or Edge you already have, over the Chrome DevTools Protocol.                                                                                                    |
+| **Your logins carry over**                | Import your Chrome profile once, and agents land on pages already signed in.                                                                                                                      |
+| **Parallel, owned task spaces**           | Each task gets its own tabs and an owner, so agents don't collide, and you can hand a space over or take it back halfway through.                                                                |
+| **Any agent, CLI or MCP**                 | A heredoc CLI for agents with a shell, and a one-tool MCP server (`ego_browser_run`) for everyone else.                                                                                           |
+| **Both runtimes**                         | The original v1 helpers and upstream's v2 `taskSpace` / `task.page` API ship side by side; the CLI picks one per script.                                                                         |
+| **Linux and Windows**                     | Linux first (X11 and Wayland), plus native Windows 10/11 without WSL.                                                                                                                              |
 
 ---
 
@@ -91,7 +168,7 @@ attach a bundled `ego-lite-setup.exe` for machines without Node.
 
 ---
 
-## Quick start
+## Walkthrough
 
 Five steps, one command each.
 
@@ -357,9 +434,11 @@ cd package/ego-browser && npm run e2e   # real-browser suite, needs ego-browser 
 > one; when the real events land late, the page gets both. Details in
 > [`docs/canvas-drag-flake.md`](docs/canvas-drag-flake.md).
 
-## Issues
+## Community
 
-Bugs and feature requests: [github.com/opencue/agenticbrowser/issues](https://github.com/opencue/agenticbrowser/issues).
+- [Issues](https://github.com/opencue/agenticbrowser/issues), bugs and feature requests
+- [Releases](https://github.com/opencue/agenticbrowser/releases), changelogs and downloads
+- Upstream: [citrolabs/ego-lite](https://github.com/citrolabs/ego-lite), the macOS/Windows app this port follows
 
 ## Star History
 
