@@ -20,6 +20,9 @@ const SANDBOX = await mkdtemp(join(tmpdir(), "ego-linux-test-"));
 const TEST_ENV = {
   XDG_STATE_HOME: join(SANDBOX, "state"),
   EGO_LINUX_PROFILE: join(SANDBOX, "profile"),
+  // v2 keeps its Page-label ledgers here; without this the suite writes them
+  // into the real ~/.ego-browser/state.
+  EGO_BROWSER_STATE_DIR: join(SANDBOX, "ego-browser-state"),
   // The badge names whichever harness is driving, so without a fixed name these
   // assertions would pass under Claude and fail under codex — the suite would
   // encode who happened to run it.
@@ -522,12 +525,24 @@ describe("ego-browser Linux port", () => {
   });
 });
 
-/** Run the real CLI with arguments only, no stdin. */
-function runArgs(args, { timeout = 120000 } = {}) {
+/**
+ * Run the real CLI with arguments only, no stdin. With `ownParent`, the CLI is
+ * started by a short-lived intermediate node process, so each call has a
+ * different parent pid — the way each round from an agent's shell does.
+ */
+function runArgs(args, { timeout = 120000, ownParent = false } = {}) {
   return new Promise((resolve, reject) => {
+    const argv = ownParent
+      ? [
+          "-e",
+          "const r = require('node:child_process').spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit' }); process.exit(r.status ?? 1)",
+          BIN,
+          ...args,
+        ]
+      : [BIN, ...args];
     // Headless through the environment: a leading --headless would hide the
     // `nodejs` / `skill` word the CLI reads from argv[0].
-    const child = spawn(process.execPath, [BIN, ...args], {
+    const child = spawn(process.execPath, argv, {
       env: {
         ...process.env,
         ...TEST_ENV,
@@ -579,5 +594,40 @@ describe("script forms the usage guide documents", () => {
     assert.match(out, /^> \*\*This is the Linux and Windows port\*\*/);
     assert.match(out, /taskSpace\(/);
     assert.doesNotMatch(out, /^---\n/);
+  });
+});
+
+describe("v2 rounds", () => {
+  // Each round is its own CLI process with a different parent pid. v2 scopes its
+  // Page-label ledger by parent pid, so without pinning it to the browser the
+  // second round found no p1 and finish() gave the space to the user.
+  it("keeps Page labels from one CLI process to the next", async () => {
+    const name = `labels across rounds ${process.pid}`;
+    const first = await runArgs(
+      [
+        "nodejs",
+        "-e",
+        `const task = await taskSpace(${JSON.stringify(name)}); const page = task.page('p1'); await page.goto(${JSON.stringify(FIXTURE_URL)}, { waitUntil: 'load' }); console.log('space', task.spaceId, 'instance', process.ppid)`,
+      ],
+      { ownParent: true },
+    );
+    const spaceId = /space (\d+)/.exec(first)?.[1];
+    assert.ok(spaceId, first);
+
+    const second = await runArgs(
+      [
+        "nodejs",
+        "-e",
+        `const task = await taskSpace(${spaceId}); const page = task.page('p1'); console.log('p1', await page.url()); const done = await task.finish({ keep: [] }); console.log('finished', JSON.stringify(done))`,
+      ],
+      { ownParent: true },
+    );
+    // The scope v2 sees is the browser, not the (different) parent process.
+    assert.match(first, /instance browser-[0-9a-f-]+/);
+    // The browser reports the fixture as a normalized file:// URL
+    // (forward slashes on Windows too), so match its tail, not FIXTURE_URL.
+    assert.match(second, /p1 file:\/\/\S*fixture\/index\.html/);
+    assert.match(second, /"closedSpace":true/);
+    assert.doesNotMatch(second, /belongs to the user|unknown origin/);
   });
 });

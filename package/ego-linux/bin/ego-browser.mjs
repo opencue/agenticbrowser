@@ -36,6 +36,10 @@ import {
 } from "../src/private-state.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
 import { selectRuntime } from "../src/runtime-select.mjs";
+import {
+  browserInstanceKey,
+  pinRuntimeInstance,
+} from "../src/runtime-instance.mjs";
 import { createEgoShim } from "../src/shim.mjs";
 import { stopSessionDevServers } from "../src/session-cleanup.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
@@ -773,6 +777,18 @@ async function main() {
     defaultSpaceTab: harness === HARNESS_V2.href,
   });
   globalThis.ego = shim.ego;
+
+  // v2 scopes Page labels by process.ppid; pin it to the backing browser so
+  // labels survive between rounds (see src/runtime-instance.mjs).
+  if (
+    !pinRuntimeInstance(browserInstanceKey(shim.wsUrl)) &&
+    harness === HARNESS_V2.href
+  ) {
+    process.stderr.write(
+      `ego-browser: cannot tell which browser ${shim.wsUrl} is (no /devtools/browser/<id> in it); ` +
+        "Page labels will not carry over to the next round\n",
+    );
+  }
 
   const { runMain } = await import(harness);
   try {

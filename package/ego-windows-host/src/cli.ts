@@ -100,6 +100,12 @@ export async function main(argv = process.argv.slice(2)) {
   // The runtime reads globalThis.ego at call time, so the bridge must exist
   // before helpers run. run.js has no import-time side effects (unlike the
   // package entry point, which auto-installs the SDK when imported).
+  // The v2 runtime scopes Page labels by `browser-host:${process.ppid}`. Each
+  // run of this host is a new process started by the agent's shell, so the
+  // parent pid changes every round and the labels (p1, p2, …) were lost. Pin
+  // it to the browser's DevTools GUID, which is stable for the browser's life.
+  pinRuntimeInstance(endpoint.webSocketDebuggerUrl);
+
   const { runMain } = await import("ego-browser-v2/dist/src/run.js");
   try {
     return await runMain({ argv: [], stdinText: code });
@@ -154,4 +160,25 @@ async function runDoctor(config: ReturnType<typeof hostConfig>) {
   }
   process.stdout.write(lines.join("\n") + "\n");
   return 0;
+}
+
+/** Make `process.ppid` report a key for the attached browser instance. */
+export function pinRuntimeInstance(
+  webSocketDebuggerUrl: string | undefined,
+  target: { ppid?: unknown } = process,
+): boolean {
+  const guid = /\/devtools\/browser\/([^/?#]+)/.exec(
+    String(webSocketDebuggerUrl ?? ""),
+  )?.[1];
+  if (!guid) return false;
+  const key = `browser-${guid}`;
+  // process.ppid ignores plain assignment; delete it first so this sticks.
+  delete target.ppid;
+  Object.defineProperty(target, "ppid", {
+    value: key,
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  });
+  return target.ppid === key;
 }

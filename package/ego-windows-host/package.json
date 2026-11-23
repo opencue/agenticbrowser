@@ -1,6 +1,6 @@
 {
   "name": "ego-windows-host",
-  "version": "2.2.1-linux.2",
+  "version": "2.2.1-linux.3",
   "description": "Run the ego-browser agent runtime against stock Microsoft Edge or Google Chrome on Windows.",
   "type": "module",
   "bin": {
