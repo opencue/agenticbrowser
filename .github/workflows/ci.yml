@@ -239,9 +239,10 @@ jobs:
 
   # The Linux and Windows hosts as standalone archives: built output only, with
   # the Windows host's ego-browser-v2 link replaced by a real copy of the build.
+  # Runs on every push and PR so a broken package step shows up before a tag;
+  # only the release job below is tag-gated.
   package-hosts:
     runs-on: ubuntu-latest
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -262,7 +263,7 @@ jobs:
         working-directory: package/ego-linux-host
         run: npm ci && npm run build
       - name: Package the hosts
-        run: scripts/release/package-hosts.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/hosts"
+        run: scripts/release/package-hosts.sh "${GITHUB_REF_NAME//\//-}" "$RUNNER_TEMP/hosts"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ego-hosts

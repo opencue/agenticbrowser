@@ -36,8 +36,9 @@ tar -C "$stage" -czf "$out/ego-linux-host-$tag.tgz" "ego-linux-host-$tag"
 
 # Windows host
 win="$stage/ego-windows-host-$tag"
-mkdir -p "$win/node_modules/ego-browser-v2"
-cp -R "$pkg/ego-windows-host/bin" "$pkg/ego-windows-host/dist" "$pkg/ego-windows-host/package.json" "$pkg/ego-windows-host/README.md" "$win/"
+mkdir -p "$win/node_modules/ego-browser-v2" "$win/dist"
+cp -R "$pkg/ego-windows-host/bin" "$pkg/ego-windows-host/package.json" "$pkg/ego-windows-host/README.md" "$win/"
+tar -C "$pkg/ego-windows-host/dist" --exclude='*.test.js' --exclude='*.map' -cf - . | tar -C "$win/dist" -xf -
 cp -R "$pkg/ego-browser/dist" "$pkg/ego-browser/package.json" "$win/node_modules/ego-browser-v2/"
 (cd "$stage" && zip -qr "$out/ego-windows-host-$tag.zip" "ego-windows-host-$tag")
 
