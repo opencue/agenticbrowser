@@ -16,7 +16,8 @@
   },
   "license": "MIT",
   "dependencies": {
-    "ego-browser-v2": "file:../ego-browser-v2"
+    "ego-browser-v2": "file:../ego-browser-v2",
+    "ego-v2-ext": "file:../ego-v2-ext"
   },
   "devDependencies": {
     "@types/node": "^22.15.29",

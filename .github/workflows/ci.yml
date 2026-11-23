@@ -61,6 +61,11 @@ jobs:
       - name: Test the port
         working-directory: package/ego-linux
         run: npm ci --ignore-scripts && npm test
+      # The v2 extensions run on the port just installed above: their browser
+      # tests drive bin/ego-browser.mjs against a headless Chrome.
+      - name: Test the v2 extensions
+        working-directory: package/ego-v2-ext
+        run: npm test
 
   test-linux-host:
     runs-on: ubuntu-latest

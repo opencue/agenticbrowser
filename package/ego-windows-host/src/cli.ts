@@ -108,7 +108,12 @@ export async function main(argv = process.argv.slice(2)) {
 
   const { runMain } = await import("ego-browser-v2/dist/src/run.js");
   try {
-    return await runMain({ argv: [], stdinText: code });
+    // The port's extensions (locators, fastObserve/fastAct, debug,
+    // requestUserAction) on top of the unmodified v2 runtime.
+    const { withExtensions } = (await import("ego-v2-ext")) as {
+      withExtensions: (source: string) => string;
+    };
+    return await runMain({ argv: [], stdinText: withExtensions(code) });
   } finally {
     hostConnection.close();
     agentConnection.close();
