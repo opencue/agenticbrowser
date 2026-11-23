@@ -12,7 +12,7 @@ import { renderAxTree } from "./ax-snapshot.js";
  *     runtime's flattened sessions never mix with the host's.
  *
  * Error behavior mirrors the native bindings the runtime is written against
- * (see package/ego-browser/src/ego-errors.ts): task-space methods RESOLVE
+ * (see package/ego-browser-v2/src/ego-errors.ts): task-space methods RESOLVE
  * with { error, error_code } shapes, snapshot REJECTS with an Error carrying
  * .error_code, and local send failures surface through onSendCDPMessageError.
  */

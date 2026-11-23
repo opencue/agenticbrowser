@@ -21,12 +21,12 @@ assume that `ego-browser` on `PATH` belongs to Ego Lite.
 From the repository root:
 
 ```bash
-cd package/ego-browser
+cd package/ego-browser-v2
 npm ci
 npm run build
 ```
 
-The runtime is written to `package/ego-browser/dist/out/index.js`. Run
+The runtime is written to `package/ego-browser-v2/dist/out/index.js`. Run
 `npm run build` again after changing runtime source code.
 
 ## Run with the local runtime
@@ -34,7 +34,7 @@ The runtime is written to `package/ego-browser/dist/out/index.js`. Run
 Use the CLI installed by Ego Lite and pass the absolute bundle path:
 
 ```bash
-cd package/ego-browser
+cd package/ego-browser-v2
 
 ego-browser nodejs --sdk-path "$PWD/dist/out/index.js" <<'EOF'
 if (!globalThis.ego) throw new Error('Ego Lite native bindings are unavailable')
@@ -43,7 +43,7 @@ EOF
 ```
 
 For browser automation, keep the same command and write the heredoc using the
-API documented by the current checkout in `package/ego-browser/skill-body/SKILL.md`.
+API documented by the current checkout in `package/ego-browser-v2/skill-body/SKILL.md`.
 
 Every manual invocation needs `--sdk-path`; it is not a persistent setting.
 Do not use `npm link` or replace files inside the Ego Lite application bundle.
@@ -54,7 +54,7 @@ The installed CLI is still required to provide the native browser environment.
 Run the real-browser E2E suite:
 
 ```bash
-cd package/ego-browser
+cd package/ego-browser-v2
 npm run e2e
 ```
 

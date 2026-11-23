@@ -1,36 +1,37 @@
 const fixture = process.env.FIXTURE_URL;
 
-const alpha = await taskSpaces.useOrCreate("port smoke alpha");
+const alpha = await taskSpace("port smoke alpha");
+const alphaPage = alpha.page("p1");
 console.log(
   "1. created:      " +
     JSON.stringify({
-      id: alpha.id,
+      id: alpha.spaceId,
       name: alpha.name,
       ownership: alpha.ownership,
     }),
 );
 
-await page.goto(fixture);
-await page.waitForLoadState();
-console.log("2. alpha page:   " + (await page.title()));
+await alphaPage.goto(fixture);
+await alphaPage.waitForLoadState();
+console.log("2. alpha page:   " + (await alphaPage.title()));
 
-const beta = await taskSpaces.useOrCreate("port smoke beta");
+const beta = await taskSpace("port smoke beta");
+const betaPage = beta.page("p1");
 console.log(
-  "3. second space: " + JSON.stringify({ id: beta.id, name: beta.name }),
+  "3. second space: " + JSON.stringify({ id: beta.spaceId, name: beta.name }),
 );
-await page.goto("about:blank#beta");
-console.log("4. beta page:    " + (await page.url()));
+await betaPage.goto("about:blank#beta");
+console.log("4. beta page:    " + (await betaPage.url()));
 
-// Switching back must put the agent on alpha's page again. Tab-list scoping is
-// covered by the context-backed task-space tests; this smoke test only asserts
-// where the agent lands.
-await taskSpaces.switch(alpha.id);
-console.log("5. back in alpha:" + (await page.title()));
+// Switching back must put the agent on alpha's page again. In v2 each
+// TaskSpace has its own page handles that resolve regardless of which space
+// is currently selected.
+console.log("5. back in alpha:" + (await alphaPage.title()));
 
 console.log(
   "6. list:         " +
     JSON.stringify(
-      (await taskSpaces.list()).map((s) => ({
+      (await listTaskSpaces()).map((s) => ({
         id: s.id,
         name: s.name,
         ownership: s.ownership,
@@ -39,12 +40,14 @@ console.log(
 );
 
 // Handing off flips ownership the way the native overlay does.
-await taskSpaces.handOff(alpha.id);
+await handOffTaskSpace(alpha.spaceId);
 console.log(
   "7. after handOff:" +
-    JSON.stringify((await taskSpaces.list()).map((s) => s.ownership)),
+    JSON.stringify((await listTaskSpaces()).map((s) => s.ownership)),
 );
 
-await taskSpaces.complete(alpha.id, { keep: false });
-await taskSpaces.complete(beta.id, { keep: false });
-console.log("8. after cleanup:" + JSON.stringify(await taskSpaces.list()));
+// Take over alpha (agentDelegatedToUser → agent) before finishing it.
+const alphaTask = await takeOverTaskSpace(alpha.spaceId);
+await alphaTask.finish({ keep: [] });
+await beta.finish({ keep: [] });
+console.log("8. after cleanup:" + JSON.stringify(await listTaskSpaces()));

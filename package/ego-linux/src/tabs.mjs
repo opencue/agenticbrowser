@@ -1,7 +1,7 @@
 /**
  * Tab surface: ego.listTabs() and ego.createTab(url).
  *
- * Contract (package/ego-browser/src/driver/nav.ts):
+ * Contract (package/ego-browser-v2/src/driver/nav.ts):
  *   listTabs()    -> { tabs: [{ targetId, title, url, active, index }] }
  *   createTab(url)-> { targetId }
  *

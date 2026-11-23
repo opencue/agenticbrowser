@@ -1,2 +1,2 @@
-const task = await taskSpaces.new("cli empty space");
-console.log(`CREATED EMPTY: ${task.id}`);
+const task = await taskSpace("cli empty space");
+console.log(`CREATED EMPTY: ${task.spaceId}`);

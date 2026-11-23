@@ -81,3 +81,26 @@ describe("agent tab foreground policy", () => {
     assert.equal(guarded, false, "explicit foreground creation is not guarded");
   });
 });
+
+describe("headless agent tabs", () => {
+  it("stay in the background only when a person can be looking", async () => {
+    const { agentTabsStayInBackground } = await import("../src/shim.mjs");
+    assert.equal(agentTabsStayInBackground({ headless: false }), true);
+    assert.equal(agentTabsStayInBackground({ headless: true }), false);
+    assert.equal(agentTabsStayInBackground(), true, "headed is the default");
+  });
+
+  it("creates a headless agent tab in the foreground, so input reaches it", async () => {
+    const cdp = fakeCdp();
+    const tabs = createTabsApi(cdp, {
+      port: null,
+      getScope: null,
+      // What the shim passes in headless mode.
+      shouldAutoFocus: async () => true,
+      guardBackground: async (_reason, operation) => operation(),
+    });
+    await tabs.createTab("https://example.com");
+    const create = cdp.calls.find((c) => c.method === "Target.createTarget");
+    assert.notEqual(create.params.background, true);
+  });
+});

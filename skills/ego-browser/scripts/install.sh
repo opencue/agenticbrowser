@@ -2,7 +2,7 @@
 # Install ego-browser (Linux port).
 #
 # Replaces upstream's macOS installer: there is no .dmg to mount here. This
-# builds the unmodified upstream harness in package/ego-browser, then links the
+# builds the unmodified upstream v2 runtime in package/ego-browser-v2, then links the
 # Linux CDP shim from package/ego-linux onto PATH as `ego-browser`.
 
 set -eu
@@ -25,7 +25,7 @@ die() {
 # The script lives at <repo>/skills/ego-browser/scripts/install.sh.
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repo_root=$(CDPATH= cd -- "$script_dir/../../.." && pwd)
-harness_dir="$repo_root/package/ego-browser"
+harness_dir="$repo_root/package/ego-browser-v2"
 port_dir="$repo_root/package/ego-linux"
 shim_bin="$repo_root/package/ego-linux/bin/ego-browser.mjs"
 mcp_bin="$repo_root/package/ego-linux/bin/ego-browser-mcp.mjs"
@@ -68,12 +68,8 @@ fi
 
 # CI=true is required, not cosmetic: the harness's prepare script runs
 # `lefthook install`, which fails on any machine with a global core.hooksPath.
-log "Building the upstream harness in $harness_dir ..."
+log "Building the v2 runtime in $harness_dir ..."
 (cd "$harness_dir" && CI=true npm ci && CI=true npm run build) ||
-	die "harness build failed"
-# Scripts that call taskSpace()/profiles() run on upstream's v2 runtime.
-log "Building the v2 runtime in $harness_dir-v2 ..."
-(cd "$harness_dir-v2" && CI=true npm ci && CI=true npm run build) ||
 	die "v2 runtime build failed"
 log "Installing MCP runtime dependencies in $port_dir ..."
 (cd "$port_dir" && CI=true npm ci --omit=dev --ignore-scripts) ||

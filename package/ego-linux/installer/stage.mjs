@@ -23,28 +23,17 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PORT = join(HERE, "..");
-const HARNESS = join(PORT, "..", "ego-browser", "dist", "out");
 const HARNESS_V2 = join(PORT, "..", "ego-browser-v2", "dist", "out");
 const V2_EXTENSIONS = join(PORT, "..", "ego-v2-ext", "src");
 const LOCKFILE = join(PORT, "package-lock.json");
 
 /**
  * The install tree mirrors the monorepo, because `bin/ego-browser.mjs` resolves
- * the harness as `../../ego-browser/dist/out/index.js`. Flattening it would
+ * the runtime as `../../ego-browser-v2/dist/out/index.js`. Flattening it would
  * mean passing `--sdk-path` on every invocation; mirroring costs two directory
  * levels and no code change at all.
  */
 const LAYOUT = [
-  {
-    from: join(HARNESS, "index.js"),
-    to: join("package", "ego-browser", "dist", "out", "index.js"),
-    why: "the agent runtime the port drives",
-  },
-  {
-    from: join(HARNESS, "ego-browser"),
-    to: join("package", "ego-browser", "dist", "out", "ego-browser"),
-    why: "the skill package the runtime reads learnings and helpers from",
-  },
   {
     from: join(HARNESS_V2, "index.js"),
     to: join("package", "ego-browser-v2", "dist", "out", "index.js"),
@@ -165,12 +154,6 @@ async function stageProductionDependencies(payload) {
 export async function stage({ out, nodeExe = null } = {}) {
   const payload = out || join(HERE, "payload");
 
-  if (!(await exists(join(HARNESS, "index.js")))) {
-    throw new Error(
-      `the harness is not built: ${join(HARNESS, "index.js")} is missing.\n` +
-        `Run: cd ../ego-browser && CI=true npm ci && npm run build`,
-    );
-  }
   if (!(await exists(join(HARNESS_V2, "index.js")))) {
     throw new Error(
       `the v2 runtime is not built: ${join(HARNESS_V2, "index.js")} is missing.\n` +

@@ -308,6 +308,10 @@ export function installEgoClient(conn: HostConnection): void {
     },
     animationHighlightMouseToPosition: async () => {},
     setAgentTaskState: async () => {},
+    // The v2 runtime's profiles(): this host drives one browser profile.
+    listProfiles: async () => ({
+      profiles: [{ id: "Default", name: "agent", isDefault: true }],
+    }),
   };
 
   conn.onEvent((event, params) => {

@@ -6,7 +6,7 @@ The ego-browser Skill has two layers:
   markets, plugins, and `~/.agents/skills/ego-browser` contain. It only tells the
   agent to run `ego-browser skill`, plus the install guide and the
   cookie/cache/storage guide that must be readable before ego lite exists.
-- **Usage guide** — `package/ego-browser/skill-body/SKILL.md`. It is versioned
+- **Usage guide** — `package/ego-browser-v2/skill-body/SKILL.md`. It is versioned
   with the SDK and printed by `ego-browser skill`, so the agent always reads the
   guide that matches the installed browser. The build renders one guide per
   operating system from this single source: passages between
@@ -18,7 +18,7 @@ must implement. Everything else lives in this repository.
 
 ## Release payload
 
-`npm run build` writes the payload to `package/ego-browser/dist/out/`
+`npm run build` writes the payload to `package/ego-browser-v2/dist/out/`
 (CI archives the same directory as `ego-browser-release-payload.tar.gz`):
 
 ```text
@@ -107,7 +107,7 @@ upgrades only replace the bundled payload.
       has both the `### Bash, Zsh, Git Bash` and `### PowerShell` sections.
 - [ ] With an SDK directory that only contains `ego-browser/SKILL.md`, the
       command prints that file.
-- [ ] With `--sdk-path <checkout>/package/ego-browser/dist/out/index.js` or the
+- [ ] With `--sdk-path <checkout>/package/ego-browser-v2/dist/out/index.js` or the
       debug override, the output is the checkout's guide and starts with a
       `source=` line; removing the override restores the bundled guide.
 - [ ] `ego-browser skill foo` and a missing guide both exit non-zero with a

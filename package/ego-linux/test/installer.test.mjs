@@ -74,7 +74,8 @@ describe("the installer payload", () => {
       "package/ego-linux/node_modules/@modelcontextprotocol/core/package.json",
       "package/ego-linux/node_modules/zod/package.json",
       "package/ego-linux/assets/ego-lite.ico",
-      "package/ego-browser/dist/out/index.js",
+      "package/ego-browser-v2/dist/out/index.js",
+      "package/ego-v2-ext/src/index.mjs",
     ]) {
       assert.ok(
         staged.files.includes(required),
@@ -91,7 +92,7 @@ describe("the installer payload", () => {
     const cli = pathToFileURL(
       join(staged.payload, "package", "ego-linux", "bin", "ego-browser.mjs"),
     );
-    const harness = new URL("../../ego-browser/dist/out/index.js", cli);
+    const harness = new URL("../../ego-browser-v2/dist/out/index.js", cli);
     assert.ok(
       existsSync(fileURLToPath(harness)),
       `the CLI would look for the harness at ${fileURLToPath(harness)}, which the payload does not have`,
@@ -101,7 +102,7 @@ describe("the installer payload", () => {
   it("ships the skill package the runtime reads its learnings from", () => {
     assert.ok(
       staged.files.some((f) =>
-        f.startsWith("package/ego-browser/dist/out/ego-browser/"),
+        f.startsWith("package/ego-browser-v2/dist/out/ego-browser/"),
       ),
       "the skill directory beside the bundle is missing",
     );

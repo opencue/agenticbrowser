@@ -118,3 +118,39 @@ describe("the cursor survives a navigation", () => {
     assert.equal(last?.read, null, "no reading sweep survives dismissal");
   });
 });
+
+describe("an action's label and the move that follows it", () => {
+  // v2 sends an action's label just before the cursor move for that action;
+  // the label has to land on the point the move goes to, not where it was.
+  async function settle() {
+    for (let i = 0; i < 5; i += 1) await new Promise(setImmediate);
+  }
+
+  it("carries a label set just before a move to the new point", async () => {
+    const cdp = fakeCdp();
+    const cursor = createCursorApi(cdp, { listTabs });
+    cursor.moveTo(10, 10);
+    await settle();
+    cursor.setTaskState("counting");
+    cursor.moveTo(70, 300);
+    await settle();
+    const last = renderedPayloads(cdp).at(-1);
+    assert.equal(last.label, "counting");
+    assert.equal(last.labelStale, false, "the label describes the new point");
+  });
+
+  it("lets an old label go stale when the cursor moves on later", async () => {
+    const cdp = fakeCdp();
+    const cursor = createCursorApi(cdp, { listTabs });
+    cursor.moveTo(10, 10);
+    await settle();
+    cursor.setTaskState("counting");
+    await settle();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    cursor.moveTo(70, 300);
+    await settle();
+    const last = renderedPayloads(cdp).at(-1);
+    assert.equal(last.label, "counting");
+    assert.equal(last.labelStale, true, "a later move does not inherit it");
+  });
+});

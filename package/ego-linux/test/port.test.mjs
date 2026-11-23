@@ -582,15 +582,6 @@ describe("script forms the usage guide documents", () => {
     assert.match(out, /v2: true v1: false/);
   });
 
-  it("still runs a `-e` script that uses the v1 globals on v1", async () => {
-    const out = await runArgs([
-      "nodejs",
-      "-e",
-      "console.log('v1:', typeof taskSpaces.run === 'function')",
-    ]);
-    assert.match(out, /v1: true/);
-  });
-
   it("prints the Skill's usage guide for `skill`, without frontmatter", async () => {
     const out = await runArgs(["skill"]);
     assert.match(out, /^> \*\*This is the Linux and Windows port\*\*/);

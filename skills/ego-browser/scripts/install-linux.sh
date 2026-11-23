@@ -24,7 +24,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
-EGO_BROWSER_PKG="$REPO_ROOT/package/ego-browser"
+EGO_BROWSER_PKG="$REPO_ROOT/package/ego-browser-v2"
 EGO_LINUX_HOST_PKG="$REPO_ROOT/package/ego-linux-host"
 BIN_DIR="${HOME}/.local/bin"
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/ego-lite"
@@ -109,7 +109,7 @@ build_packages() {
   [ -d "$EGO_LINUX_HOST_PKG" ] || die "missing package: $EGO_LINUX_HOST_PKG"
   [ -f "$SHIM_TARGET" ] || die "missing CLI entry: $SHIM_TARGET"
 
-  log "Building package/ego-browser ..."
+  log "Building package/ego-browser-v2 ..."
   (
     cd "$EGO_BROWSER_PKG"
     # Skip lefthook prepare hook outside the intentional git setup.
@@ -247,7 +247,7 @@ Install complete (ego-shaped Linux host — not Citro/macOS ego lite).
 
   command:  $(command -v ego-browser 2>/dev/null || echo "$SHIM_LINK")
   host:     package/ego-linux-host
-  harness:  package/ego-browser
+  runtime:  package/ego-browser-v2
 
 Next:
   command -v ego-browser

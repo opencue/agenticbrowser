@@ -37,7 +37,7 @@ Thanks for your interest in contributing to **ego-browser (agenticbrowser)**! Th
 
 ```
 ego-lite/
-├── package/ego-browser/        # The runnable npm package (TypeScript)
+├── package/ego-browser-v2/        # The runnable npm package (TypeScript)
 │   ├── src/                    # Core source
 │   │   ├── index.ts            # SDK / CLI bootstrap
 │   │   ├── run.ts              # stdin executor, CLI entry
@@ -92,11 +92,11 @@ ego-lite/
 
 ## 4. Local Development Setup
 
-> All commands run from `package/ego-browser/`.
+> All commands run from `package/ego-browser-v2/`.
 
 ```bash
 # 1. Install dependencies
-cd package/ego-browser
+cd package/ego-browser-v2
 npm ci
 
 # 2. Build (produces dist/out/index.js)
@@ -226,7 +226,7 @@ learnings/<site>/
 3. Implement `tools/*.js` and `browser-tools/*.js`.
 4. Validate:
    ```bash
-   cd package/ego-browser
+   cd package/ego-browser-v2
    npm run validate:site-skills
    ```
 5. Add at least one behavior test in the `test/site-skills.test.js` style.
@@ -242,13 +242,13 @@ learnings/<site>/
 ## 8. Testing & Quality
 
 - Test framework: `node --test` with `node:assert/strict`
-- Test files: `package/ego-browser/src/**/*.test.mjs`, colocated with the source they cover (runtime / helpers / resolver / nav-driver / site-skills / build / state ...). The only file in `package/ego-browser/test/` is `skill-publish-workflow.test.js`, which tests the CI workflow YAML.
+- Test files: `package/ego-browser-v2/src/**/*.test.mjs`, colocated with the source they cover (runtime / helpers / resolver / nav-driver / site-skills / build / state ...). The only file in `package/ego-browser-v2/test/` is `skill-publish-workflow.test.js`, which tests the CI workflow YAML.
 - Style: behavior-driven, using **temp workspaces + `setOverrides()`** for stub injection — no real browser launches
 
 **Minimum pre-submit bar**:
 
 ```bash
-cd package/ego-browser
+cd package/ego-browser-v2
 npm test                       # must pass
 npm run validate:site-skills   # if learnings changed
 ```

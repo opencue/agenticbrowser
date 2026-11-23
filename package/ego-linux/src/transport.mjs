@@ -2,7 +2,7 @@
  * CDP transport, shared between the harness and this shim.
  *
  * The harness talks to the native layer through exactly three members
- * (see package/ego-browser/src/browser-runtime.ts):
+ * (see package/ego-browser-v2/src/browser-runtime.ts):
  *
  *   ego.sendCDPMessage(jsonString)   — a serialized { id, method, params, sessionId? }
  *   ego.onCDPMessage(jsonString)     — a raw protocol message, parsed by handleMessage

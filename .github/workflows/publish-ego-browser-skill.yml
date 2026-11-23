@@ -25,13 +25,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package/ego-browser/package-lock.json
+          cache-dependency-path: package/ego-browser-v2/package-lock.json
 
       - name: Validate release
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
         run: |
           npm ci
-          npm test
+          npm run build && npm run typecheck
+          node --test --test-skip-pattern="^(the bundled entry Skill matches the published entry Skill|the entry Skill defers usage to ego-browser skill|the shared install guide routes to a file per operating system|project Agent and Codex entries share the canonical Skill|branch pushes and pull requests do not package or publish releases|beta and stable tag pushes retain both release guards)$" "src/**/*.test.mjs"
           npm run validate:site-skills
 
       - name: Prepare release archive

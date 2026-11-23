@@ -72,7 +72,7 @@ From the repository root in PowerShell:
 powershell -ExecutionPolicy Bypass -File .\skills\ego-browser\scripts\install-windows.ps1
 ```
 
-The script builds `package/ego-browser`, installs the MCP runtime dependencies,
+The script builds `package/ego-browser-v2`, installs the MCP runtime dependencies,
 creates native `ego-browser.cmd` and `ego-browser-mcp.cmd` commands for
 `package/ego-linux`, adds their per-user directory to `PATH`, and runs
 `ego-browser --doctor`. It does not enable WSL, require administrator access,
@@ -116,7 +116,7 @@ installer. On macOS, use the separate macOS instructions below.
 This install builds the harness and symlinks the Linux port's CLI shim:
 
 - Port: `package/ego-linux` (browser lifecycle + Task Spaces + `ego-browser` shim)
-- Harness: `package/ego-browser` (helper runtime injected into heredocs)
+- Harness: `package/ego-browser-v2` (helper runtime injected into heredocs)
 
 ### Requirements
 
@@ -142,7 +142,7 @@ sh skills/ego-browser/scripts/install.sh
 What it does:
 
 1. Checks Linux, Node ≥ 22, and a Linux-side Chrome/Chromium
-2. Runs `npm ci` + `npm run build` for `package/ego-browser`
+2. Runs `npm ci` + `npm run build` for `package/ego-browser-v2`
 3. Installs production MCP dependencies for `package/ego-linux`
 4. Symlinks `ego-browser` and `ego-browser-mcp` under `~/.local/bin`
 5. Runs `ego-browser --doctor` without starting or attaching to the browser
@@ -175,7 +175,7 @@ Run `ego-browser --stop` first; never copy a live Chrome profile by hand.
 
 Headed mode defaults to XWayland when `XDG_SESSION_TYPE=wayland` and `DISPLAY`
 is available. This keeps ordinary agent work background-only while allowing
-`taskSpaces.requestUserAction(...)` to activate the exact managed browser
+`task.requestUserAction(...)` to activate the exact managed browser
 window. `EGO_LINUX_WINDOW_BACKEND=wayland` forces native Wayland, but GNOME may
 then reject application-level focus without a fresh compositor activation token.
 
@@ -265,7 +265,7 @@ ego-browser --status
 
 ## After that, return to the original task
 
-Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — prefer `taskSpaces.run(name, async task => { ... })` for one-round tasks, and use `taskSpaces.useOrCreate(name)` only when the task intentionally spans multiple heredoc rounds.
+Once the environment is ready, return to the user's original task and continue with the task space flow in `SKILL.md` — start with `const task = await taskSpace(name)`, resume the same space by its id in later rounds, and end each reply's browser work with `task.finish(...)`.
 
 ## Troubleshooting
 

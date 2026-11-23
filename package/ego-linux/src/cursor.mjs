@@ -80,6 +80,11 @@ export function createCursorApi(cdp, { listTabs }) {
   let typingTimer = null;
   let labelX = null;
   let labelY = null;
+  // When the label was set. The v2 runtime sends an action's label just
+  // before (not after) the cursor move for that action, both fire-and-forget,
+  // so a move arriving shortly after a label carries the label to its point.
+  let labelSetAt = -Infinity;
+  const LABEL_FOLLOWS_MOVE_MS = 300;
   let highlightId = 0;
   let readId = 0;
 
@@ -138,9 +143,14 @@ export function createCursorApi(cdp, { listTabs }) {
 
   function placeAt(x, y) {
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+    const labelWasCurrent = state.x === labelX && state.y === labelY;
     state.x = x;
     state.y = y;
     state.placed = true;
+    if (labelWasCurrent && Date.now() - labelSetAt < LABEL_FOLLOWS_MOVE_MS) {
+      labelX = x;
+      labelY = y;
+    }
   }
 
   /**
@@ -258,9 +268,7 @@ export function createCursorApi(cdp, { listTabs }) {
         return { done: true };
       }
       endRead();
-      state.x = x;
-      state.y = y;
-      state.placed = true;
+      placeAt(x, y);
       // The label is no longer blanked here: it stays up, marked stale, until a
       // real action replaces it. Emptying it on every move is what made the
       // badge flicker on a page the agent was only walking across.
@@ -338,6 +346,7 @@ export function createCursorApi(cdp, { listTabs }) {
       state.label = label;
       labelX = state.x;
       labelY = state.y;
+      labelSetAt = Date.now();
       schedule();
       return { done: true };
     },
