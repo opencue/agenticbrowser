@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>network fixture</title>
+  </head>
+  <body>
+    <button id="fetch-btn">Fetch</button>
+    <button id="post-btn">Post</button>
+    <div id="result"></div>
+    <script>
+      document
+        .getElementById("fetch-btn")
+        .addEventListener("click", async () => {
+          const r = await fetch("/api/data");
+          const t = await r.text();
+          document.getElementById("result").textContent = t;
+        });
+      document
+        .getElementById("post-btn")
+        .addEventListener("click", async () => {
+          const r = await fetch("/api/submit", {
+            method: "POST",
+            body: JSON.stringify({ x: 1 }),
+            headers: { "content-type": "application/json" },
+          });
+          const t = await r.text();
+          document.getElementById("result").textContent = "posted:" + t;
+        });
+    </script>
+  </body>
+</html>

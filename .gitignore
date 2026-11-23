@@ -82,6 +82,8 @@ test/
 !package/ego-browser-v2/test/*.test.js
 !package/ego-linux/test/
 !package/ego-linux/test/**
+!package/ego-v2-ext/test/
+!package/ego-v2-ext/test/**
 # Translated skill (local only)
 skills/ego-browser/SKILL.zh.md
 

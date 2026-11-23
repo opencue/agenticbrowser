@@ -1,6 +1,6 @@
 /**
  * page.fastObserve() / page.fastAct(obs, id, text?) on v2 Pages, ported from
- * the former v1 runtime (driver/fast.ts, removed in 2.3.0-linux.1). One browser
+ * the former v1 runtime (driver/fast.ts, removed in 2.3.0-linux.2). One browser
  * round-trip reads visible controls, their names/values, and the visible text
  * atomically. Node identities are page-owned integers; fastAct re-checks
  * freshness and occlusion before any input is dispatched.

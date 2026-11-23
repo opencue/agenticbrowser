@@ -1,7 +1,7 @@
 /**
  * task.loginPreflight(options?) and task.handleChallenge(options?) on v2
  * TaskSpaces, ported from v1's loginPreflightTaskSpace / handleChallengeTaskSpace
- * in the former v1 runtime (helpers.ts, removed in 2.3.0-linux.1).
+ * in the former v1 runtime (helpers.ts, removed in 2.3.0-linux.2).
  *
  * Key differences from v1:
  * - No nameOrId argument; `this` IS the TaskSpace.
