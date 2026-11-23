@@ -389,6 +389,17 @@ test("getBrowserVersion reports no update so the notice stays silent", async () 
   });
 });
 
+test("the bridge covers the rest of the v2 runtime's ego contract", async () => {
+  await withBridge(async ({ ego }) => {
+    const { profiles } = await ego.listProfiles();
+    assert.deepEqual(profiles, [
+      { id: "Default", name: "agent", isDefault: true },
+    ]);
+    await ego.setAgentTaskState("reading");
+    await ego.animationHighlightMouseToPosition(10, 20);
+  });
+});
+
 test("createTaskSpace removes the zombie space when Target.createTarget fails", async () => {
   // registry.create() persists the space before the CDP call. If CDP rejects,
   // the space must be removed so subsequent listTaskSpaces does not surface it.

@@ -5,7 +5,7 @@ on:
     paths:
       - ".github/workflows/windows-host.yml"
       - "package/ego-windows-host/**"
-      - "package/ego-browser/**"
+      - "package/ego-browser-v2/**"
   push:
     branches:
       - dev
@@ -13,7 +13,7 @@ on:
     paths:
       - ".github/workflows/windows-host.yml"
       - "package/ego-windows-host/**"
-      - "package/ego-browser/**"
+      - "package/ego-browser-v2/**"
 
 jobs:
   test:
@@ -33,7 +33,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package/ego-browser/package-lock.json
+            package/ego-browser-v2/package-lock.json
             package/ego-windows-host/package-lock.json
 
       # ego-browser's prepare script is a POSIX shell one-liner, and npm runs
@@ -46,14 +46,14 @@ jobs:
       - name: Let npm run POSIX package scripts
         run: npm config set script-shell bash
 
-      # --ignore-scripts: installing the file:../ego-browser dependency would
+      # --ignore-scripts: installing the file:../ego-browser-v2 dependency would
       # otherwise run lefthook install, which is unnecessary in CI.
       - name: Install dependencies
         working-directory: package/ego-windows-host
         run: npm ci --ignore-scripts
 
-      - name: Build ego-browser dependency
-        working-directory: package/ego-browser
+      - name: Build the v2 runtime the host loads
+        working-directory: package/ego-browser-v2
         run: npm ci --ignore-scripts && npm run build
 
       - name: Run tests

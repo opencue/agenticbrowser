@@ -7,9 +7,14 @@ support (#203) is under evaluation.
 The [ego lite app](https://lite.ego.app/) is macOS-only today. This package
 implements the same `globalThis.ego` contract the app's native bridge provides,
 backed by any CDP-capable Chromium already installed on the machine, and then
-delegates execution to the unmodified `ego-browser` runtime. Everything the
-runtime offers — `page`, `page.locator(...)`, `browser`, `taskSpaces`,
-snapshots, screenshots, waits — runs as-is.
+delegates execution to the unmodified upstream v2 runtime
+(`package/ego-browser-v2`). Everything that runtime offers — `taskSpace(name)`,
+`task.page("p1")`, snapshots, screenshots, waits — runs as-is.
+
+> **v2 only.** Unlike the `ego-browser` CLI in `package/ego-linux`, this host
+> does not fall back to the v1 runtime: scripts written for the v1 globals
+> (`page`, `taskSpaces`, `browser`, `site`) fail here. Use the `ego-browser`
+> CLI (or `ego-lite-setup.exe`) for those.
 
 The host model follows the Linux host prior art in #134 / #202 (shared profile,
 task spaces as tracked tab sets with ownership), rebuilt for Windows: Edge
@@ -29,14 +34,15 @@ agent script ──> ego-browser runtime (unmodified)
 ## Quick start
 
 ```powershell
-cd package/ego-browser; npm ci; npm run build
+cd package/ego-browser-v2; npm ci; npm run build
 cd ../ego-windows-host; npm ci; npm run build
 
 node bin/ego-windows-host.mjs -e "
-await taskSpaces.run('demo', async () => {
-  await browser.openOrReuseTab('https://example.com', { wait: true })
-  console.log(await page.snapshot())
-})
+const task = await taskSpace('demo')
+const page = task.page('p1')
+await page.goto('https://example.com')
+console.log(await page.snapshot())
+await task.finish({ keep: [] })
 "
 ```
 
@@ -60,8 +66,8 @@ instructions written for `ego-browser nodejs` carry over.
 ## How task spaces are emulated
 
 A task space is a named, persisted set of tabs plus an ownership state
-(`agent` / `agentDelegatedToUser` / `user`), exactly the surface the runtime's
-`taskSpaces` helpers expect:
+(`agent` / `agentDelegatedToUser` / `user`), exactly the surface the v2 runtime's
+`taskSpace()` / `claimTaskSpace()` / `takeOverTaskSpace()` helpers expect:
 
 - `useOrCreate` / `switch` / `claim` select a space; a fresh space opens one
   blank tab so the runtime always has a session target.
@@ -85,7 +91,7 @@ State lives in `spaces.json` under the state dir, written atomically.
   the app's kernel-level snapshot (deeply nested iframes and canvas-heavy
   surfaces will be weaker).
 - **Profile.** The hosted browser uses its own persistent profile. Logins
-  accumulate there (log in once via `taskSpaces.handOff`), but it does not
+  accumulate there (log in once via `task.handOff()`), but it does not
   import your daily browser's cookies the way ego lite's Chrome migration does.
   This host never touches your daily browser profile.
 - **No Spaces UI.** Ownership is enforced at the bridge, but there is no

@@ -55,10 +55,21 @@ process.env.EGO_LINUX_COLLABORATION_INBOX ??= "1";
 
 const USAGE = `ego-browser (Linux and Windows port)
 
-  ego-browser <<'JS'
+  ego-browser nodejs <<'JS'
+  const task = await taskSpace('demo')
+  const page = task.page('p1')
   await page.goto('https://example.com')
   console.log(await page.snapshot())
   JS
+
+  ego-browser nodejs -e '<code>'   the same, with the script as one argument
+  ego-browser nodejs < task.mjs    the same, from a file
+
+Scripts run on the v2 TaskSpace/Page runtime. A script that uses the v1
+globals (page, taskSpaces, browser, site) runs on v1 instead;
+EGO_BROWSER_RUNTIME=v1|v2 forces one.
+
+  skill                     print the ego-browser usage guide (SKILL.md)
 
 Port commands:
   --doctor [--json]         inspect installation and runtime state without
@@ -593,6 +604,10 @@ async function main() {
     process.stdout.write(USAGE);
     return 0;
   }
+  if (argv[0] === "skill" && argv.length === 1) {
+    process.stdout.write(await readSkillGuide());
+    return 0;
+  }
   if (argv[0] === "--status") {
     process.stdout.write(`${JSON.stringify(await browserStatus(), null, 2)}\n`);
     return 0;
@@ -739,10 +754,17 @@ async function main() {
 
   // A plain script run (no harness flags, no --sdk-path) picks v1 or v2 from the
   // script itself, so stdin is read here and handed to the harness as text.
+  // `-e '<code>'` is the same script passed as one argument, for shells and
+  // sandboxes without heredoc input.
   let stdinText;
-  if (rest.length === 0 && sdkFlag === -1) {
+  if (rest[0] === "-e" && rest.length === 2 && sdkFlag === -1) {
+    stdinText = rest[1];
+    rest.length = 0;
+  } else if (rest.length === 0 && sdkFlag === -1) {
     stdinText = await readStdin();
-    if (selectRuntime(stdinText) === "v2") harness = HARNESS_V2.href;
+  }
+  if (stdinText !== undefined && selectRuntime(stdinText) === "v2") {
+    harness = HARNESS_V2.href;
   }
 
   const shim = await createEgoShim({
@@ -763,6 +785,16 @@ async function main() {
     await shim.cleanupCreatedEmptySpaces().catch(() => {});
     shim.close();
   }
+}
+
+// The Skill's own SKILL.md without its frontmatter, so `ego-browser skill`
+// prints the same guide an agent loads from the skill directory.
+async function readSkillGuide() {
+  const source = await readFile(
+    new URL("SKILL.md", `${SKILL_WORKSPACE.href}/`),
+    "utf8",
+  );
+  return source.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n)+/, "");
 }
 
 async function readStdin() {

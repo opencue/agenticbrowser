@@ -108,7 +108,7 @@ its profile and the task-space state all run locally; nothing is hosted.
 | **Your logins carry over**                | Import your Chrome profile once, and agents land on pages already signed in.                                                                                                                      |
 | **Parallel, owned task spaces**           | Each task gets its own tabs and an owner, so agents don't collide, and you can hand a space over or take it back halfway through.                                                                |
 | **Any agent, CLI or MCP**                 | A heredoc CLI for agents with a shell, and a one-tool MCP server (`ego_browser_run`) for everyone else.                                                                                           |
-| **Both runtimes**                         | The original v1 helpers and upstream's v2 `taskSpace` / `task.page` API ship side by side; the CLI picks one per script.                                                                         |
+| **v2 runtime by default**                 | Upstream's `taskSpace` / `task.page` API is the default; scripts written for the original v1 helpers still run on v1, picked per script.                                                         |
 | **Linux and Windows**                     | Linux first (X11 and Wayland), plus native Windows 10/11 without WSL.                                                                                                                              |
 
 ## agenticbrowser vs existing products
@@ -223,62 +223,8 @@ tell which window an agent is driving. Run it again any time to raise it.
 The interface is a heredoc of JavaScript on stdin, with every helper preloaded:
 
 ```bash
-ego-browser <<'JS'
-await page.goto('https://example.com')
-console.log(await page.snapshot())
-JS
-```
-
-`page.snapshot()` returns the semantic view of the page: the roles, accessible
-names and `@N` refs a model reads to "see" it. From an agent CLI you normally
-don't type this yourself; the agent loads the `ego-browser` skill and writes the
-block for you:
-
-```
-ego-browser follow @someone on x.com for me
-```
-
-### 4. Work in a task space
-
-A task space is a named set of tabs with an owner. Spaces use the live agent
-profile by default, so cookies, `localStorage`, IndexedDB and service-worker
-state are shared everywhere you are signed in (see
-[below](#task-spaces-share-live-login-state)).
-
-```bash
-ego-browser <<'JS'
-await taskSpaces.run('research task', async (task) => {
-  await page.goto('https://example.com')
-  console.log(await page.snapshot())
-})
-JS
-```
-
-`taskSpaces.run` selects or creates the space and completes it when the callback
-succeeds. For multi-step work, drive the lifecycle yourself:
-
-| Call                                | Owner afterwards       | What it means                                                  |
-| ----------------------------------- | ---------------------- | -------------------------------------------------------------- |
-| `taskSpaces.useOrCreate(name)`      | `agent` / unchanged    | Reuse the named space or create it; use this every round. A space you control is only selected (read-only) until a confirmed `takeOver`. |
-| `taskSpaces.handOff(name)`          | `agentDelegatedToUser` | Pass it to you (login, captcha, manual confirmation).          |
-| `taskSpaces.takeOver(name)`         | `agent`                | The agent takes it back, only after you confirm.               |
-| `taskSpaces.claim(id)`              | `agent`                | Claim an existing space.                                       |
-| `taskSpaces.complete(name, {keep})` | `user` / closed        | Done. `keep: true` leaves the tabs open as yours; `false` closes them. |
-
-Spaces whose tabs you close by hand are reconciled away on the next call.
-
-> **Ownership is enforced at the bridge.** While you control a space, the agent's
-> page operations fail with `EGO_TASK_SPACE_USER_IN_CONTROL` until control is
-> handed back.
-
-#### The v2 runtime (upstream API)
-
-The CLI also ships the newer upstream harness. It is chosen automatically when a
-script calls `taskSpace(` or `profiles(`; everything above keeps running on v1.
-
-```bash
-ego-browser <<'JS'
-const task = await taskSpace('research task')
+ego-browser nodejs <<'JS'
+const task = await taskSpace('first task')
 const page = task.page('p1')          // every new space opens with page p1
 await page.goto('https://example.com')
 console.log(await page.snapshot())
@@ -286,9 +232,59 @@ await task.finish({ keep: [] })       // or keep: ['p1'] to leave it open for yo
 JS
 ```
 
-Pages get permanent labels (`p1`, `p2`, …); `task.newPage()` opens another and
-`task.handOff()` passes the space to you. Set `EGO_BROWSER_RUNTIME=v1` or `v2`
-to force a runtime. Details: [package/ego-linux/README.md](package/ego-linux/README.md#two-runtimes).
+`page.snapshot()` returns the semantic view of the page: the roles, accessible
+names and refs a model reads to "see" it. From an agent CLI you normally don't
+type this yourself; the agent loads the `ego-browser` skill and writes the block
+for you:
+
+```
+ego-browser follow @someone on x.com for me
+```
+
+No heredoc in your shell? `ego-browser nodejs -e '<code>'` takes the same script
+as one argument, and `ego-browser nodejs < task.mjs` reads it from a file.
+`ego-browser skill` prints the full usage guide.
+
+### 4. Work in a task space
+
+A task space is a named set of pages with an owner. Spaces use the live agent
+profile by default, so cookies, `localStorage`, IndexedDB and service-worker
+state are shared everywhere you are signed in (see
+[below](#task-spaces-share-live-login-state)).
+
+| Call                              | What it means                                                                 |
+| --------------------------------- | ----------------------------------------------------------------------------- |
+| `await taskSpace(nameOrId)`       | Create the space, or resume one still in the agent's control. Names are unique. |
+| `task.page('p1')`, `task.newPage()` | Pages keep their labels (`p1`, `p2`, …) across rounds until `finish()`. |
+| `await task.handOff()`            | Pass the space to you (login, captcha, manual confirmation).                  |
+| `await takeOverTaskSpace(id)`     | The agent takes back a space it handed to you.                                |
+| `await claimTaskSpace(id)`        | Resume a space the agent finished with pages kept open for you.               |
+| `await task.finish({ keep })`     | Done. `keep` lists the pages to leave open as yours; `[]` closes them all.    |
+
+Spaces whose tabs you close by hand are reconciled away on the next call.
+
+> **Ownership is enforced at the bridge.** While you control a space, the agent's
+> page operations fail with `EGO_TASK_SPACE_USER_IN_CONTROL` until control is
+> handed back.
+
+#### The v1 runtime
+
+Scripts written against the original API (`page`, `taskSpaces`, `browser`,
+`site` globals) keep working: the CLI runs them on the v1 runtime when it sees
+those globals and no v2 call such as `taskSpace(`.
+
+```bash
+ego-browser nodejs <<'JS'
+await taskSpaces.run('research task', async (task) => {
+  await page.goto('https://example.com')
+  console.log(await page.snapshot())
+})
+JS
+```
+
+Set `EGO_BROWSER_RUNTIME=v1` or `v2` to force a runtime. v1 reference:
+[`skills/ego-browser/references/v1-api.md`](skills/ego-browser/references/v1-api.md);
+details: [package/ego-linux/README.md](package/ego-linux/README.md#two-runtimes).
 
 ### 5. Put it on your app launcher (Linux)
 
