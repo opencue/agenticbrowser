@@ -780,7 +780,15 @@ async function main() {
 
   // v2 scopes Page labels by process.ppid; pin it to the backing browser so
   // labels survive between rounds (see src/runtime-instance.mjs).
-  pinRuntimeInstance(browserInstanceKey(shim.wsUrl));
+  if (
+    !pinRuntimeInstance(browserInstanceKey(shim.wsUrl)) &&
+    harness === HARNESS_V2.href
+  ) {
+    process.stderr.write(
+      `ego-browser: cannot tell which browser ${shim.wsUrl} is (no /devtools/browser/<id> in it); ` +
+        "Page labels will not carry over to the next round\n",
+    );
+  }
 
   const { runMain } = await import(harness);
   try {
