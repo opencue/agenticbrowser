@@ -17,6 +17,8 @@ const SANDBOX = await mkdtemp(join(tmpdir(), "ego-exit-test-"));
 const TEST_ENV = {
   XDG_STATE_HOME: join(SANDBOX, "state"),
   EGO_LINUX_PROFILE: join(SANDBOX, "profile"),
+  EGO_BROWSER_STATE_DIR: join(SANDBOX, "ego-browser-state"),
+  EGO_LINUX_NOTIFY: "0",
 };
 const PREFERENCES = join(SANDBOX, "profile", "Default", "Preferences");
 const BROWSER_STATE = join(SANDBOX, "state", APP_DIR, "browser.json");
@@ -94,7 +96,7 @@ after(async () => {
 describe("stopping the backing browser", () => {
   it("exits cleanly, so the next launch offers no crash restore", async () => {
     await runCli(["--headless"], {
-      stdin: 'console.log("tabs=" + (await browser.listTabs()).length)',
+      stdin: 'console.log("tabs=" + (await listTabs()).length)',
     });
     // Chrome writes Preferences a beat after start, so this is the precondition
     // the real assertion below depends on, not a race of its own.

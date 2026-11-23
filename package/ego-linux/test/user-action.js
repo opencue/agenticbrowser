@@ -1,4 +1,5 @@
-const task = await taskSpaces.useOrCreate("user action overlay e2e");
+const task = await taskSpace("user action overlay e2e");
+const page = task.page("p1");
 await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
 
 const shown = await ego.showUserAction({
@@ -55,4 +56,4 @@ console.log(
       () => document.getElementById("ego-user-action-overlay") === null,
     )),
 );
-await taskSpaces.complete(task.id, { keep: false });
+await task.finish({ keep: [] });

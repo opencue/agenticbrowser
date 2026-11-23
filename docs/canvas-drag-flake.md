@@ -31,7 +31,7 @@ machine produced only 2/11 — barely above idle, and not enough to measure
 against. Pure CPU pressure is the wrong lever.
 
 Reproduce with `docs/experiments/canvas-flake-rate.sh`, run from
-`package/ego-browser`.
+`package/ego-browser-v2`.
 
 ## Fix attempt 1 — flush the renderer from the shim (rejected)
 

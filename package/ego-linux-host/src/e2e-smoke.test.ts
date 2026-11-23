@@ -3,7 +3,7 @@
  *
  * Skipped unless EGO_LINUX_E2E=1 so default `npm test` stays Chrome-free.
  * Full smoke needs Chrome/Chromium + a display (or EGO_HEADLESS=1) and a
- * built ego-browser harness at ../ego-browser/dist/src/run.js.
+ * built ego-browser harness at ../ego-browser-v2/dist/src/run.js.
  */
 
 import test from "node:test";

@@ -17,7 +17,7 @@
 #   taskset -c 0-1   2/3
 #   taskset -c 0-3   ~6/12
 #
-# Usage, from package/ego-browser:
+# Usage, from package/ego-browser-v2:
 #   sh ../../docs/experiments/canvas-flake-rate.sh [runs] [cores]
 #   PATH=/path/to/other/shim:$PATH sh ../../docs/experiments/canvas-flake-rate.sh
 #

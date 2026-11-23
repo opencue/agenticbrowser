@@ -5,8 +5,10 @@ Upstream ego lite runs on macOS only: the browser ships as a `.dmg`, and the
 `globalThis.ego`.
 
 This package supplies that object on Linux and on Windows, backed by a stock
-Chromium over CDP. **The harness itself is unmodified** — every helper, locator,
-driver and format in `package/ego-browser/` is upstream code running as-is.
+Chromium over CDP. **The runtime itself is unmodified** — every helper, driver
+and format in `package/ego-browser-v2/` is upstream code running as-is. The
+port's own features (locators, fastObserve/fastAct, debug, user actions, …) are
+added on top at run time by `package/ego-v2-ext`.
 
 Everything either operating system does differently — where state lives, how a
 browser is found, how another process's argv and ancestry are read, how a
@@ -42,7 +44,7 @@ there:
 cd package\ego-browser; npm ci; npm run build
 cd ..\ego-linux
 node installer\stage.mjs --node <path to node.exe>
-& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.2.1-linux.3 installer\ego-lite.iss
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.3.0-linux.1 installer\ego-lite.iss
 ```
 
 What the installer _contains_ is decided by `installer/stage.mjs` and checked by
@@ -92,7 +94,7 @@ Cloudflare verification loops even in a normal headed window. The explicit
 non-zero port keeps the same local CDP transport without that false signal.
 
 ```bash
-cd package/ego-browser && CI=true npm ci && npm run build # build the upstream harness
+cd package/ego-browser-v2 && CI=true npm ci && npm run build # build the upstream runtime
 cd ../ego-linux && npm ci && npm test                     # install MCP SDK + verify the port
 ```
 
@@ -132,8 +134,8 @@ await task.finish({ keep: [] })
 JS
 ```
 
-That runs on the v2 runtime, the default; v1 scripts still work (see
-[Two runtimes](#two-runtimes)).
+That runs on upstream's v2 runtime with the port extensions (see
+[Runtime](#runtime)).
 
 MCP hosts can launch the alternate stdio entry point:
 
@@ -450,26 +452,27 @@ Two costs are Windows-specific and worth knowing:
 - **Detached children are launched with `windowsHide`.** Without it every
   heredoc that starts the Spaces daemon flashes a console window on the desktop.
 
-## Two runtimes
+## Runtime
 
-Two harness builds ship side by side and share this shim:
+Every script runs on `package/ego-browser-v2`, an unmodified copy of upstream
+`citrolabs/ego-lite`'s `package/ego-browser`; refresh it from an upstream ref
+rather than editing it. For v2 the shim adds `ego.listProfiles()` (one profile,
+`Default`) and opens one `about:blank` tab in every new space, because v2 waits
+for that default tab. Before the script runs, the CLI:
 
-| Runtime | Package                  | Picked when                                                                                              | API                                               |
-| ------- | ------------------------ | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
-| v2      | `package/ego-browser-v2` | default; always when the script calls a v2 entry point (`taskSpace(`, `profiles(`, `claimTaskSpace(`, …) | `taskSpace(name)` → `task.page(label)` (upstream) |
-| v1      | `package/ego-browser`    | the script uses `taskSpaces`, `browser.`, `site.`, or a `page.` it never declares                        | `page`, `browser`, `taskSpaces`, locators         |
+- pins `process.ppid` to the browser's DevTools GUID, because v2 scopes its
+  Page-label ledger by parent pid and every round is a new process
+  (`src/runtime-instance.mjs`);
+- prepends `package/ego-v2-ext`'s one-line prelude, which adds the port's
+  extensions to the v2 TaskSpace and Page prototypes.
 
-`EGO_BROWSER_RUNTIME=v1|v2` overrides the detection (`src/runtime-select.mjs`).
-The same detection applies to `ego-browser nodejs -e '<code>'`.
-`package/ego-browser-v2` is an unmodified copy of upstream
-`citrolabs/ego-lite`'s `package/ego-browser`; refresh it with
-`git read-tree` from an upstream ref rather than editing it. For v2 the shim
-adds `ego.listProfiles()` (one profile, `Default`) and opens one `about:blank`
-tab in every new space, because v2 waits for that default tab.
+The v1 runtime this port used to ship (`package/ego-browser`, with `page`,
+`taskSpaces`, `browser` globals) was removed in 2.3.0-linux.1. Its features
+live on in the extensions.
 
 ## Fidelity
 
-The v1 harness uses 15 native methods plus 2 callbacks. All are implemented. The
+The runtime uses 15 native methods plus 2 callbacks. All are implemented. The
 remaining differences are structural rather than unfinished native methods.
 
 | Native surface                                            | Backed by                                             | Fidelity                                                                                                                                                                                     |

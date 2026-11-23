@@ -191,7 +191,7 @@ export function createEgoBrowserMcpServer({
 } = {}) {
   const server = new McpServer({
     name: "ego-browser",
-    version: "2.2.1-linux.3",
+    version: "2.3.0-linux.1",
   });
   let queue = Promise.resolve();
 

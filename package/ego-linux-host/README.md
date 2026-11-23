@@ -75,7 +75,7 @@ Details and troubleshooting: [`skills/ego-browser/references/install.md`](../../
 Manual alternative (same outcome as the installer steps):
 
 ```bash
-cd package/ego-browser && npm ci && npm run build
+cd package/ego-browser-v2 && npm ci && npm run build
 cd ../ego-linux-host && npm ci && npm run build
 mkdir -p ~/.local/bin ~/.local/share/ego-lite
 ln -sfn "$(pwd)/bin/ego-browser.mjs" ~/.local/bin/ego-browser
@@ -98,7 +98,7 @@ Default `npm test` is Chrome-free. Opt-in E2E (example.com title + snapshot) is 
 
 Full smoke needs:
 
-1. Built helper harness: `cd package/ego-browser && npm ci && npm run build` (produces `dist/src/run.js`)
+1. Built helper harness: `cd package/ego-browser-v2 && npm ci && npm run build` (produces `dist/src/run.js`)
 2. Chrome/Chromium on `PATH`, or `EGO_CHROME_PATH`
 3. A display (`DISPLAY` set) for headed mode, or `EGO_HEADLESS=1`
 
@@ -172,5 +172,5 @@ package/ego-linux-host/
 
 ## Related
 
-- Helper harness: [`package/ego-browser`](../ego-browser)
+- Helper harness: [`package/ego-browser-v2`](../ego-browser-v2)
 - Agent skill: [`skills/ego-browser`](../../skills/ego-browser)

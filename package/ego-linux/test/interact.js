@@ -1,4 +1,6 @@
 const fixture = process.env.FIXTURE_URL;
+const task = await taskSpace("interact test");
+const page = task.page("p1");
 const read = (id) =>
   page.evaluate(`document.getElementById('${id}').textContent`);
 const value = (id) => page.evaluate(`document.getElementById('${id}').value`);
@@ -6,7 +8,7 @@ const value = (id) => page.evaluate(`document.getElementById('${id}').value`);
 await page.goto(fixture);
 await page.waitForLoadState();
 
-const snap = await page.snapshotRaw({ scope: "full_page" });
+const snap = await snapshotRaw({ scope: "full_page" });
 const refOf = (predicate) => snap.refs.find(predicate)?.backendNodeId;
 const buttonRef = refOf(
   (ref) =>
@@ -15,7 +17,7 @@ const buttonRef = refOf(
 console.log("1. button ref:            " + buttonRef);
 
 // The ref-map contract: @N must resolve to real page coordinates.
-const center = await page.elementCenter("@" + buttonRef);
+const center = await elementCenter("@" + buttonRef);
 console.log("2. @ref center:           " + JSON.stringify(center));
 
 // Pointer path: a real CDP-synthesised click at those coordinates.
@@ -23,7 +25,7 @@ await page.mouse.click(center.x, center.y);
 console.log("3. after mouse click:     " + (await read("count")));
 
 // Stable locator emitted by the snapshot must resolve back.
-const locCenter = await page.elementCenter("loc=css:#click-button");
+const locCenter = await elementCenter("loc=css:#click-button");
 console.log("4. loc=css center:        " + JSON.stringify(locCenter));
 
 // Playwright-style locator, auto-waiting click.
@@ -37,7 +39,7 @@ console.log("6. locator fill:          " + (await value("name-input")));
 const deepRef = refOf((ref) => String(ref.name).includes("Deep button"));
 console.log(
   "7. deep iframe ref:       " +
-    JSON.stringify(await page.elementCenter("@" + deepRef)),
+    JSON.stringify(await elementCenter("@" + deepRef)),
 );
 
 // getByRole over the accessible names the snapshot reports.
@@ -49,6 +51,6 @@ console.log(
 const shot = await page.screenshot();
 console.log("9. screenshot:            " + shot);
 
-console.log(
-  "10. tabs:                 " + JSON.stringify(await browser.listTabs()),
-);
+console.log("10. tabs:                 " + JSON.stringify(await listTabs()));
+
+await task.finish({ keep: [] });

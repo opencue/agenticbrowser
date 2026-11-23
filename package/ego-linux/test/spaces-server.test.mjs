@@ -19,6 +19,8 @@ const SANDBOX = await mkdtemp(join(tmpdir(), "ego-spaces-test-"));
 process.env.XDG_STATE_HOME = join(SANDBOX, "state");
 process.env.EGO_LINUX_PROFILE = join(SANDBOX, "profile");
 process.env.EGO_LINUX_COLLABORATION_INBOX = "1";
+process.env.EGO_BROWSER_STATE_DIR = join(SANDBOX, "ego-browser-state");
+process.env.EGO_LINUX_NOTIFY = "0";
 
 // Imported after that assignment on purpose: paths.mjs resolves its directories
 // at module load, so a static import would bind the real ones first.
@@ -412,7 +414,8 @@ describe("Spaces overview server", () => {
 
   it("keeps a low-level user-action request after its CLI process exits", async () => {
     const output = await runScript(`
-      const task = await taskSpaces.useOrCreate("persisted inbox bridge");
+      const task = await taskSpace("persisted inbox bridge");
+      const page = task.page('p1');
       await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
       const shown = await ego.showUserAction({
         key: "persist-after-exit",
@@ -420,7 +423,7 @@ describe("Spaces overview server", () => {
         doneLabel: "Done",
         cancelLabel: "Cancel",
       });
-      console.log(JSON.stringify({ taskId: task.id, shown }));
+      console.log(JSON.stringify({ taskId: task.spaceId, shown }));
     `);
     assert.match(output, /"alreadyVisible":false/);
 
@@ -473,10 +476,11 @@ describe("Spaces overview server", () => {
     await rm(releaseFile, { force: true });
     const running = runScript(
       `
-      await taskSpaces.useOrCreate("busy space");
+      const _task = await taskSpace("busy space");
+      const page = _task.page('p1');
       await page.goto(process.env.FIXTURE_URL);
       await page.waitForLoadState();
-      const point = await page.elementCenter("loc=css:#click-button");
+      const point = await elementCenter("loc=css:#click-button");
       await page.mouse.click(point.x, point.y, { label: "counting clicks" });
       const { access } = await import("node:fs/promises");
       while (true) {
@@ -823,14 +827,15 @@ describe("Spaces overview server", () => {
     let space;
     try {
       const running = runScript(`
-        const task = await taskSpaces.useOrCreate(${JSON.stringify(name)});
+        const task = await taskSpace(${JSON.stringify(name)});
+        const page = task.page('p1');
         await page.goto(process.env.FIXTURE_URL, { waitUntil: "load" });
         await page.locator("#name-input").fill("background-ok");
         await page.locator("#click-button").click();
-        await browser.switchTab((await browser.currentTab()).targetId);
+        await switchTab((await currentTab()).targetId);
         const shot = await page.screenshot();
         console.log(JSON.stringify({
-          id: task.id,
+          id: task.spaceId,
           name: await page.locator("#name-input").inputValue(),
           count: await page.locator("#count").textContent(),
           shot,

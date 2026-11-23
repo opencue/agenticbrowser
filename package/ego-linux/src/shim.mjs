@@ -17,6 +17,16 @@ import {
   createCollaborationStore,
 } from "./collaboration-store.mjs";
 
+/**
+ * Whether agent tabs are created in the background and their activation kept
+ * logical. Headed: yes, so an agent never takes the tab a person is looking at.
+ * Headless: no — nobody is looking, and Chrome does not render a hidden
+ * headless tab, so input to it is never acknowledged.
+ */
+export function agentTabsStayInBackground({ headless = false } = {}) {
+  return !headless;
+}
+
 /** The single profile id `ego.listProfiles()` reports and `createTaskSpace` accepts. */
 const AGENT_PROFILE_ID = "Default";
 
@@ -57,14 +67,19 @@ export async function createEgoShim({
   // agents navigate, click, type and capture their own pages in the background.
   // Explicit presentation (Open / handoff) uses the shim's internal CDP path
   // and still raises the requested task through presentSpace().
+  //
+  // Headless is the exception: nobody is looking, and Chrome does not render a
+  // hidden tab there, so input to a background agent tab is never acknowledged
+  // (Input.dispatchMouseEvent hangs until the caller's timeout). Agent tabs are
+  // foreground there.
   function shouldAutoFocusAgentTab() {
-    return false;
+    return !agentTabsStayInBackground({ headless });
   }
 
   // browser.switchTab() is implemented by the harness with
   // Target.activateTarget. Acknowledge that as a logical per-agent selection;
   // real foreground activation is reserved for presentSpace().
-  cdp.setBackgroundAgentTabs(true);
+  cdp.setBackgroundAgentTabs(agentTabsStayInBackground({ headless }));
 
   const taskSpaces = createTaskSpacesApi(cdp, {
     shouldAutoFocus: shouldAutoFocusAgentTab,

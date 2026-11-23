@@ -1,13 +1,13 @@
 # lefthook.yml - git hooks for ego-lite
 #
 # Enable hooks:
-#   cd package/ego-browser && npm install
+#   cd package/ego-browser-v2 && npm install
 #
-# lefthook is a package/ego-browser devDependency. npm install runs the
+# lefthook is a package/ego-browser-v2 devDependency. npm install runs the
 # prepare script, which installs hooks into the repository's .git/hooks.
 #
-# The git root is the repository root, while the JS package lives in
-# package/ego-browser. Commands cd into that package when needed.
+# The git root is the repository root, while the runtime package lives in
+# package/ego-browser-v2. Commands cd into that package when needed.
 
 pre-commit:
   parallel: false
@@ -29,32 +29,35 @@ pre-commit:
         exit 1
     style-check:
       run: |
-        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-(browser|linux)/.*\.(ts|mjs|js|json|md)$' || true)
+        files=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^package/ego-(browser-v2|linux|v2-ext)/.*\.(ts|mjs|js|json|md)$' || true)
         [ -z "$files" ] && exit 0
-        package/ego-browser/node_modules/.bin/prettier --check $files
+        package/ego-browser-v2/node_modules/.bin/prettier --check $files
     vulnerability-audit:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser-v2/' || exit 0
+        cd package/ego-browser-v2 && npm audit --registry=https://registry.npmjs.org --audit-level=moderate
     code-check:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm run typecheck
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser-v2/' || exit 0
+        cd package/ego-browser-v2 && npm run typecheck
     smoke-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm test
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser-v2/' || exit 0
+        # Skips the six mirror tests about upstream's repository layout (see
+        # the CI "test" job).
+        cd package/ego-browser-v2 && npm run build && npm run typecheck && node --test --test-skip-pattern="^(the bundled entry Skill matches the published entry Skill|the entry Skill defers usage to ego-browser skill|the shared install guide routes to a file per operating system|project Agent and Codex entries share the canonical Skill|branch pushes and pull requests do not package or publish releases|beta and stable tag pushes retain both release guards)$" "src/**/*.test.mjs"
     site-skill-validation:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser/|skills/ego-browser/learnings/)' || exit 0
-        cd package/ego-browser && npm run validate:site-skills
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^(package/ego-browser-v2/|skills/ego-browser/learnings/)' || exit 0
+        cd package/ego-browser-v2 && npm run validate:site-skills
     e2e-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser/' || exit 0
-        cd package/ego-browser && npm run e2e
-    # The port drives the harness's build output, so a change to either can break
-    # it. Both paths run it; the suite is headless and uses its own profile.
+        git diff --cached --name-only --diff-filter=ACMR | grep -q '^package/ego-browser-v2/' || exit 0
+        cd package/ego-browser-v2 && npm run e2e
+    # The port drives the runtime's build output plus the v2 extensions, so a
+    # change to any of them can break it. The suites are headless and use their
+    # own profiles.
     linux-port-test:
       run: |
-        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^package/ego-(browser|linux)/' || exit 0
-        cd package/ego-linux && npm test
+        git diff --cached --name-only --diff-filter=ACMR | grep -Eq '^package/ego-(browser-v2|linux|v2-ext)/' || exit 0
+        cd package/ego-linux && npm test && cd ../ego-v2-ext && npm test

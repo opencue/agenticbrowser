@@ -24,7 +24,7 @@ if ($env:OS -ne "Windows_NT") {
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $repoRoot = (Resolve-Path (Join-Path $scriptDir "..\..\..")).Path
-$harness = Join-Path $repoRoot "package/ego-browser"
+$harness = Join-Path $repoRoot "package/ego-browser-v2"
 $port = Join-Path $repoRoot "package/ego-linux"
 $cli = Join-Path $port "bin\ego-browser.mjs"
 $mcpCli = Join-Path $port "bin\ego-browser-mcp.mjs"
@@ -51,19 +51,8 @@ if ($nodeMajor -lt 22) {
   throw "Node.js 22 or newer is required; found $nodeVersion"
 }
 
-Write-Host "Building ego-browser harness..."
+Write-Host "Building the ego-browser v2 runtime..."
 Push-Location $harness
-try {
-  Invoke-Checked -Command $npmCommand.Source -Arguments @("ci", "--ignore-scripts")
-  Invoke-Checked -Command $npmCommand.Source -Arguments @("run", "build")
-}
-finally {
-  Pop-Location
-}
-
-# The v2 TaskSpace/Page runtime is the default; v1 still serves older scripts.
-Write-Host "Building ego-browser v2 runtime..."
-Push-Location "$harness-v2"
 try {
   Invoke-Checked -Command $npmCommand.Source -Arguments @("ci", "--ignore-scripts")
   Invoke-Checked -Command $npmCommand.Source -Arguments @("run", "build")

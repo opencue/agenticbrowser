@@ -1,4 +1,6 @@
 const fixture = process.env.FIXTURE_URL;
+const task = await taskSpace("cursor overlay e2e");
+const page = task.page("p1");
 const HOST = "document.getElementById('ego-agent-cursor-overlay')";
 const SHADOW = `${HOST}.__egoShadow`;
 const probe = (expression) => page.evaluate(expression);
@@ -6,7 +8,7 @@ const probe = (expression) => page.evaluate(expression);
 await page.goto(fixture);
 await page.waitForLoadState();
 
-const center = await page.elementCenter("loc=css:#click-button");
+const center = await elementCenter("loc=css:#click-button");
 await page.mouse.click(center.x, center.y, { label: "counting" });
 
 // The overlay is drawn fire-and-forget so it can never delay an action, which
@@ -46,9 +48,9 @@ console.log(
     (await probe("document.getElementById('count').textContent")),
 );
 
-const snap = await page.snapshotRaw({ scope: "full_page" });
+const snap6 = await snapshotRaw({ scope: "full_page" });
 console.log(
-  "6. overlay in snapshot:  " + snap.content.includes("ego-agent-cursor"),
+  "6. overlay in snapshot:  " + snap6.content.includes("ego-agent-cursor"),
 );
 
 // A wheel carries coordinates that default to (0, 0) but moves no pointer:
@@ -111,13 +113,13 @@ const badgeText = () => probe(`${SHADOW}.getElementById('text').textContent`);
 // A plain <button> is `cursor: default` in every browser — the link is what
 // actually asks for a hand, and the overlay follows the page rather than
 // inventing its own idea of what looks clickable.
-const link = await page.elementCenter("loc=css:a");
+const link = await elementCenter("loc=css:a");
 await page.mouse.move(link.x, link.y);
 await page.waitForTimeout(200);
 console.log("11. hand over a link:    " + (await shownShape()));
 console.log("12. names what it is on: " + (await badgeText()));
 
-const field = await page.elementCenter("loc=css:#name-input");
+const field = await elementCenter("loc=css:#name-input");
 await page.mouse.move(field.x, field.y);
 await page.waitForTimeout(200);
 console.log("13. beam over a field:   " + (await shownShape()));
@@ -174,7 +176,7 @@ console.log("22. cleared:             " + ((await bandCount()) === 0));
 // Reading is most of what an agent does and it dispatches no input at all, so
 // a sweep is the only thing that tells a watcher what was taken in. It runs
 // itself inside the page, which is why this waits rather than awaits.
-await page.snapshotRaw({ scope: "full_page" });
+await snapshotRaw({ scope: "full_page" });
 await page.waitForTimeout(300);
 console.log("23. says what it reads:  " + (await badgeText()));
 console.log("24. marks the lines:     " + ((await bandCount()) > 0));
@@ -313,7 +315,7 @@ console.log(
 // sheet the three cursor SVGs and badge fall back to raw document flow.
 await page.goto(new URL("csp.html", fixture).href);
 await page.waitForLoadState();
-const cspButton = await page.elementCenter("loc=css:#csp-button");
+const cspButton = await elementCenter("loc=css:#csp-button");
 await page.mouse.move(cspButton.x, cspButton.y);
 await page.waitForTimeout(250);
 // Recreate the broken shape already-open tabs have after upgrading: an inline
@@ -352,3 +354,5 @@ console.log(
       cspStyles.pointerPosition === "absolute" &&
       cspStyles.badgeDisplay === "flex"),
 );
+
+await task.finish({ keep: [] });

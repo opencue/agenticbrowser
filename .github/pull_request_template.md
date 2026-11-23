@@ -14,7 +14,7 @@
 
 ## Verification
 
-<!-- List the checks you ran and their results. Commands run from package/ego-browser unless noted otherwise. -->
+<!-- List the checks you ran and their results. Commands run from package/ego-browser-v2 unless noted otherwise. -->
 
 ```text
 npm test

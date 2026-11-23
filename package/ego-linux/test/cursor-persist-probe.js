@@ -1,3 +1,6 @@
+const task = await taskSpace("cursor-persist");
+const page = task.page("p1");
+
 const state = await page.evaluate(`(() => {
   const host = document.getElementById('ego-agent-cursor-overlay');
   return JSON.stringify({
@@ -8,3 +11,5 @@ const state = await page.evaluate(`(() => {
 })()`);
 
 console.log("AFTER RECONNECT: " + state);
+
+await task.finish({ keep: [] });

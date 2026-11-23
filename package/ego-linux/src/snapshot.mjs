@@ -3,7 +3,7 @@ import { createSessionResolver } from "./session.mjs";
 /**
  * snapshot() — the semantic page view the agent reads.
  *
- * Contract (package/ego-browser/src/driver/observe.ts + browser-runtime.ts:309):
+ * Contract (package/ego-browser-v2/src/driver/observe.ts + browser-runtime.ts:309):
  *   snapshot(options) -> { content: string, refs: [{ backendNodeId, role, name }] }
  *
  * `refs` is the load-bearing half: browserSnapshotRefsToRefMap() keys the ref map

@@ -5,7 +5,7 @@ description: >-
   app, including opening URLs, filling forms, running login flows, taking
   screenshots, scraping data, or debugging browser UI with Ego Lite.
 metadata:
-  version: "2.2.1-linux.3"
+  version: "2.3.0-linux.1"
   date: "2026-11-23"
   platform: "linux-windows-port"
 ---
@@ -19,10 +19,10 @@ metadata:
 > at all, so nothing you hand to the user can be done there: before
 > `task.handOff()`, make sure a window is visible (`ego-browser --open`).
 
-> **Runtime.** This guide documents the v2 TaskSpace/Page runtime, the default.
-> A script that instead uses the older globals (`page`, `taskSpaces`, `browser`,
-> `site`) still runs on the v1 runtime, documented in `references/v1-api.md`.
-> Don't mix the two in one script. `EGO_BROWSER_RUNTIME=v1|v2` forces a choice.
+> **Runtime.** Scripts run on the v2 TaskSpace/Page runtime documented here,
+> plus this port's extensions (see "Port extensions" below). The old v1 globals
+> (`page`, `taskSpaces`, `browser`, `site` without declaring them) no longer
+> exist; start every task with `const task = await taskSpace(name)`.
 
 > **Routing invariant:** use the `ego-browser` CLI for every browser task. Never
 > fall back to Codex's Browser/Chrome plugins, a Chrome-extension automation

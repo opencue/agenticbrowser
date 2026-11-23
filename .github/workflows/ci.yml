@@ -20,16 +20,25 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package/ego-browser/package-lock.json
+          cache-dependency-path: package/ego-browser-v2/package-lock.json
       - run: npm ci
-      - run: npm test
+      - run: npm run build && npm run check:skill-translation && npm run typecheck
+      # package/ego-browser-v2 is an unmodified upstream mirror. These six tests
+      # check upstream's own repository layout (plugins/, its release
+      # workflows), which this fork does not have, so they are skipped here
+      # instead of edited in the mirror.
+      - name: Unit tests
+        run: >-
+          node --test
+          --test-skip-pattern="^(the bundled entry Skill matches the published entry Skill|the entry Skill defers usage to ego-browser skill|the shared install guide routes to a file per operating system|project Agent and Codex entries share the canonical Skill|branch pushes and pull requests do not package or publish releases|beta and stable tag pushes retain both release guards)$"
+          "src/**/*.test.mjs"
       - run: npm run validate:site-skills
 
   test-linux:
@@ -42,15 +51,11 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package/ego-browser/package-lock.json
             package/ego-browser-v2/package-lock.json
             package/ego-linux/package-lock.json
-      # The CLI runs the harness's build output, so the harness has to be built
-      # before the port can be tested. CI=true is already set by Actions, which
-      # is what lets `npm ci` skip the lefthook install in the prepare script.
-      - name: Build the harness the port runs
-        working-directory: package/ego-browser
-        run: npm ci && npm run build
+      # The CLI runs the runtime's build output, so it has to be built before
+      # the port can be tested. CI=true is already set by Actions, which is what
+      # lets `npm ci` skip the lefthook install in the prepare script.
       - name: Build the v2 runtime
         working-directory: package/ego-browser-v2
         run: npm ci && npm run build
@@ -109,10 +114,9 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package/ego-browser/package-lock.json
             package/ego-browser-v2/package-lock.json
             package/ego-linux/package-lock.json
-      # package/ego-browser's `prepare` script is a POSIX shell one-liner, and npm
+      # package/ego-browser-v2's `prepare` script is a POSIX shell one-liner, and npm
       # runs package scripts through cmd.exe on Windows, which fails on it with
       # `"$CI" was unexpected at this time`. The runner ships Git Bash — that is
       # what `shell: bash` uses — so pointing npm at it makes the existing script
@@ -153,20 +157,15 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: |
-            package/ego-browser/package-lock.json
             package/ego-browser-v2/package-lock.json
             package/ego-linux/package-lock.json
-      # package/ego-browser's `prepare` script is a POSIX shell one-liner, and npm
+      # package/ego-browser-v2's `prepare` script is a POSIX shell one-liner, and npm
       # runs package scripts through cmd.exe on Windows, which fails on it with
       # `"$CI" was unexpected at this time`. The runner ships Git Bash — that is
       # what `shell: bash` uses — so pointing npm at it makes the existing script
       # work rather than rewriting a script this port does not own.
       - name: Let npm run POSIX package scripts
         run: npm config set script-shell bash
-
-      - name: Build the harness the installer ships
-        working-directory: package/ego-browser
-        run: npm ci && npm run build
 
       - name: Build the v2 runtime the installer ships
         working-directory: package/ego-browser-v2
@@ -284,7 +283,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -293,7 +292,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package/ego-browser/package-lock.json
+          cache-dependency-path: package/ego-browser-v2/package-lock.json
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ego-lite-setup
@@ -360,7 +359,7 @@ jobs:
           latest="${{ steps.release.outputs.latest }}"
           previous_tag="${{ steps.release.outputs.previous_tag }}"
           commit_sha="$(git rev-parse HEAD)"
-          artifact="package/ego-browser/dist/ego-browser-${version_tag}.zip"
+          artifact="package/ego-browser-v2/dist/ego-browser-${version_tag}.zip"
           windows_installer="${RUNNER_TEMP}/windows-installer/ego-lite-setup.exe"
           windows_checksum="${windows_installer}.sha256"
           hosts=("${RUNNER_TEMP}"/hosts/*)

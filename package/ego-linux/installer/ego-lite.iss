@@ -3,7 +3,7 @@
 ; Built on windows-latest by the build-windows-installer CI job, which stages
 ; the payload first (installer/stage.mjs) and passes the version in:
 ;
-;     iscc /DAppVersion=2.2.1-linux.3 installer\ego-lite.iss
+;     iscc /DAppVersion=2.3.0-linux.1 installer\ego-lite.iss
 ;
 ; Everything it ships comes from installer\payload\, so the file list here is
 ; deliberately one line -- what goes into the install is stage.mjs's decision,

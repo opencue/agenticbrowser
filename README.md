@@ -108,7 +108,7 @@ its profile and the task-space state all run locally; nothing is hosted.
 | **Your logins carry over**                | Import your Chrome profile once, and agents land on pages already signed in.                                                                                                                      |
 | **Parallel, owned task spaces**           | Each task gets its own tabs and an owner, so agents don't collide, and you can hand a space over or take it back halfway through.                                                                |
 | **Any agent, CLI or MCP**                 | A heredoc CLI for agents with a shell, and a one-tool MCP server (`ego_browser_run`) for everyone else.                                                                                           |
-| **v2 runtime by default**                 | Upstream's `taskSpace` / `task.page` API is the default; scripts written for the original v1 helpers still run on v1, picked per script.                                                         |
+| **Upstream v2 runtime, extended**        | Upstream's `taskSpace` / `task.page` API, plus the port's locators, fast observe/act loop, debug dumps and user-action requests. |
 | **Linux and Windows**                     | Linux first (X11 and Wayland), plus native Windows 10/11 without WSL.                                                                                                                              |
 
 ## agenticbrowser vs existing products
@@ -164,7 +164,7 @@ runtime dependencies, links `ego-browser` and `ego-browser-mcp` into
 <summary>Doing it by hand</summary>
 
 ```bash
-cd package/ego-browser && CI=true npm ci && CI=true npm run build
+cd package/ego-browser-v2 && CI=true npm ci && CI=true npm run build
 cd ../ego-linux && npm ci && npm test # verify the port: headless, throwaway profile
 ln -s "$PWD/bin/ego-browser.mjs" ~/.local/bin/ego-browser
 ln -s "$PWD/bin/ego-browser-mcp.mjs" ~/.local/bin/ego-browser-mcp
@@ -267,24 +267,14 @@ Spaces whose tabs you close by hand are reconciled away on the next call.
 > page operations fail with `EGO_TASK_SPACE_USER_IN_CONTROL` until control is
 > handed back.
 
-#### The v1 runtime
+#### Port extensions
 
-Scripts written against the original API (`page`, `taskSpaces`, `browser`,
-`site` globals) keep working: the CLI runs them on the v1 runtime when it sees
-those globals and no v2 call such as `taskSpace(`.
-
-```bash
-ego-browser nodejs <<'JS'
-await taskSpaces.run('research task', async (task) => {
-  await page.goto('https://example.com')
-  console.log(await page.snapshot())
-})
-JS
-```
-
-Set `EGO_BROWSER_RUNTIME=v1` or `v2` to force a runtime. v1 reference:
-[`skills/ego-browser/references/v1-api.md`](skills/ego-browser/references/v1-api.md);
-details: [package/ego-linux/README.md](package/ego-linux/README.md#two-runtimes).
+On top of upstream's v2 API the port adds Playwright-style locators
+(`page.getByRole(...)`, `page.locator(...)`), `page.fastObserve()` /
+`fastAct()`, `page.debug()`, `task.requestUserAction()`,
+`task.loginPreflight()` / `handleChallenge()`, `page.waitForRequest()` /
+`waitForResponse()`, `page.screencast` and `page.trace()`. See
+[`skills/ego-browser/references/port-extensions.md`](skills/ego-browser/references/port-extensions.md).
 
 ### 5. Put it on your app launcher (Linux)
 
@@ -438,15 +428,16 @@ Both roots follow `XDG_DATA_HOME` / `XDG_STATE_HOME` when set.
 | Clicking the launcher icon does nothing | Usually a Node version switch; the entry pins an absolute node path. Re-run `ego-browser --install-desktop-entry`.                |
 | `no Chrome/Chromium binary found`       | None of the candidates are on `PATH`. Set `EGO_LINUX_CHROME` to an absolute path.                                                 |
 | No window appears                       | The browser is headless (an earlier `--headless`, `EGO_LINUX_HEADLESS`, or low memory). `ego-browser --open` swaps it for a visible one. |
-| `npm ci` fails in `package/ego-browser` | A global `core.hooksPath` breaks `lefthook install`. Use `CI=true npm ci`.                                                        |
+| `npm ci` fails in `package/ego-browser-v2` | A global `core.hooksPath` breaks `lefthook install`. Use `CI=true npm ci`.                                                        |
 
 ## Verification
 
-Two suites, run one at a time, since both drive a browser:
+Run the suites one at a time, since each drives a browser:
 
 ```bash
 cd package/ego-linux && npm test        # the bridge, headless, against a local fixture
-cd package/ego-browser && npm run e2e   # real-browser suite, needs ego-browser on PATH
+cd package/ego-v2-ext && npm test       # the port extensions, headless
+cd package/ego-browser-v2 && npm run e2e   # upstream's real-browser suite, needs ego-browser on PATH
 ```
 
 > **Known flake: canvas drawing under load.** The three canvas cases occasionally

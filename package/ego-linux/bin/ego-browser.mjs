@@ -35,7 +35,6 @@ import {
   writePrivateStateFile,
 } from "../src/private-state.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
-import { selectRuntime } from "../src/runtime-select.mjs";
 import {
   browserInstanceKey,
   pinRuntimeInstance,
@@ -44,8 +43,7 @@ import { createEgoShim } from "../src/shim.mjs";
 import { stopSessionDevServers } from "../src/session-cleanup.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
-const HARNESS = new URL("../../ego-browser/dist/out/index.js", import.meta.url);
-// Upstream's v2 page-model runtime; see src/runtime-select.mjs.
+// Upstream's v2 page-model runtime, the only runtime.
 const HARNESS_V2 = new URL(
   "../../ego-browser-v2/dist/out/index.js",
   import.meta.url,
@@ -73,9 +71,9 @@ const USAGE = `ego-browser (Linux and Windows port)
   ego-browser nodejs -e '<code>'   the same, with the script as one argument
   ego-browser nodejs < task.mjs    the same, from a file
 
-Scripts run on the v2 TaskSpace/Page runtime. A script that uses the v1
-globals (page, taskSpaces, browser, site) runs on v1 instead;
-EGO_BROWSER_RUNTIME=v1|v2 forces one.
+Scripts run on the v2 TaskSpace/Page runtime plus the port's extensions
+(locators, fastObserve/fastAct, debug, requestUserAction, ...); see
+\`ego-browser skill\`.
 
   skill                     print the ego-browser usage guide (SKILL.md)
 
@@ -675,7 +673,7 @@ async function main() {
   if (argv[0] === "--doctor") {
     return runDoctor({
       json: argv.includes("--json") || argv.includes("-j"),
-      harnessPath: fileURLToPath(HARNESS),
+      harnessPath: fileURLToPath(HARNESS_V2),
     });
   }
   if (argv[0] === "--stop") {
@@ -745,7 +743,7 @@ async function main() {
   // `--sdk-path <file>` selects which harness bundle to run. Upstream's real
   // browser e2e runner passes it to test a local build; here the local build is
   // the only harness there is, so honour the path it names.
-  let harness = HARNESS.href;
+  let harness = HARNESS_V2.href;
   const sdkFlag = rest.indexOf("--sdk-path");
   if (sdkFlag !== -1) {
     const path = rest[sdkFlag + 1];
@@ -760,10 +758,10 @@ async function main() {
   // Site skills and learnings live in the repo's skill directory.
   process.env.EGO_BROWSER_AGENT_WORKSPACE ||= SKILL_WORKSPACE.pathname;
 
-  // A plain script run (no harness flags, no --sdk-path) picks v1 or v2 from the
-  // script itself, so stdin is read here and handed to the harness as text.
-  // `-e '<code>'` is the same script passed as one argument, for shells and
-  // sandboxes without heredoc input.
+  // A plain script run (no harness flags, no --sdk-path) is read here and
+  // handed to the harness as text, so the port's extension prelude can be
+  // added. `-e '<code>'` is the same script passed as one argument, for shells
+  // and sandboxes without heredoc input.
   let stdinText;
   if (rest[0] === "-e" && rest.length === 2 && sdkFlag === -1) {
     stdinText = rest[1];
@@ -771,14 +769,11 @@ async function main() {
   } else if (rest.length === 0 && sdkFlag === -1) {
     stdinText = await readStdin();
   }
-  if (stdinText !== undefined && selectRuntime(stdinText) === "v2") {
-    harness = HARNESS_V2.href;
-  }
-
   const shim = await createEgoShim({
     headless,
     lowMemory,
-    defaultSpaceTab: harness === HARNESS_V2.href,
+    // v2 waits for a new space's default tab (see README "Runtime").
+    defaultSpaceTab: true,
   });
   globalThis.ego = shim.ego;
 

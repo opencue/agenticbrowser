@@ -5,7 +5,7 @@ on:
     paths:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
-      - "package/ego-browser/**"
+      - "package/ego-browser-v2/**"
       - "package/ego-linux/**"
       - "package/ego-linux-host/**"
       - "skills/ego-browser/learnings/**"
@@ -16,7 +16,7 @@ on:
     paths:
       - ".github/workflows/quality-gates.yml"
       - "lefthook.yml"
-      - "package/ego-browser/**"
+      - "package/ego-browser-v2/**"
       - "package/ego-linux/**"
       - "package/ego-linux-host/**"
       - "skills/ego-browser/learnings/**"
@@ -45,10 +45,10 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: package/ego-browser/package-lock.json
+          cache-dependency-path: package/ego-browser-v2/package-lock.json
 
       - name: Install dependencies
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
         run: npm ci
 
       - name: Check changed file style
@@ -63,23 +63,27 @@ jobs:
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
 
-          files="$(git diff --name-only --diff-filter=ACMR "$base" HEAD | grep -E '^package/ego-(browser|linux)/.*\.(ts|mjs|js|json|md)$' || true)"
+          files="$(git diff --name-only --diff-filter=ACMR "$base" HEAD | grep -E '^package/ego-(browser-v2|linux|v2-ext)/.*\.(ts|mjs|js|json|md)$' || true)"
           [ -z "$files" ] && exit 0
-          package/ego-browser/node_modules/.bin/prettier --check $files
+          package/ego-browser-v2/node_modules/.bin/prettier --check $files
 
       - name: Analyze vulnerabilities
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
         run: npm audit --registry=https://registry.npmjs.org --audit-level=moderate
 
       - name: Check code
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
         run: npm run typecheck
 
       - name: Run smoke tests
-        working-directory: package/ego-browser
-        run: npm test
+        working-directory: package/ego-browser-v2
+        # The six skipped tests check upstream's repository layout, which this
+        # fork does not have (see ci.yml "test").
+        run: >-
+          npm run build && npm run typecheck &&
+          node --test --test-skip-pattern="^(the bundled entry Skill matches the published entry Skill|the entry Skill defers usage to ego-browser skill|the shared install guide routes to a file per operating system|project Agent and Codex entries share the canonical Skill|branch pushes and pull requests do not package or publish releases|beta and stable tag pushes retain both release guards)$" "src/**/*.test.mjs"
 
       - name: Validate site skills
-        working-directory: package/ego-browser
+        working-directory: package/ego-browser-v2
         run: npm run validate:site-skills
 

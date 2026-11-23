@@ -122,9 +122,8 @@ function openControlCenterUrl(url: string, env: NodeJS.ProcessEnv): void {
  *
  * Order:
  * 1. explicit harnessPath / EGO_HARNESS_PATH
- * 2. ../ego-browser/dist/src/run.js (preferred)
- * 3. ../ego-browser/dist/out/index.js
- * 4. ../ego-browser/deps/ego-browser/index.js
+ * 2. ../ego-browser-v2/dist/src/run.js (preferred)
+ * 3. ../ego-browser-v2/dist/out/index.js
  */
 export function resolveHarnessPath(
   env: NodeJS.ProcessEnv = process.env,
@@ -134,11 +133,10 @@ export function resolveHarnessPath(
   if (explicit) return resolve(explicit);
   if (env.EGO_HARNESS_PATH) return resolve(env.EGO_HARNESS_PATH);
 
-  const sibling = join(packageRoot, "..", "ego-browser");
+  const sibling = join(packageRoot, "..", "ego-browser-v2");
   const candidates = [
     join(sibling, "dist", "src", "run.js"),
     join(sibling, "dist", "out", "index.js"),
-    join(sibling, "deps", "ego-browser", "index.js"),
   ];
   for (const c of candidates) {
     if (existsSync(c)) return c;
@@ -146,7 +144,7 @@ export function resolveHarnessPath(
   throw new Error(
     [
       "ego-browser harness not found. Build it first:",
-      "  cd package/ego-browser && npm ci && npm run build",
+      "  cd package/ego-browser-v2 && npm ci && npm run build",
       `Looked under: ${sibling}`,
     ].join("\n"),
   );
@@ -371,9 +369,28 @@ export async function runCli(
       );
       return 1;
     }
+    // The v2 runtime scopes its Page labels by `browser-host:${process.ppid}`;
+    // each round is a new process, so pin it to this host instance (its
+    // socket) or the labels are lost between rounds. Then add the port's
+    // extensions (locators, fastObserve, debug, requestUserAction, ...).
+    pinRuntimeInstance(`linux-host-${config.hostSocket}`);
+    const extensions = pathToFileURL(
+      join(packageRoot, "..", "ego-v2-ext", "src", "index.mjs"),
+    ).href;
+    let stdinText: string | undefined;
+    if (flags.remaining.length === 0) {
+      stdinText = await readAll(stdin);
+      if (existsSync(fileURLToPath(extensions))) {
+        const { withExtensions } = (await import(extensions)) as {
+          withExtensions: (source: string) => string;
+        };
+        stdinText = withExtensions(stdinText);
+      }
+    }
     const code = await runMain({
       argv: flags.remaining,
       stdin,
+      stdinText,
       stdout,
       stderr,
       env,
@@ -382,4 +399,29 @@ export async function runCli(
   } finally {
     conn.close();
   }
+}
+
+async function readAll(stream: NodeJS.ReadableStream): Promise<string> {
+  let text = "";
+  stream.setEncoding?.("utf8");
+  for await (const chunk of stream as AsyncIterable<string | Buffer>) {
+    text += typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  }
+  return text;
+}
+
+/** Make `process.ppid` report `key` (v2's page-ledger scope) for this process. */
+export function pinRuntimeInstance(
+  key: string,
+  target: { ppid?: unknown } = process,
+): boolean {
+  const safe = key.replace(/[^A-Za-z0-9_-]/g, "_");
+  delete target.ppid;
+  Object.defineProperty(target, "ppid", {
+    value: safe,
+    writable: true,
+    configurable: true,
+    enumerable: true,
+  });
+  return target.ppid === safe;
 }

@@ -1,7 +1,7 @@
 /**
  * Stable ego error codes and helpers for the Linux host.
  *
- * Code list mirrors package/ego-browser/src/ego-errors.ts (copied, not imported,
+ * Code list mirrors package/ego-browser-v2/src/ego-errors.ts (copied, not imported,
  * to avoid cross-package coupling until a shared module exists).
  */
 
