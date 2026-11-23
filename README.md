@@ -111,6 +111,31 @@ its profile and the task-space state all run locally; nothing is hosted.
 | **Both runtimes**                         | The original v1 helpers and upstream's v2 `taskSpace` / `task.page` API ship side by side; the CLI picks one per script.                                                                         |
 | **Linux and Windows**                     | Linux first (X11 and Wayland), plus native Windows 10/11 without WSL.                                                                                                                              |
 
+## agenticbrowser vs existing products
+
+Most tools can automate a browser. The real questions are what browser the agent
+gets, whether you can keep working at the same time, and whether the tool is
+built for the agent you already use or a built-in one.
+
+| Feature                          | agenticbrowser | Browser extensions<br><sub>Claude/Codex in Chrome</sub> | Built-in browsers<br><sub>Claude/ChatGPT built-in browser</sub> | Cloud browsers<br><sub>Browserbase/Browser Use</sub> | Browser CLIs<br><sub>playwright-cli/Browser Harness</sub> | AI browsers<br><sub>Comet/Dia</sub> |
+| -------------------------------- | :------------: | :-----------------------------------------------------: | :-------------------------------------------------------------: | :--------------------------------------------------: | :-------------------------------------------------------: | :---------------------------------: |
+| Works with any AI agent          |       ✓        |                            —                            |                                —                                |                          ✓                           |                             ✓                             |                  —                  |
+| Uses your browser logins         |       ✓        |                            ✓                            |                                —                                |                          —                           |                             —                             |                  ✓                  |
+| Works across your whole computer |       ✓        |                            —                            |                                ✓                                |                          —                           |                             ✓                             |                  —                  |
+| Doesn't hijack your browser      |       ✓        |                            —                            |                                ✓                                |                          ✓                           |                             —                             |                  —                  |
+| Parallel multitasking            |       ✓        |                            —                            |                                —                                |                          ✓                           |                             —                             |                  —                  |
+| Runs large scraping jobs         |       ✓        |                            —                            |                                —                                |                          ✓                           |                             ✓                             |                  —                  |
+| Works as your daily browser      |       —        |                            ✓                            |                                —                                |                          —                           |                             —                             |                  ✓                  |
+| Runs on Linux                    |       ✓        |                            ✓                            |                                —                                |                          ✓                           |                             ✓                             |                  —                  |
+| Free and open source             |       ✓        |                            —                            |                                —                                |                          —                           |                             ✓                             |                  —                  |
+| Data stored locally              |       ✓        |                            ✓                            |                                ✓                                |                          —                           |                             ✓                             |                  —                  |
+| Reusable site skills             |       ✓        |                            —                            |                                —                                |                          —                           |                             —                             |                  —                  |
+
+The competitor columns follow [upstream's comparison](https://github.com/citrolabs/ego-lite#ego-lite-vs-existing-products).
+agenticbrowser drives a separate agent profile, so it sits beside your daily
+browser rather than replacing it, and its reusable site skills ship today in
+[`skills/ego-browser/learnings`](skills/ego-browser/learnings).
+
 ---
 
 ## Requirements
