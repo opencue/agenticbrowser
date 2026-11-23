@@ -44,7 +44,7 @@ there:
 cd package\ego-browser; npm ci; npm run build
 cd ..\ego-linux
 node installer\stage.mjs --node <path to node.exe>
-& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.3.0-linux.1 installer\ego-lite.iss
+& "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DAppVersion=2.3.0-linux.2 installer\ego-lite.iss
 ```
 
 What the installer _contains_ is decided by `installer/stage.mjs` and checked by

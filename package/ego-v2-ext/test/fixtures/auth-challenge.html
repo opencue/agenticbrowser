@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Auth challenge fixture</title>
+  </head>
+  <body>
+    <h1>Human verification required</h1>
+    <p>Please complete the captcha below.</p>
+
+    <!--
+      Fake hCaptcha marker: a visible .h-captcha div with no completed
+      response. inspectHumanChallenge() will detect it as an hcaptcha challenge.
+    -->
+    <div
+      class="h-captcha"
+      data-sitekey="10000000-ffff-ffff-ffff-000000000001"
+      style="
+        width: 300px;
+        height: 70px;
+        background: #eee;
+        border: 1px solid #aaa;
+      "
+    >
+      hCaptcha placeholder
+    </div>
+
+    <!-- Empty response textarea (no completed challenge) -->
+    <textarea name="h-captcha-response" style="display: none"></textarea>
+  </body>
+</html>

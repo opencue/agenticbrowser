@@ -557,7 +557,7 @@ Expected minimum change surface:
 - `package/ego-linux/src/spaces-server.mjs` - authenticated request endpoints and
   change events;
 - `package/ego-linux/src/spaces-ui.mjs` - Needs You queue and compact space layout;
-- `package/ego-v2-ext/src/user-action.mjs` (was `package/ego-browser/src/helpers.ts` before the v1 runtime was removed in 2.3.0-linux.1) - typed request options, compatibility, and
+- `package/ego-v2-ext/src/user-action.mjs` (was `package/ego-browser/src/helpers.ts` before the v1 runtime was removed in 2.3.0-linux.2) - typed request options, compatibility, and
   structured results;
 - relevant Linux and browser unit/E2E tests;
 - `skills/ego-browser/SKILL.md` and generated helper documentation.

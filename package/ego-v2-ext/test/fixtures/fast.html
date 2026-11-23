@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>fast-loop fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 20px;
+      }
+      #output {
+        margin-top: 10px;
+        color: green;
+      }
+      /* The tall section is hidden until #show-tall is clicked, but the
+         scroll-test can also navigate directly to ?tall=1 to get it shown. */
+      #tall-section {
+        display: none;
+        height: 2000px;
+        background: #f0f0f0;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Fast loop fixture</h1>
+
+    <!-- Searchbox / fill target -->
+    <label for="search">Search</label>
+    <input id="search" type="search" name="search" placeholder="type here" />
+
+    <!-- Button — changes visible text when clicked -->
+    <button id="go-btn" type="button">Go</button>
+    <div id="output"></div>
+
+    <!-- Select dropdown -->
+    <label for="color">Color</label>
+    <select id="color" name="color">
+      <option value="red" selected>Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+    </select>
+
+    <!-- Checkbox -->
+    <label>
+      <input id="accept" type="checkbox" name="accept" />
+      Accept terms
+    </label>
+
+    <!-- These must NOT appear in fastObserve actions: -->
+    <input type="password" name="pw" value="secret" />
+    <input type="file" name="upload" />
+    <input type="hidden" name="csrf" value="tok" />
+
+    <!-- Tall section for scroll testing -->
+    <button id="show-tall" type="button">Show more</button>
+    <div id="tall-section"></div>
+
+    <script>
+      document.getElementById("go-btn").addEventListener("click", () => {
+        document.getElementById("output").textContent = "clicked";
+      });
+      document.getElementById("show-tall").addEventListener("click", () => {
+        document.getElementById("tall-section").style.display = "block";
+      });
+      // ?tall=1 shows the tall section on load so scroll tests get a stable
+      // initial state without DOM manipulation after load.
+      if (new URLSearchParams(location.search).get("tall") === "1") {
+        document.getElementById("tall-section").style.display = "block";
+      }
+    </script>
+  </body>
+</html>

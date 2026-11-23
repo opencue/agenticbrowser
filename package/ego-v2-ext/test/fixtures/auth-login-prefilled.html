@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Auth login prefilled fixture</title>
+  </head>
+  <body>
+    <h1>Sign in (prefilled)</h1>
+    <form
+      id="login-form"
+      onsubmit="
+        event.preventDefault();
+        document.body.dataset.submitted = 'yes';
+      "
+    >
+      <label for="email">Email</label>
+      <input
+        id="email"
+        type="email"
+        name="email"
+        autocomplete="username"
+        value="saved@example.test"
+      />
+
+      <label for="password">Password</label>
+      <input
+        id="password"
+        type="password"
+        name="password"
+        autocomplete="current-password"
+        value="saved-secret"
+      />
+
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+    <div id="result"></div>
+  </body>
+</html>

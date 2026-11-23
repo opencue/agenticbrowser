@@ -240,6 +240,29 @@ async function _EGO_IN_PAGE(cmd) {
             result.push(ctrl);
           }
         }
+        // Like Playwright's getByLabel: aria-labelledby and aria-label name a
+        // control too, not only a <label> element.
+        for (const el of root.querySelectorAll(
+          "[aria-labelledby],[aria-label]",
+        )) {
+          if (seen.has(el)) continue;
+          const ids = (el.getAttribute("aria-labelledby") || "")
+            .split(/\s+/)
+            .filter(Boolean);
+          const text = ids.length
+            ? ids
+                .map(
+                  (id) =>
+                    document.getElementById(id)?.textContent?.trim() || "",
+                )
+                .join(" ")
+                .trim()
+            : (el.getAttribute("aria-label") || "").trim();
+          if (text && matchText(text, spec.text, spec.exact)) {
+            seen.add(el);
+            result.push(el);
+          }
+        }
         return result;
       }
       case "placeholder": {

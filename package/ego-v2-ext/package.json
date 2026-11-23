@@ -1,6 +1,6 @@
 {
   "name": "ego-v2-ext",
-  "version": "2.3.0-linux.1",
+  "version": "2.3.0-linux.2",
   "private": true,
   "description": "Port extensions (locators, fastObserve/fastAct, debug, requestUserAction) added onto the unmodified v2 ego-browser runtime.",
   "type": "module",
@@ -9,7 +9,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test \"test/**/*.test.mjs\""
+    "test": "node scripts/require-tests.mjs && node --test \"test/**/*.test.mjs\""
   },
   "license": "MIT"
 }

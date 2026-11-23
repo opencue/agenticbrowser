@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>locator fixture</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 1rem;
+      }
+      #output {
+        margin-top: 0.5rem;
+        min-height: 1.5em;
+        border: 1px solid #ccc;
+        padding: 0.25rem 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- getByRole / getByText tests -->
+    <button id="btn-submit" data-testid="submit-btn">Submit</button>
+    <button id="btn-cancel">Cancel</button>
+
+    <!-- Multiple buttons for nth/count tests -->
+    <ul id="items">
+      <li class="item">Apple</li>
+      <li class="item">Banana</li>
+      <li class="item">Cherry</li>
+    </ul>
+
+    <!-- getByLabel / getByPlaceholder / fill + inputValue -->
+    <label for="email-input">Email</label>
+    <input id="email-input" type="email" placeholder="Enter your email" />
+
+    <label for="phone-input">Phone</label>
+    <input id="phone-input" type="tel" placeholder="Enter phone" />
+
+    <!-- getByAltText -->
+    <img id="logo" src="" alt="Site logo" />
+
+    <!-- getByTitle -->
+    <span id="hint" title="Helpful hint">?</span>
+
+    <!-- check / isChecked -->
+    <label> <input id="agree" type="checkbox" /> I agree </label>
+
+    <!-- selectOption -->
+    <label for="color">Color</label>
+    <select id="color">
+      <option value="red">Red</option>
+      <option value="green">Green</option>
+      <option value="blue">Blue</option>
+    </select>
+
+    <!-- getAttribute -->
+    <a id="link" href="https://example.com" data-custom="hello">Example</a>
+
+    <!-- scoped locator / filter test -->
+    <div id="card-open" class="card open">
+      <span class="status">Open</span>
+      <button class="card-btn">View</button>
+    </div>
+    <div id="card-closed" class="card">
+      <span class="status">Closed</span>
+      <button class="card-btn">View</button>
+    </div>
+
+    <!-- evaluateAll -->
+    <ul id="fruits">
+      <li class="fruit">Mango</li>
+      <li class="fruit">Papaya</li>
+      <li class="fruit">Lychee</li>
+    </ul>
+
+    <!-- waitFor: element added after delay -->
+    <div id="delayed-container"></div>
+
+    <!-- output -->
+    <div id="output"></div>
+
+    <script>
+      // Add a delayed element for waitFor visible tests.
+      setTimeout(function () {
+        const el = document.createElement("p");
+        el.id = "delayed-msg";
+        el.textContent = "I appeared!";
+        document.getElementById("delayed-container").appendChild(el);
+      }, 500);
+
+      // Wire up submit button to show output.
+      document
+        .getElementById("btn-submit")
+        .addEventListener("click", function () {
+          document.getElementById("output").textContent = "submitted";
+        });
+    </script>
+  </body>
+</html>

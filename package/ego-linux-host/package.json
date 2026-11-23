@@ -1,6 +1,6 @@
 {
   "name": "ego-linux-host",
-  "version": "2.3.0-linux.1",
+  "version": "2.3.0-linux.2",
   "private": true,
   "type": "module",
   "engines": { "node": ">=22" },

@@ -16,7 +16,7 @@
  * that you cannot start() while a recording is already active on the same page.
  *
  * Video encoding: delegates to VideoRecorder (inlined from
- * the former v1 runtime: video-recorder.ts, removed in 2.3.0-linux.1). It requires ffmpeg (the binary
+ * the former v1 runtime: video-recorder.ts, removed in 2.3.0-linux.2). It requires ffmpeg (the binary
  * named "ffmpeg" or the path in EGO_BROWSER_FFMPEG_PATH).
  *
  * trace
@@ -76,7 +76,7 @@ async function computeDefaultSize(page) {
 }
 
 // ---------------------------------------------------------------------------
-// VideoRecorder — inlined from the former v1 runtime (video-recorder.ts, removed in 2.3.0-linux.1)
+// VideoRecorder — inlined from the former v1 runtime (video-recorder.ts, removed in 2.3.0-linux.2)
 // Same ffmpeg dependency, same error message, same frame-writing logic.
 // ---------------------------------------------------------------------------
 

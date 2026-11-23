@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Auth login fixture</title>
+  </head>
+  <body>
+    <h1>Sign in</h1>
+    <form
+      id="login-form"
+      onsubmit="
+        event.preventDefault();
+        document.body.dataset.submitted = 'yes';
+      "
+    >
+      <label for="email">Email</label>
+      <input id="email" type="email" name="email" autocomplete="username" />
+
+      <label for="password">Password</label>
+      <input
+        id="password"
+        type="password"
+        name="password"
+        autocomplete="current-password"
+      />
+
+      <button type="submit" id="submit-btn">Sign in</button>
+    </form>
+    <div id="result"></div>
+  </body>
+</html>
