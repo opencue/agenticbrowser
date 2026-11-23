@@ -11,13 +11,17 @@ export async function openAdmin(ctx, args = {}) {
     throw new Error("domain must be a bare hostname, e.g. admin.teherguminet.hu");
   }
 
-  await ctx.openOrReuseTab(`https://${domain}/app/orders`, { wait: true });
+  // origin match: a tab already on another admin page (or /app/login) is reused.
+  await ctx.openOrReuseTab(`https://${domain}/app/orders`, { wait: true, match: "origin" });
   await ctx.waitForLoad().catch(() => {});
   // The SPA decides about the session after load; give the redirect a moment.
-  let { url } = await ctx.pageInfo();
-  for (let waited = 0; waited < 15 && !new URL(url).pathname.startsWith("/app"); waited += 0.25) {
+  let { url, dialog } = await ctx.pageInfo();
+  for (let waited = 0; waited < 15 && url && !new URL(url).pathname.startsWith("/app"); waited += 0.25) {
     await ctx.wait(0.25);
-    ({ url } = await ctx.pageInfo());
+    ({ url, dialog } = await ctx.pageInfo());
+  }
+  if (!url) {
+    throw new Error(`a JavaScript dialog is blocking the page: ${JSON.stringify(dialog ?? null)}`);
   }
 
   const authenticated = !new URL(url).pathname.startsWith("/app/login");

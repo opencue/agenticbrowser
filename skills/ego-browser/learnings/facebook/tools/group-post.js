@@ -50,7 +50,15 @@ export async function postToGroup(ctx, args = {}) {
     ...normalizeLabels(args.submitLabels),
   ];
 
-  const { url } = await ctx.pageInfo();
+  const { url, dialog } = await ctx.pageInfo();
+  if (!url) {
+    return {
+      status: "failed",
+      draft: "",
+      url: "",
+      error: `a JavaScript dialog is blocking the page: ${JSON.stringify(dialog ?? null)}`,
+    };
+  }
   if (!url.includes("/groups/")) {
     return {
       status: "failed",
@@ -138,10 +146,15 @@ export async function postToGroup(ctx, args = {}) {
   await ctx.wait(0.3);
 
   // Setting the DOM text does not fire the input events that arm the publish
-  // button. Insert one character at a time through CDP input instead, the way
-  // typing does.
-  for (const character of text) {
-    await ctx.typeText(character);
+  // button. CDP Input.insertText does (beforeinput/input), so insert one
+  // character at a time. A newline is not text to insertText: press Enter, which
+  // the composer turns into a line break rather than a submit.
+  const lines = text.split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    if (index > 0) await ctx.pressKey("Enter");
+    for (const character of line) {
+      await ctx.typeText(character);
+    }
   }
   await ctx.wait(0.8);
 

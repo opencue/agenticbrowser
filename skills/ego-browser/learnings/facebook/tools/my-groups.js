@@ -7,7 +7,10 @@ function boundedInteger(value, fallback, max) {
 export async function listMyGroups(ctx, args = {}) {
   const maxGroups = boundedInteger(args.maxGroups, 50, 200);
 
-  const { url } = await ctx.pageInfo();
+  const { url, dialog } = await ctx.pageInfo();
+  if (!url) {
+    throw new Error(`a JavaScript dialog is blocking the page: ${JSON.stringify(dialog ?? null)}`);
+  }
   if (!/facebook\.com\/groups\/joins/.test(url)) {
     await ctx.gotoAndWait("https://www.facebook.com/groups/joins");
   }
