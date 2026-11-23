@@ -34,15 +34,15 @@ export async function resolveInstance(name) {
 }
 
 /**
- * GET a Coolify API path as parsed JSON. Uses the harness's Node-side fetch
- * (ctx.fetch.server) — the runtime replaces globalThis.fetch with its own
- * facade object inside tool modules, so bare fetch() is not available here.
+ * GET a Coolify API path as parsed JSON. Uses the runtime's Node-side fetch
+ * (ctx.serverFetch), which returns the body text and throws "... HTTP <status>"
+ * on a non-2xx answer.
  */
 export async function apiGet(ctx, instance, path) {
   const base = instance.fqdn.replace(/\/+$/, "");
   let body;
   try {
-    body = await ctx.fetch.server(`${base}/api/v1${path}`, {
+    body = await ctx.serverFetch(`${base}/api/v1${path}`, {
       headers: {
         Authorization: `Bearer ${instance.token}`,
         Accept: "application/json",

@@ -33,10 +33,10 @@ instance is a config problem, not a pack problem.
 
 ## Recommended flow
 
-1. `site.runTool('coolify', 'list_servers', {})` — fleet health in one call.
-2. `site.runTool('coolify', 'list_applications', {})` — what exists and its
+1. `runSiteTool('coolify', 'list_servers', {})` — fleet health in one call.
+2. `runSiteTool('coolify', 'list_applications', {})` — what exists and its
    status; `app_status` with a name substring for one app's detail.
-3. `site.runTool('coolify', 'running_deployments', {})` — poll this after
+3. `runSiteTool('coolify', 'running_deployments', {})` — poll this after
    triggering a deploy elsewhere (git push / webhook / CLI).
 4. `open_dashboard` only when actual UI work follows (editing env vars,
    reading build logs visually); the dashboard is Livewire-heavy, so prefer

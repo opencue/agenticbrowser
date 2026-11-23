@@ -11,21 +11,29 @@ function boundedInteger(value, fallback, max) {
  * React only trusts a real CDP input event, so this hovers for real.
  */
 async function materializePermalinks(ctx, maxCards) {
-  const cards = ctx.page.locator('div[role="feed"] > div');
-  const count = Math.min(await cards.count(), maxCards);
-  for (let i = 0; i < count; i += 1) {
-    const card = cards.nth(i);
-    const name = card.locator('[data-ad-rendering-role="profile_name"]');
+  for (let i = 0; i < maxCards; i += 1) {
+    // Bring card i's author name on screen and report where it is, or null when
+    // there is no such card, it is chrome rather than a post, or it was already
+    // materialized on an earlier round (don't pay for it twice).
+    const point = await ctx.js(`(${(index) => {
+      const card = document.querySelectorAll('div[role="feed"] > div')[index];
+      if (!card) return { done: true };
+      const name = card.querySelector('[data-ad-rendering-role="profile_name"]');
+      if (!name || card.querySelector('a[href*="/posts/"]')) return null;
+      name.scrollIntoView({ block: "center" });
+      const rect = name.getBoundingClientRect();
+      if (!rect.width || !rect.height) return null;
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+    }})(${i})`);
+    if (point?.done) break;
+    if (!point) continue;
     try {
-      if (!(await name.count())) continue;
-      // Already materialized on an earlier round — don't pay for it twice.
-      if (await card.locator('a[href*="/posts/"]').count()) continue;
-      await name.hover();
+      await ctx.hover(point);
     } catch {
-      // Card unmounted mid-pass, or is chrome rather than a post — skip it.
+      // Card unmounted mid-pass — skip it.
     }
   }
-  await ctx.page.waitForTimeout(1200);
+  await ctx.wait(1.2);
 }
 
 export async function getGroupPosts(ctx, args = {}) {
@@ -39,9 +47,8 @@ export async function getGroupPosts(ctx, args = {}) {
   for (let round = 0; round <= scrollRounds; round += 1) {
     await materializePermalinks(ctx, 12);
 
-    const batch = await ctx.page
-      .locator('div[role="feed"] > div')
-      .evaluateAll((cards) => {
+    const batch = await ctx.js(`(${() => {
+        const cards = [...document.querySelectorAll('div[role="feed"] > div')];
         // Facebook interleaves invisible joiners into some text runs to break
         // naive scraping; strip them so the text compares and reads normally.
         const clean = (value) =>
@@ -85,7 +92,7 @@ export async function getGroupPosts(ctx, args = {}) {
             };
           })
           .filter(Boolean);
-      });
+      }})()`);
 
     for (const post of batch) {
       if (!post.text && !post.permalink) continue;
@@ -102,8 +109,8 @@ export async function getGroupPosts(ctx, args = {}) {
 
     if (collected.size >= maxPosts || round === scrollRounds) break;
 
-    await ctx.page.mouse.wheel(0, 1800);
-    await ctx.page.waitForTimeout(1500);
+    await ctx.scrollBy(1800);
+    await ctx.wait(1.5);
   }
 
   return [...collected.values()].slice(0, maxPosts);
