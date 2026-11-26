@@ -356,6 +356,56 @@ describe("Spaces overview server", () => {
     assert.equal(stored.version, request.version);
   });
 
+  it("shows Dismiss instead of Open or Done for a request whose space was closed", async () => {
+    const { body: created } = await api("/api/spaces", {
+      method: "POST",
+      body: JSON.stringify({ name: "closed inbox context" }),
+    });
+    const request = await shim.collaborationStore.create({
+      actionKey: "closed-inbox-context",
+      taskSpaceId: created.space.id,
+      instruction: "Dismiss this closed context.",
+    });
+    const closed = await api(`/api/spaces/${created.space.id}/close`, {
+      method: "POST",
+    });
+    assert.equal(closed.status, 200);
+
+    const opened = await api(`/api/collaboration/requests/${request.id}/open`, {
+      method: "POST",
+      body: JSON.stringify({ requestVersion: request.version }),
+    });
+    assert.equal(opened.status, 410);
+    assert.equal(
+      (await shim.collaborationStore.get(request.id)).status,
+      "pending",
+    );
+
+    await runScript(`
+      const task = await taskSpace('closed request panel test');
+      const page = task.page('p1');
+      await page.goto(${JSON.stringify(BASE + "/#token=" + DAEMON_TOKEN)});
+      const card = page.locator('.request-card').filter({hasText: 'Dismiss this closed context.'});
+      const dismiss = card.getByRole('button', {name: 'Dismiss', exact: true});
+      await dismiss.waitFor();
+      if (!await card.getByText('Task space closed', {exact: false}).isVisible()) {
+        throw new Error('Missing closed-space explanation');
+      }
+      if (await card.getByRole('button').count() !== 1) {
+        throw new Error('Closed requests must not offer Open page or Done');
+      }
+      // The panel replaces its cards on refresh; use a stable CSS selector
+      // instead of a role selector's transient node marker for the click.
+      await page.locator('.request-card .request-actions > button:only-child').click();
+      await card.waitFor({state: 'hidden'});
+      await task.finish({keep: []});
+    `);
+    assert.equal(
+      (await shim.collaborationStore.get(request.id)).status,
+      "cancelled",
+    );
+  });
+
   it("opens request context explicitly and resumes ownership only after Done", async () => {
     const { body: created } = await api("/api/spaces", {
       method: "POST",

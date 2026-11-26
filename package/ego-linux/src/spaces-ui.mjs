@@ -608,40 +608,43 @@ function requestCard(request, spacesById) {
   meta.textContent =
     profileLabel(request.agentProfile || space?.profile || "") +
     " \u00b7 " +
-    host +
-    " \u00b7 waiting " +
-    requestAge(request);
+    (space ? host + " \u00b7 waiting " + requestAge(request) : "Task space closed");
   copy.append(title, instruction, meta);
 
   const actions = document.createElement("div");
   actions.className = "request-actions";
-  const open = document.createElement("button");
-  open.className = "ctl primary";
-  open.textContent = "Open page";
-  open.addEventListener("click", () =>
-    act("/api/collaboration/requests/" + request.id + "/open", "POST", {
-      requestVersion: request.version,
-    }),
-  );
+  const endpoint = "/api/collaboration/requests/" + request.id;
   const cancel = document.createElement("button");
   cancel.className = "ctl cancel";
-  cancel.textContent = request.cancelLabel || "Cancel";
+  cancel.textContent = space ? request.cancelLabel || "Cancel" : "Dismiss";
   cancel.addEventListener("click", () =>
-    act("/api/collaboration/requests/" + request.id + "/respond", "POST", {
+    act(endpoint + "/respond", "POST", {
       requestVersion: request.version,
       response: { kind: "cancel" },
     }),
   );
-  const done = document.createElement("button");
-  done.className = "ctl done";
-  done.textContent = request.doneLabel || "Done";
-  done.addEventListener("click", () =>
-    act("/api/collaboration/requests/" + request.id + "/respond", "POST", {
-      requestVersion: request.version,
-      response: { kind: "done" },
-    }),
-  );
-  actions.append(open, cancel, done);
+  if (space?.tabCount > 0) {
+    const open = document.createElement("button");
+    open.className = "ctl primary";
+    open.textContent = "Open page";
+    open.addEventListener("click", () =>
+      act(endpoint + "/open", "POST", { requestVersion: request.version }),
+    );
+    actions.append(open);
+  }
+  actions.append(cancel);
+  if (space) {
+    const done = document.createElement("button");
+    done.className = "ctl done";
+    done.textContent = request.doneLabel || "Done";
+    done.addEventListener("click", () =>
+      act(endpoint + "/respond", "POST", {
+        requestVersion: request.version,
+        response: { kind: "done" },
+      }),
+    );
+    actions.append(done);
+  }
   card.append(copy, actions);
   return card;
 }
@@ -722,9 +725,11 @@ async function act(path, method, body) {
     }
     await refresh();
   } catch (error) {
-    if (error.status === 409) {
-      note.textContent = "Already answered. Reloaded the winning response.";
+    if (error.status === 409 || error.status === 410) {
       await refresh();
+      note.textContent = error.status === 409
+        ? "Already answered. Reloaded the winning response."
+        : "The requested page is no longer available.";
     } else {
       note.textContent = "action failed: " + error.message;
     }
