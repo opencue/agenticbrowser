@@ -92,13 +92,19 @@ describe("Spaces overview organization", () => {
     assert.match(SPACES_HTML, /\.grid \{[\s\S]*?align-items: start;[\s\S]*?\}/);
   });
 
-  it("ships a cohesive, motion-safe operations cockpit surface", () => {
-    assert.match(SPACES_HTML, /class="app-shell"/);
-    assert.match(SPACES_HTML, /--surface-soft:/);
-    assert.match(SPACES_HTML, /\.heading::before/);
-    assert.match(SPACES_HTML, /\.request-card::before/);
-    assert.match(SPACES_HTML, /\.card\.compact:hover/);
-    assert.match(SPACES_HTML, /\.add \{[\s\S]*?aspect-ratio: auto;/);
+  it("keeps a labeled create action in empty and populated Spaces", () => {
+    assert.match(SPACES_HTML, /document\.createTextNode\("New space"\)/);
+    assert.match(SPACES_HTML, /empty\.append\(title, detail, newSpaceButton\(/);
+    assert.match(
+      SPACES_HTML,
+      /if \(withAddCard\) body\.append\(newSpaceButton\(\)\)/,
+    );
+  });
+
+  it("supports system themes, visible keyboard focus, and reduced motion", () => {
+    assert.match(SPACES_HTML, /color-scheme: light dark/);
+    assert.match(SPACES_HTML, /@media \(prefers-color-scheme: dark\)/);
+    assert.match(SPACES_HTML, /button:focus-visible/);
     assert.match(SPACES_HTML, /@media \(prefers-reduced-motion: reduce\)/);
   });
 

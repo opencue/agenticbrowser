@@ -60,160 +60,127 @@ export const SPACES_HTML = `<!doctype html>
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #eef1f7;
-    --card: #ffffff;
-    --line: rgba(15, 18, 25, 0.10);
-    --text: #12151c;
-    --muted: #6b7280;
-    --accent: #2f6df6;
-    --accent-soft: rgba(47, 109, 246, .11);
-    --warm: #c9851d;
-    --warm-soft: rgba(201, 133, 29, .11);
-    --surface-soft: #f6f8fc;
-    --surface-raised: #ffffff;
-    --line-strong: rgba(15, 18, 25, .16);
-    --shadow-soft: 0 8px 24px rgba(28, 35, 52, .07);
-    --shadow-raised: 0 18px 44px rgba(28, 35, 52, .13);
+    --bg: #fafafa;
+    --surface: #fff;
+    --surface-soft: #f4f4f4;
+    --line: #e5e5e5;
+    --line-strong: #a3a3a3;
+    --text: #171717;
+    --muted: #525252;
+    --primary-hover: #404040;
+    --warm: #845300;
+    --warm-soft: #fff4d7;
+    --live: #08774c;
+    --danger: #b42318;
+    --radius: 8px;
     --text-base: clamp(16px, 0.25vw + 13px, 18px);
     --text-small: clamp(13px, 0.14vw + 11.5px, 14px);
     --compact-thumb: clamp(76px, 5vw, 92px);
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #14161b;
-      --card: #1c1f26;
-      --line: rgba(255, 255, 255, 0.10);
-      --text: #eef0f4;
-      --muted: #9aa1ad;
-      --accent: #6f98ff;
-      --accent-soft: rgba(111, 152, 255, .14);
-      --warm: #e3a43c;
-      --warm-soft: rgba(227, 164, 60, .13);
-      --surface-soft: #111620;
-      --surface-raised: #1a202b;
-      --line-strong: rgba(255, 255, 255, .16);
-      --shadow-soft: 0 10px 28px rgba(0, 0, 0, .20);
-      --shadow-raised: 0 22px 54px rgba(0, 0, 0, .34);
+      --bg: #0a0a0a;
+      --surface: #111;
+      --surface-soft: #1a1a1a;
+      --line: #2b2b2b;
+      --line-strong: #666;
+      --text: #ededed;
+      --muted: #a1a1a1;
+      --primary-hover: #ccc;
+      --warm: #f5bb60;
+      --warm-soft: #2b2113;
+      --live: #50d098;
+      --danger: #ff8a80;
     }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0;
     min-height: 100vh;
-    padding: clamp(18px, 2.4vw, 42px) clamp(18px, 2.6vw, 48px) 54px;
-    background:
-      radial-gradient(1100px 520px at 7% -8%, rgba(47, 109, 246, .14), transparent 62%),
-      radial-gradient(900px 500px at 96% 2%, rgba(125, 86, 214, .11), transparent 64%),
-      linear-gradient(180deg, color-mix(in srgb, var(--bg) 94%, #4564a8 6%), var(--bg) 34%),
-      var(--bg);
+    padding: 0 clamp(16px, 3vw, 48px) 48px;
+    background: var(--bg);
     color: var(--text);
-    font: var(--text-base)/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font: var(--text-base)/1.5 Geist, system-ui, -apple-system, "Segoe UI", sans-serif;
     -webkit-font-smoothing: antialiased;
   }
-  .app-shell { width: min(100%, 1680px); margin: 0 auto; }
+  .app-shell { width: min(100%, 1360px); margin: 0 auto; }
   header {
-    display: flex; align-items: baseline; justify-content: space-between;
-    position: sticky; top: clamp(10px, 1.4vw, 20px); z-index: 20;
-    gap: 18px; margin-bottom: 30px; padding: 14px 16px;
-    border: 1px solid var(--line); border-radius: 18px;
-    background: color-mix(in srgb, var(--surface-raised) 84%, transparent);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: blur(18px) saturate(1.25);
+    display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+    position: sticky; top: 0; z-index: 20;
+    gap: 12px 24px; margin-bottom: 32px; padding: 24px 0 20px;
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
   }
-  .heading { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-  .heading::before {
-    content: ""; flex: none; width: 10px; height: 10px; border-radius: 3px;
-    background: linear-gradient(135deg, var(--accent), #8d6ce8);
-    box-shadow: 0 0 0 5px var(--accent-soft);
-  }
-  h1 { font-size: clamp(24px, .45vw + 18px, 28px); font-weight: 650; margin: 0; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); font-size: 15px; }
-  .summary {
-    flex: none; color: var(--muted); font-size: var(--text-small);
-    padding: 7px 11px; border: 1px solid var(--line); border-radius: 11px;
+  h1 { font-size: clamp(28px, 2vw + 14px, 36px); font-weight: 650; margin: 0; line-height: 1.15; letter-spacing: -0.04em; }
+  .sub { display: block; margin-top: 5px; color: var(--muted); font-size: 14px; }
+  .summary, .section-count, .status {
+    color: var(--muted); font-size: var(--text-small); font-variant-numeric: tabular-nums;
+    padding: 3px 8px; border: 1px solid var(--line); border-radius: 999px;
     background: var(--surface-soft);
   }
+  .summary:empty { display: none; }
   .inbox { margin-bottom: 34px; }
   .inbox[hidden] { display: none; }
   .inbox-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
     margin-bottom: 12px;
   }
-  .inbox-title {
-    font-size: 14px; font-weight: 750; letter-spacing: .08em;
-    text-transform: uppercase; color: #c7891f;
+  .inbox-title, .section-title {
+    font-size: 16px; font-weight: 650; margin: 0; letter-spacing: -0.015em;
+  }
+  .inbox-title::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    margin-right: 8px; vertical-align: .12em; border-radius: 50%;
+    background: var(--warm);
   }
   .inbox-list { display: grid; gap: 10px; }
   .request-card {
     display: grid; grid-template-columns: minmax(0, 1fr) auto;
-    position: relative; overflow: hidden;
-    gap: 16px 24px; padding: 20px 22px;
-    border: 1px solid color-mix(in srgb, var(--warm) 42%, var(--line));
-    border-radius: 18px;
-    background: linear-gradient(110deg, var(--warm-soft), var(--surface-raised) 32%);
-    box-shadow: var(--shadow-soft);
+    gap: 14px 24px; padding: 16px 18px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface);
   }
-  .request-card::before {
-    content: ""; position: absolute; inset: 0 auto 0 0; width: 4px;
-    background: linear-gradient(180deg, var(--warm), #e3bc58);
-  }
-  .request-copy { min-width: 0; }
-  .request-title { font-size: 17px; font-weight: 680; }
+  .request-copy { min-width: 0; overflow-wrap: anywhere; }
+  .request-title { font-size: 16px; font-weight: 650; }
   .request-instruction {
-    margin-top: 3px; color: var(--text); font-size: 16px; overflow-wrap: anywhere;
+    margin-top: 3px; color: var(--text); font-size: 15px;
   }
   .request-meta { margin-top: 7px; color: var(--muted); font-size: var(--text-small); }
   .request-actions { display: flex; align-items: center; gap: 8px; }
-  .ctl.done { color: #fff; background: var(--accent); border-color: var(--accent); }
-  .ctl.cancel:hover { color: #d3453c; border-color: #d3453c; }
+  .ctl.cancel:hover { color: var(--danger); border-color: var(--danger); }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr));
-    gap: 24px 20px;
+    gap: 16px;
     justify-content: start;
     align-items: start;
   }
   /* The outer container stacks sections; only each section's body is a grid. */
   .sections { display: block; }
-  .section + .section { margin-top: 42px; }
+  .section + .section { margin-top: 32px; }
   .section-head {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
-    margin-bottom: 16px; padding-bottom: 10px;
+    margin-bottom: 12px; padding-bottom: 10px;
     border-bottom: 1px solid var(--line);
   }
   .section-title {
-    display: flex; align-items: center; gap: 9px;
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    font-size: 18px; font-weight: 650; letter-spacing: -0.01em;
   }
-  .section-title::before {
-    content: ""; flex: none; width: 5px; height: 18px; border-radius: 999px;
-    background: linear-gradient(180deg, var(--accent), #7f6ee8);
+  .section-count { flex: none; }
+  .card {
+    display: flex; flex-direction: column; gap: 10px; min-width: 0; padding: 12px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface);
+    transition: border-color .16s ease;
   }
-  .section-count {
-    color: var(--muted); font-size: var(--text-small);
-    padding: 4px 9px; border: 1px solid var(--line); border-radius: 9px;
-    background: var(--surface-soft);
-  }
-  .card { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
   .card.compact {
     display: grid; grid-template-columns: var(--compact-thumb) minmax(0, 1fr) auto;
-    align-items: center; gap: 16px; padding: 12px;
-    border: 1px solid var(--line); border-radius: 18px;
-    background: linear-gradient(145deg, var(--surface-raised), var(--surface-soft));
-    box-shadow: var(--shadow-soft);
-    transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+    align-items: center; gap: 12px;
   }
-  .card.compact:hover, .card.compact:focus-within {
-    transform: translateY(-2px);
-    border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-    box-shadow: var(--shadow-raised);
-  }
+  .card:hover, .card:focus-within { border-color: var(--line-strong); }
   .card.compact .frame {
-    width: var(--compact-thumb); height: var(--compact-thumb); aspect-ratio: auto; border-radius: 10px;
-    box-shadow: none;
+    width: var(--compact-thumb); height: var(--compact-thumb); aspect-ratio: auto;
   }
-  .card.compact .frame:hover { transform: none; box-shadow: none; }
   .card.compact .close { opacity: 1; width: 24px; height: 24px; top: 5px; right: 5px; }
   .card.compact .controls { padding: 0; flex-direction: column; align-items: stretch; }
   .card.compact .trail { display: none; }
@@ -222,24 +189,12 @@ export const SPACES_HTML = `<!doctype html>
     aspect-ratio: 16 / 10;
     background: var(--surface-soft);
     border: 1px solid var(--line);
-    border-radius: 16px;
+    border-radius: calc(var(--radius) - 2px);
     overflow: hidden;
     cursor: pointer;
-    box-shadow: 0 1px 2px rgba(10, 14, 25, .05);
-    transition: box-shadow .18s ease, transform .18s ease, border-color .18s ease;
+    transition: border-color .16s ease;
   }
-  .frame:hover {
-    box-shadow: var(--shadow-raised);
-    transform: translateY(-3px);
-    border-color: rgba(47, 109, 246, .35);
-  }
-  .dot {
-    display: inline-block; width: 7px; height: 7px; border-radius: 50%;
-    margin-right: 8px; vertical-align: middle;
-    background: var(--accent);
-  }
-  .dot.user { background: var(--muted); }
-  .dot.agentDelegatedToUser { background: #e0a02a; }
+  .frame:hover { border-color: var(--line-strong); }
   .frame img {
     width: 100%; height: 100%; object-fit: cover; object-position: top center;
     display: block;
@@ -247,99 +202,85 @@ export const SPACES_HTML = `<!doctype html>
   }
   /* A working space is cropped to where its agent is, so the frame shows the
      action rather than the whole page — say so, or the zoom looks like a bug. */
-  .frame.live {
-    border-color: rgba(217, 119, 87, .62);
-    box-shadow: 0 0 0 3px rgba(217, 119, 87, .10), var(--shadow-soft);
-  }
-  .frame.recent { border-color: rgba(74, 158, 255, .36); }
   .frame.live img, .frame.recent img { object-position: center; }
   .live-chip {
     position: absolute; left: 9px; bottom: 9px; right: 9px;
     display: flex; align-items: center; gap: 7px;
-    padding: 5px 11px 5px 9px; border-radius: 999px;
-    background: rgba(24, 24, 27, .92); color: #fff;
+    padding: 5px 11px 5px 9px; border-radius: 6px;
+    background: #171717; color: #fff;
     font-size: var(--text-small); font-weight: 500; line-height: 1.35;
-    box-shadow: 0 6px 16px rgba(0, 0, 0, .28);
     pointer-events: none;
   }
   .live-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .live-chip i {
     flex: none; width: 7px; height: 7px; border-radius: 50%;
-    background: #d97757; animation: breathe 1.7s ease-in-out infinite;
+    background: #50d098; animation: breathe 1.7s ease-in-out infinite;
   }
   .live-chip.recent i {
-    background: #4a9eff; animation: none; opacity: .72;
+    background: #a1a1a1; animation: none;
   }
   @keyframes breathe { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
-  .frame.empty { display: grid; place-items: center; color: var(--muted); font-size: 14px; }
+  .frame.empty {
+    display: grid; place-items: center; padding: 18px 4px 4px;
+    color: var(--muted); font-size: 12px; text-align: center;
+  }
   .meta { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0 3px; }
   .meta-top, .page-meta {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
     min-width: 0;
   }
+  .card.compact :is(.meta-top, .page-meta) {
+    justify-content: flex-start; flex-wrap: wrap; gap: 3px 8px;
+  }
   .name, .page-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .name { font-size: 16px; font-weight: 620; }
   .page-title { color: var(--muted); font-size: 14px; }
-  .page-context { flex: none; color: var(--muted); font-size: var(--text-small); }
-  .status {
-    flex: none; padding: 3px 8px; border-radius: 999px;
-    color: var(--muted); background: rgba(127, 127, 127, .08);
-    border: 1px solid transparent; font-size: var(--text-small); font-weight: 650;
-  }
-  .status.agent {
-    color: #df8264; background: rgba(217, 119, 87, .12);
-    border-color: rgba(217, 119, 87, .20);
-  }
+  .page-context { color: var(--muted); font-size: var(--text-small); overflow-wrap: anywhere; }
+  .status { flex: none; font-weight: 600; }
+  .card:has(.frame.live) .status { color: var(--live); }
   .status.agentDelegatedToUser {
     color: var(--warm); background: var(--warm-soft);
-    border-color: color-mix(in srgb, var(--warm) 24%, transparent);
+    border-color: transparent;
   }
   .close {
     position: absolute; top: 9px; right: 9px;
-    width: 25px; height: 25px; border-radius: 50%;
-    border: 1px solid var(--line); background: var(--surface-raised); color: var(--muted);
+    width: 25px; height: 25px; border-radius: 5px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--muted);
     font-size: 15px; line-height: 1; cursor: pointer;
     opacity: 0; transition: opacity .14s ease;
   }
   .frame:hover .close, .frame:focus-within .close { opacity: 1; }
-  .close:hover { color: #d3453c; }
+  .close:hover { color: var(--danger); }
   .add {
-    min-height: calc(var(--compact-thumb) + 26px); aspect-ratio: auto;
-    display: grid; place-items: center;
-    border: 1px dashed var(--line);
-    border-radius: 18px;
-    background: linear-gradient(145deg, transparent, var(--accent-soft));
-    color: var(--muted);
-    font-size: 30px; font-weight: 300;
-    cursor: pointer;
-    transition: border-color .16s ease, color .16s ease, background .16s ease;
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   }
-  .add:hover {
-    border-color: var(--accent); color: var(--accent);
-    background: var(--surface-raised); box-shadow: var(--shadow-soft);
+  .grid > .add {
+    min-height: calc(var(--compact-thumb) + 26px);
+    border-style: dashed;
   }
   .controls { display: flex; gap: 8px; padding: 0 3px; }
   .ctl {
-    min-height: 34px; font: inherit; font-size: 14px; line-height: 1;
-    padding: 8px 14px; border-radius: 10px;
-    border: 1px solid var(--line); background: var(--surface-soft); color: var(--muted);
-    font-weight: 620;
+    min-height: 36px; font: inherit; font-size: 14px; line-height: 1.2;
+    padding: 8px 12px; border-radius: 6px;
+    border: 1px solid var(--line); background: var(--surface); color: var(--text);
+    font-weight: 550;
     cursor: pointer;
     transition: color .14s ease, border-color .14s ease, background .14s ease;
   }
   .ctl:hover {
-    color: var(--text); border-color: var(--accent); background: var(--surface-raised);
-    transform: translateY(-1px);
+    border-color: var(--line-strong); background: var(--surface-soft);
   }
-  .ctl.primary {
-    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent);
-    background: var(--accent-soft);
+  .ctl.primary, .ctl.done {
+    color: var(--bg); border-color: transparent; background: var(--text);
   }
-  .ctl.primary:hover { color: #fff; background: var(--accent); }
+  .ctl.primary:hover, .ctl.done:hover {
+    border-color: transparent; background: var(--primary-hover);
+  }
   .note {
     margin-top: 34px; padding-top: 16px; border-top: 1px solid var(--line);
     color: var(--muted); font-size: 14px; max-width: 62ch;
   }
+  .note:empty { display: none; }
   /* What the space actually did, so a card that has gone quiet still says
      something. Reads newest first, like a log. */
   .trail { display: flex; flex-direction: column; gap: 2px; padding: 2px 3px 0; }
@@ -350,23 +291,24 @@ export const SPACES_HTML = `<!doctype html>
   .trail div span:first-child { overflow: hidden; text-overflow: ellipsis; }
   .trail div span:last-child { flex: none; opacity: .72; }
   .trail div:first-child { color: var(--text); opacity: .82; }
-  .empty-state { color: var(--muted); padding: 40px 0; }
+  .empty-state {
+    padding: 36px 16px; text-align: center; border: 1px solid var(--line);
+    border-radius: var(--radius); background: var(--surface);
+  }
+  .empty-state h2 { margin: 0; font-size: 18px; font-weight: 650; }
+  .empty-state p { margin: 6px 0 18px; color: var(--muted); font-size: 14px; }
   button:focus-visible, .frame:focus-visible {
-    outline: 3px solid color-mix(in srgb, var(--accent) 58%, transparent);
+    outline: 2px solid var(--text);
     outline-offset: 3px;
   }
   @media (max-width: 700px) {
-    body { padding: 16px 14px 36px; }
-    header {
-      align-items: flex-start; flex-direction: column; gap: 10px;
-      top: 10px; margin-bottom: 26px; padding: 14px;
-    }
-    .sub { display: none; }
+    header { position: static; margin-bottom: 24px; padding: 20px 0 14px; }
     .request-card { grid-template-columns: 1fr; }
     .request-actions { justify-content: flex-end; flex-wrap: wrap; }
     .card.compact { grid-template-columns: 72px minmax(0, 1fr); }
     .card.compact .frame { width: 72px; height: 72px; }
     .card.compact .controls { grid-column: 1 / -1; flex-direction: row; }
+    .grid > .add { min-height: 48px; }
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -380,9 +322,9 @@ export const SPACES_HTML = `<!doctype html>
 <body>
   <div class="app-shell">
   <header>
-    <div class="heading">
+    <div>
       <h1>Spaces</h1>
-      <span class="sub">workspaces you and your agents share</span>
+      <span class="sub">Workspaces you and your agents share.</span>
     </div>
     <span class="summary" id="summary"></span>
   </header>
@@ -490,7 +432,7 @@ function card(space) {
     }
     frame.append(img);
   } else {
-    frame.textContent = "no page yet";
+    frame.textContent = "No preview";
   }
   if (space.activity) frame.append(liveChip(space.activity));
   frame.addEventListener("click", () => act("/api/spaces/" + space.id + "/use", "POST"));
@@ -513,15 +455,7 @@ function card(space) {
   metaTop.className = "meta-top";
   const name = document.createElement("span");
   name.className = "name";
-  const dot = document.createElement("i");
-  dot.className = "dot " + space.ownership;
-  dot.title =
-    space.ownership === "user"
-      ? "yours"
-      : space.ownership === "agentDelegatedToUser"
-        ? "handed to you"
-        : "an agent is working here";
-  name.append(dot, document.createTextNode(space.name));
+  name.textContent = space.name;
 
   const status = document.createElement("span");
   status.className = "status " + space.ownership;
@@ -544,7 +478,7 @@ function card(space) {
 
   // The ownership handshake, the same pair the native app puts on its Space
   // overlay: stop hands the space back to you and the agent's cursor goes away;
-  // take over gives it back. Shown on hover so a wall of cards stays calm.
+  // take over gives it back.
   const controls = document.createElement("div");
   controls.className = "controls";
   const open = document.createElement("button");
@@ -557,7 +491,7 @@ function card(space) {
   });
   const agentOwned = space.ownership === "agent";
   const action = document.createElement("button");
-  action.className = "ctl" + (agentOwned ? "" : " primary");
+  action.className = "ctl";
   action.textContent = agentOwned ? "Stop" : "Take over";
   action.title = agentOwned
     ? "hand this space back to you — the agent stops driving it"
@@ -625,7 +559,7 @@ function requestCard(request, spacesById) {
   );
   if (space?.tabCount > 0) {
     const open = document.createElement("button");
-    open.className = "ctl primary";
+    open.className = "ctl";
     open.textContent = "Open page";
     open.addEventListener("click", () =>
       act(endpoint + "/open", "POST", { requestVersion: request.version }),
@@ -658,7 +592,7 @@ function renderInbox(collaboration, spaces) {
   }
   const head = document.createElement("div");
   head.className = "inbox-head";
-  const title = document.createElement("span");
+  const title = document.createElement("h2");
   title.className = "inbox-title";
   title.textContent = "Needs You";
   const count = document.createElement("span");
@@ -689,20 +623,19 @@ function trail(entries) {
   return list;
 }
 
-function addCard() {
-  const wrap = document.createElement("div");
-  wrap.className = "card";
+function newSpaceButton({ primary = false } = {}) {
   const button = document.createElement("button");
-  button.className = "add";
-  button.textContent = "+";
-  button.title = "new space";
+  button.className = "ctl add" + (primary ? " primary" : "");
+  const icon = document.createElement("span");
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = "+";
+  button.append(icon, document.createTextNode("New space"));
   button.addEventListener("click", async () => {
     const name = prompt("Name this space", "new space");
     if (name === null) return;
     await act("/api/spaces", "POST", { name: name.trim() || "new space" });
   });
-  wrap.append(button);
-  return wrap;
+  return button;
 }
 
 async function act(path, method, body) {
@@ -763,7 +696,7 @@ function section(profile, spaces, withAddCard) {
 
   const head = document.createElement("div");
   head.className = "section-head";
-  const title = document.createElement("span");
+  const title = document.createElement("h2");
   title.className = "section-title";
   title.textContent = profileLabel(profile);
   title.title = profile ? "cue profile: " + profile : "spaces created by you";
@@ -780,7 +713,7 @@ function section(profile, spaces, withAddCard) {
   const body = document.createElement("div");
   body.className = "grid";
   body.append(...spaces.map(card));
-  if (withAddCard) body.append(addCard());
+  if (withAddCard) body.append(newSpaceButton());
 
   wrap.append(head, body);
   return wrap;
@@ -798,19 +731,21 @@ async function loadSpaces(withPreviews) {
     const profileCount = new Set(spaces.map((space) => space.profile).filter(Boolean)).size;
     const pendingCount = collaboration?.pendingCount || 0;
     summary.textContent = spaces.length
-      ? spaces.length + " spaces" + (withPreviews ? " · " + liveCount + " live" : "") +
-        " · " + profileCount + " profiles" +
+      ? spaces.length + (spaces.length === 1 ? " space" : " spaces") +
+        (withPreviews ? " · " + liveCount + " live" : "") +
+        " · " + profileCount + (profileCount === 1 ? " profile" : " profiles") +
         (pendingCount ? " · " + pendingCount + " need you" : "")
       : "No spaces";
 
     if (!spaces.length) {
-      const body = document.createElement("div");
-      body.className = "grid";
-      body.append(addCard());
-      const empty = document.createElement("p");
+      const empty = document.createElement("section");
       empty.className = "empty-state";
-      empty.textContent = "No spaces yet. Create one, or let an agent open its own.";
-      grid.replaceChildren(empty, body);
+      const title = document.createElement("h2");
+      title.textContent = "No spaces yet";
+      const detail = document.createElement("p");
+      detail.textContent = "Create a space, or let an agent open its own.";
+      empty.append(title, detail, newSpaceButton({ primary: true }));
+      grid.replaceChildren(empty);
     } else {
       grid.replaceChildren(
         ...groups.map(([profile, list], index) =>
