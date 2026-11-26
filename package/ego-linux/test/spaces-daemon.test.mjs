@@ -103,6 +103,72 @@ test("the launcher opens a matching daemon and shuts down a stale one first", as
   }
 });
 
+test("a slow browser keeps its Spaces daemon and a disconnect never relaunches it", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "ego-spaces-disconnect-"));
+  const bin = fileURLToPath(new URL("../bin/ego-browser.mjs", import.meta.url));
+  const stateFile = join(sandbox, APP_DIR, "spaces-server.json");
+  const preload = `
+    import childProcess from "node:child_process";
+    import { existsSync } from "node:fs";
+    import { syncBuiltinESMExports } from "node:module";
+    const spawn = childProcess.spawn;
+    childProcess.spawn = (command, args, options) => {
+      if (args?.includes("--spaces-daemon")) throw Error("attempted to reopen Spaces");
+      return spawn(command, args, options);
+    };
+    syncBuiltinESMExports();
+    globalThis.WebSocket = class extends EventTarget {
+      static OPEN = 1;
+      readyState = 1;
+      polls = 0;
+      constructor() {
+        super();
+        queueMicrotask(() => this.dispatchEvent(new Event("open")));
+      }
+      send(payload) {
+        const { id, method } = JSON.parse(payload);
+        const polling = method === "Target.getTargets" && existsSync(${JSON.stringify(stateFile)});
+        if (polling && ++this.polls <= 2) {
+          // Both attempts of the first poll time out.
+          throw Object.assign(Error("browser is slow"), { code: "EGO_CDP_TIMEOUT" });
+        }
+        queueMicrotask(() => {
+          if (polling) {
+            console.log("browser disconnected");
+            return this.close();
+          }
+          const result = method === "Target.createTarget" ? { targetId: "panel" } : {};
+          this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ id, result }) }));
+        });
+      }
+      close() { this.dispatchEvent(new Event("close")); }
+    };
+  `;
+  try {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        `data:text/javascript,${encodeURIComponent(preload)}`,
+        bin,
+        "--spaces-daemon",
+      ],
+      {
+        timeout: 15000,
+        env: {
+          ...process.env,
+          XDG_STATE_HOME: sandbox,
+          EGO_LINUX_CDP_URL: "ws://127.0.0.1/devtools/browser/disconnect",
+        },
+      },
+    );
+    assert.match(stdout, /browser disconnected/);
+    await assert.rejects(access(stateFile), { code: "ENOENT" });
+  } finally {
+    await rm(sandbox, { recursive: true, force: true });
+  }
+});
+
 test("the Spaces health handshake identifies its build and authenticates shutdown", async () => {
   let shutdowns = 0;
   const server = await startSpacesServer(fakeShim(), {
