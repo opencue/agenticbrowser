@@ -115,6 +115,27 @@ describe("reapOrphanedBrowsers", () => {
     assert.equal(alive(browser), true, "the browser survives");
   });
 
+  it("does not terminate a PID whose argv changed since discovery", async () => {
+    const live = join(SANDBOX, "still-live-profile");
+    await mkdir(live, { recursive: true });
+    const marker = "--class=ego-lite-linux";
+    const browser = await standIn(marker, `--user-data-dir=${live}`);
+
+    const reaped = await reapOrphanedBrowsers([
+      {
+        pid: browser.pid,
+        argv: [
+          process.execPath,
+          STANDIN,
+          marker,
+          `--user-data-dir=${join(SANDBOX, "old-missing-profile")}`,
+        ],
+      },
+    ]);
+    assert.equal(reaped, 0);
+    assert.equal(alive(browser), true);
+  });
+
   it("reaps Chromium's one-argument rewritten process title", async () => {
     const gone = join(SANDBOX, "rewritten-deleted-profile");
     for (let attempt = 0; ; attempt += 1) {

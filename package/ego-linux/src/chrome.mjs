@@ -3,6 +3,7 @@ import { access, mkdir, readFile, rm } from "node:fs/promises";
 import { constants } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { replaceFile } from "./atomic-write.mjs";
 import { BROWSER_STATE_FILE, PROFILE_DIR } from "./paths.mjs";
@@ -43,6 +44,7 @@ const PROFILE_FLAG = "--user-data-dir=";
  * platforms deliberately.
  */
 export const WM_CLASS = "ego-lite-linux";
+const MANAGED_PROCESS_MARKER = `--class=${WM_CLASS}`;
 
 /** Shown in Chrome's profile chip so the agent window is identifiable. */
 const PROFILE_LABEL = "ego lite — agent";
@@ -76,7 +78,7 @@ const LAUNCH_FLAGS = [
   // appears as its own running app and the launcher icon cannot raise it.
   // Paired with StartupWMClass in the desktop entry. On Windows it is inert as
   // a window hint and serves only as the ownership marker described on WM_CLASS.
-  `--class=${WM_CLASS}`,
+  MANAGED_PROCESS_MARKER,
 ];
 
 // These flags change network routing or weaken browser security outside the
@@ -262,17 +264,15 @@ export function unsafeBrowserLaunchFlags(argv = []) {
 function isReusableProfileBrowser(argv, profileDir = PROFILE_DIR) {
   return (
     processFlagValue(argv, PROFILE_FLAG) === profileDir &&
-    processHasArg(argv, `--class=${WM_CLASS}`) &&
+    processHasArg(argv, MANAGED_PROCESS_MARKER) &&
     processFlagValue(argv, "--type=") === null &&
     unsafeBrowserLaunchFlags(argv).length === 0
   );
 }
 
-async function profileBrowser() {
-  const profileFlag = `${PROFILE_FLAG}${PROFILE_DIR}`;
-  const running = await listProcesses({ contains: profileFlag });
+async function profileBrowser(running) {
   const owner = await readSingletonOwner(PROFILE_DIR, {
-    marker: `--class=${WM_CLASS}`,
+    marker: MANAGED_PROCESS_MARKER,
   });
   const candidates = running
     .filter(({ argv }) => isReusableProfileBrowser(argv))
@@ -575,21 +575,23 @@ async function managedDebugPort(pid, profileDir = PROFILE_DIR) {
  *
  * @returns {Promise<number>} How many orphans were signalled.
  */
-export async function reapOrphanedBrowsers() {
-  const running = await listProcesses({ contains: `--class=${WM_CLASS}` });
+export async function reapOrphanedBrowsers(running) {
+  running ??= await listProcesses({ contains: MANAGED_PROCESS_MARKER });
 
   let reaped = 0;
   await Promise.all(
     running.map(async ({ pid, argv }) => {
       // Renderers and helpers inherit --user-data-dir but carry --type=;
       // signalling the browser process takes its children with it anyway.
-      if (!processHasArg(argv, `--class=${WM_CLASS}`)) return;
+      if (!processHasArg(argv, MANAGED_PROCESS_MARKER)) return;
       if (processFlagValue(argv, "--type=") !== null) return;
 
       const profileDir = processFlagValue(argv, PROFILE_FLAG);
       if (!profileDir) return;
       if (profileDir === PROFILE_DIR) return;
       if (!(await definitelyGone(profileDir))) return;
+      // Discovery may have waited on DevTools, so recheck before signalling.
+      if (!isDeepStrictEqual(await processArgv(pid), argv)) return;
 
       if (await terminateProcess(pid)) reaped += 1;
     }),
@@ -653,12 +655,12 @@ export async function prepareProfileForLaunch(
   await clearStaleCrashMark(profileDir);
 }
 
-async function launch({ headless, lowMemory = false }) {
+async function launch({ headless, lowMemory = false }, running) {
   const binary = await resolveBrowserBinary();
   const debugPort = await allocateDebugPort();
   await mkdir(PROFILE_DIR, { recursive: true });
   // Ours now exists, so it cannot be mistaken for an orphan below.
-  await reapOrphanedBrowsers();
+  await reapOrphanedBrowsers(running);
   await prepareProfileForLaunch(PROFILE_DIR, { headless });
   // A stale port file would be read as this launch's port.
   await rm(join(PROFILE_DIR, PORT_FILE), { force: true });
@@ -729,12 +731,13 @@ export async function ensureBrowser({
   try {
     const winner = await recordedBrowser();
     if (winner) return winner;
-    const discovered = await profileBrowser();
+    const running = await listProcesses({ contains: MANAGED_PROCESS_MARKER });
+    const discovered = await profileBrowser(running);
     if (discovered) {
       await writeBrowserState(discovered);
       return discovered;
     }
-    return await launch({ headless, lowMemory });
+    return await launch({ headless, lowMemory }, running);
   } finally {
     await release();
   }
