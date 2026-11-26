@@ -169,6 +169,7 @@ Commands this port adds (upstream's app has no equivalent):
 | `ego-browser --status`                | connection state of the backing browser                              |
 | `ego-browser --open`                  | open the shared agent browser window                                 |
 | `ego-browser --spaces`                | open the Spaces overview panel                                       |
+| `ego-browser --prewarm-spaces`        | prepare Spaces without opening a window                              |
 | `ego-browser --stop`                  | terminate the backing browser and clear its profile lock             |
 | `ego-browser --import-chrome-profile` | copy your real Chrome profile in, so agent tasks inherit your logins |
 | `ego-browser --install-desktop-entry` | add it to your app launcher (Start Menu on Windows)                  |
@@ -185,6 +186,12 @@ application shell. Never describe that window as “not Chrome”.
 `ego-browser --spaces` opens an overview of every task space: one card each, with
 a live screenshot of the space's page, its name, its owner, and its tab count.
 Clicking a card switches to that space, `×` closes it, `+` creates one.
+Cards are usable before their screenshots and activity finish loading.
+
+To shorten the first open, optionally run `ego-browser --prewarm-spaces` at
+desktop login. It keeps the managed browser and Spaces server in memory without
+showing a window. Closing the window keeps the warm-up running; run
+`ego-browser --stop` to stop both until the next launch or login.
 
 Cards use cached screencast frames and server-sent refresh events. A 15-second
 reconciliation poll remains only as a recovery path for missed filesystem events

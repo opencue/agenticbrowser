@@ -778,10 +778,10 @@ function section(profile, spaces, withAddCard) {
   return wrap;
 }
 
-async function loadSpaces() {
+async function loadSpaces(withPreviews) {
   try {
     const [{ spaces }, collaboration] = await Promise.all([
-      api("/api/spaces"),
+      api(withPreviews ? "/api/spaces" : "/api/spaces?preview=0"),
       api("/api/collaboration/requests"),
     ]);
     renderInbox(collaboration, spaces);
@@ -790,7 +790,8 @@ async function loadSpaces() {
     const profileCount = new Set(spaces.map((space) => space.profile).filter(Boolean)).size;
     const pendingCount = collaboration?.pendingCount || 0;
     summary.textContent = spaces.length
-      ? spaces.length + " spaces · " + liveCount + " live · " + profileCount + " profiles" +
+      ? spaces.length + " spaces" + (withPreviews ? " · " + liveCount + " live" : "") +
+        " · " + profileCount + " profiles" +
         (pendingCount ? " · " + pendingCount + " need you" : "")
       : "No spaces";
 
@@ -818,9 +819,9 @@ async function loadSpaces() {
   }
 }
 
-function refresh() {
+function refresh(withPreviews = true) {
   if (!refreshInFlight) {
-    refreshInFlight = loadSpaces().finally(() => {
+    refreshInFlight = loadSpaces(withPreviews).finally(() => {
       refreshInFlight = null;
     });
   }
@@ -879,7 +880,11 @@ document.addEventListener("visibilitychange", () => {
 
 if (daemonToken) {
   void watchEvents();
-  refresh().then(schedule);
+  // Show usable cards before asking Chrome for thumbnails and cursor activity.
+  refresh(false).then(() => {
+    schedule();
+    if (!busy) void refresh();
+  });
 } else {
   note.textContent = "Open Spaces through the Ego Lite launcher to authenticate this panel.";
 }

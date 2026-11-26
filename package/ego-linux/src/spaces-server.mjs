@@ -387,7 +387,12 @@ export async function startSpacesServer(shim, options = {}) {
   const { ego, cdp } = shim;
   const collaborationStore =
     options.collaborationStore ?? shim.collaborationStore ?? null;
-  const { buildId = null, shutdownToken = null, onShutdown = null } = options;
+  const {
+    buildId = null,
+    shutdownToken = null,
+    onOpen = null,
+    onShutdown = null,
+  } = options;
   if (typeof shutdownToken !== "string" || shutdownToken.length === 0) {
     throw new Error("Spaces server requires a non-empty daemon token");
   }
@@ -475,7 +480,14 @@ export async function startSpacesServer(shim, options = {}) {
       return;
     }
 
+    if (request.method === "POST" && url.pathname === "/api/open" && onOpen) {
+      await onOpen();
+      json(response, 200, { opened: true });
+      return;
+    }
+
     if (request.method === "GET" && url.pathname === "/api/spaces") {
+      const withPreviews = url.searchParams.get("preview") !== "0";
       const { taskSpaces = [] } = await ego.listTaskSpaces();
       // Deliberately NOT ego.listTabs(): that is scoped to the selected space,
       // which is right for an agent (it should only see its own tabs) and wrong
@@ -488,18 +500,19 @@ export async function startSpacesServer(shim, options = {}) {
           .map((target) => [target.targetId, target]),
       );
 
-      await pool.retain(new Set(byTarget.keys()));
+      if (withPreviews) await pool.retain(new Set(byTarget.keys()));
       const spaces = await Promise.all(
         taskSpaces.map(async (space) => {
           const live = (space.targetIds || []).filter((id) => byTarget.has(id));
           const lead = live[0];
-          const card = lead
-            ? await within(
-                captureCard(cdp, lead, pool),
-                CARD_CAPTURE_BUDGET_MS,
-                emptyCard(),
-              )
-            : emptyCard();
+          const card =
+            withPreviews && lead
+              ? await within(
+                  captureCard(cdp, lead, pool),
+                  CARD_CAPTURE_BUDGET_MS,
+                  emptyCard(),
+                )
+              : emptyCard();
           return {
             id: space.id,
             name: space.name,
