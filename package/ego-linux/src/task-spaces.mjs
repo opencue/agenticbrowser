@@ -296,9 +296,7 @@ export function createTaskSpacesApi(
     const targetId = state.windowAnchorTargetId;
     if (typeof targetId !== "string" || !targetId) return false;
     if (
-      state.spaces.some((space) =>
-        (space.targetIds || []).includes(targetId),
-      )
+      state.spaces.some((space) => (space.targetIds || []).includes(targetId))
     ) {
       delete state.windowAnchorTargetId;
       return false;
@@ -627,11 +625,12 @@ export function createTaskSpacesApi(
       id === undefined || id === null ? effectiveSelectedId(state) : Number(id);
     const space = state.spaces.find((candidate) => candidate.id === wanted);
     if (!space) {
-      throw new Error(
-        id === undefined || id === null
-          ? `${op}: no task space is selected`
-          : `${op}: task space not found: ${id}`,
-      );
+      if (id === undefined || id === null) {
+        throw new Error(`${op}: no task space is selected`);
+      }
+      throw Object.assign(new Error(`${op}: task space not found: ${id}`), {
+        status: 410,
+      });
     }
     // Every API call that names a space is a session saying it is still here.
     // That is what the idle sweep measures, and touching it in the one place
@@ -1235,8 +1234,7 @@ export function createTaskSpacesApi(
           (space) => space.session === session,
         );
         const doomed = sameSession.filter(
-          (space) =>
-            space.createdBy === "agent" && space.ownership === "agent",
+          (space) => space.createdBy === "agent" && space.ownership === "agent",
         );
         const skipped = sameSession.length - doomed.length;
         if (doomed.length === 0) return { closed: 0, skipped };
