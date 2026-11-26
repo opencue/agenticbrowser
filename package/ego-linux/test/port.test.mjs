@@ -226,6 +226,11 @@ describe("ego-browser Linux port", () => {
     );
     assert.match(
       out,
+      /5a\. click trail:\s+clicked Increment counter/,
+      "a click is recorded by what it hit",
+    );
+    assert.match(
+      out,
       /6\. overlay in snapshot:\s+false/,
       "the overlay is absent from the agent's snapshot",
     );
@@ -334,11 +339,6 @@ describe("ego-browser Linux port", () => {
 
     // The trail the Spaces panel reads back. One entry per transition: the
     // fill() above sent dozens of key events and must appear once.
-    assert.match(
-      out,
-      /26\. trail:.*clicked Increment counter/,
-      "a click is recorded by what it hit",
-    );
     assert.match(
       out,
       /26\. trail:.*typed into Your name/,

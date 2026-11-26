@@ -689,21 +689,21 @@ export function createPlatform({
     } catch {
       return []; // no procfs to walk
     }
-    const found = await Promise.all(
-      entries
-        .filter((entry) => /^\d+$/.test(entry))
-        .map(async (pid) => {
-          let raw;
-          try {
-            raw = await readFile(`/proc/${pid}/cmdline`, "utf8");
-          } catch {
-            return null; // exited under us, or another user's process
-          }
-          if (!raw.includes(contains)) return null;
-          return { pid: Number(pid), argv: raw.split("\0") };
-        }),
-    );
-    return found.filter(Boolean);
+    // These are small, kernel-backed reads. On busy desktops the async
+    // open/read/close queues cost more than reading each entry directly.
+    const found = [];
+    for (const pid of entries) {
+      if (!/^\d+$/.test(pid)) continue;
+      try {
+        const raw = readFileSync(`/proc/${pid}/cmdline`, "utf8");
+        if (raw.includes(contains)) {
+          found.push({ pid: Number(pid), argv: raw.split("\0") });
+        }
+      } catch {
+        // Exited under us, or another user's process.
+      }
+    }
+    return found;
   }
 
   /**

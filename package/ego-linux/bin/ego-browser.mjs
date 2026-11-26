@@ -39,9 +39,7 @@ import {
   browserInstanceKey,
   pinRuntimeInstance,
 } from "../src/runtime-instance.mjs";
-import { createEgoShim } from "../src/shim.mjs";
 import { stopSessionDevServers } from "../src/session-cleanup.mjs";
-import { startSpacesServer } from "../src/spaces-server.mjs";
 
 // Upstream's v2 page-model runtime, the only runtime.
 const HARNESS_V2 = new URL(
@@ -58,6 +56,13 @@ const SPACES_LAUNCH_LOCK = join(STATE_DIR, "spaces-launch.lock");
 // Phase 1 is the default after its persistence, API, focus, and UI checks pass.
 // Keep a local kill switch for diagnosis without maintaining a second build.
 process.env.EGO_LINUX_COLLABORATION_INBOX ??= "1";
+
+// A cold desktop launch delegates to the daemon. Only the process that
+// actually talks to Chromium needs the CDP shim and its dependencies.
+async function createEgoShim(options) {
+  const { createEgoShim: createShim } = await import("../src/shim.mjs");
+  return createShim(options);
+}
 
 const USAGE = `ego-browser (Linux and Windows port)
 
@@ -315,6 +320,7 @@ async function openPanelTab(url, shim, { recreate = false } = {}) {
  * "cannot reach the browser".
  */
 async function runSpacesDaemon() {
+  const { startSpacesServer } = await import("../src/spaces-server.mjs");
   // Spaces created from the panel are the user's, not the profile that happened
   // to launch this daemon (see agent-identity.mjs).
   process.env.EGO_LINUX_PANEL = "1";
