@@ -394,9 +394,14 @@ describe("Spaces overview server", () => {
       if (await card.getByRole('button').count() !== 1) {
         throw new Error('Closed requests must not offer Open page or Done');
       }
-      // The panel replaces its cards on refresh; use a stable CSS selector
-      // instead of a role selector's transient node marker for the click.
-      await page.locator('.request-card .request-actions > button:only-child').click();
+      // The panel can replace cards between locating a button and clicking it.
+      // Resolve and activate the actual button in the same browser turn.
+      await page.evaluate(() => {
+        const button = [...document.querySelectorAll('.request-card button')]
+          .find((candidate) => candidate.textContent === 'Dismiss');
+        if (!button) throw new Error('Dismiss is unavailable');
+        button.click();
+      });
       await card.waitFor({state: 'hidden'});
       await task.finish({keep: []});
     `);

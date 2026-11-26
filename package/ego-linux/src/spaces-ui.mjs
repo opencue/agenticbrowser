@@ -723,9 +723,12 @@ async function act(path, method, body) {
     } else {
       note.textContent = "";
     }
+    // A refresh started before the POST can still contain the old request.
+    await refreshInFlight;
     await refresh();
   } catch (error) {
     if (error.status === 409 || error.status === 410) {
+      await refreshInFlight;
       await refresh();
       note.textContent = error.status === 409
         ? "Already answered. Reloaded the winning response."
