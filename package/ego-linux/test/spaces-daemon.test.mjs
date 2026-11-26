@@ -78,3 +78,34 @@ test("the Spaces health handshake identifies its build and authenticates shutdow
     server.close();
   }
 });
+
+test("the daemon only opens the Spaces panel on an authenticated request", async () => {
+  let opens = 0;
+  const server = await startSpacesServer(fakeShim(), {
+    shutdownToken: "secret-under-test",
+    onOpen: async () => {
+      opens += 1;
+    },
+  });
+  const url = `http://127.0.0.1:${server.port}/api/open`;
+  const headers = { "x-ego-daemon-token": "secret-under-test" };
+  try {
+    assert.equal(opens, 0);
+    assert.equal((await fetch(url, { method: "POST" })).status, 403);
+    assert.equal(
+      (
+        await fetch(url, {
+          method: "POST",
+          headers: { ...headers, origin: "https://example.com" },
+        })
+      ).status,
+      403,
+    );
+    assert.equal((await fetch(url, { headers })).status, 404);
+    assert.equal(opens, 0);
+    assert.equal((await fetch(url, { method: "POST", headers })).status, 200);
+    assert.equal(opens, 1);
+  } finally {
+    server.close();
+  }
+});

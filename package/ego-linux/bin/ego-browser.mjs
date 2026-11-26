@@ -90,6 +90,7 @@ Port commands:
                             recognised Next, Vite, and React dev servers
   --open                    open the shared agent browser window
   --spaces                  open the Spaces overview panel
+  --prewarm-spaces          prepare Spaces without opening a window
   --launch [url|file ...]   open each page in a tab of the shared window and
                             raise it; with none, the Spaces overview. The
                             desktop entry uses it, so xdg-open works
@@ -319,7 +320,7 @@ async function openPanelTab(url, shim, { recreate = false } = {}) {
  * the terminal — or any timeout around it — left the panel showing
  * "cannot reach the browser".
  */
-async function runSpacesDaemon() {
+async function runSpacesDaemon({ prewarm = false } = {}) {
   const { startSpacesServer } = await import("../src/spaces-server.mjs");
   // Spaces created from the panel are the user's, not the profile that happened
   // to launch this daemon (see agent-identity.mjs).
@@ -331,16 +332,24 @@ async function runSpacesDaemon() {
     requestShutdown = () => resolve("upgrade");
   });
   const shim = await createEgoShim({ headless: false });
+  let url;
+  let opening;
   const spaces = await startSpacesServer(shim, {
     buildId,
     shutdownToken,
+    onOpen: () =>
+      (opening ??= openPanelTab(url, shim).finally(() => {
+        opening = null;
+      })),
     onShutdown: requestShutdown,
   });
-  const url = spacesPanelUrl(spaces.port, shutdownToken);
+  url = spacesPanelUrl(spaces.port, shutdownToken);
 
-  // A fresh daemon replaces any stale overview tab, then publishes itself.
-  // Publishing afterwards prevents concurrent launchers from racing the tab.
-  const targetId = await openPanelTab(url, shim, { recreate: true });
+  // An ordinary launch opens its panel before publishing, while an opt-in
+  // prewarm publishes a ready server with no visible browser window.
+  const targetId = prewarm
+    ? null
+    : await openPanelTab(url, shim, { recreate: true });
   await writePrivateStateFile(
     SPACES_STATE_FILE,
     JSON.stringify(
@@ -350,6 +359,7 @@ async function runSpacesDaemon() {
         targetId,
         buildId,
         shutdownToken,
+        prewarm,
       },
       null,
       2,
@@ -377,9 +387,7 @@ async function runSpacesDaemon() {
           { timeoutMs: 3000 },
         ));
       } catch {
-        // The browser went away, taking every window — including this panel —
-        // with it. That is a restart, not a decision, so hand off to a fresh
-        // daemon that will reopen the panel against the new browser.
+        // The browser went away, taking every window with it.
         clearInterval(timer);
         resolve("browser-gone");
         return;
@@ -393,6 +401,7 @@ async function runSpacesDaemon() {
         seenPanel = true;
         return;
       }
+      if (prewarm) return;
       // Closing the panel while the browser keeps running is deliberate: stop
       // serving rather than reopening a window the user just dismissed.
       if (seenPanel || Date.now() - started > 20000) {
@@ -418,7 +427,9 @@ async function runSpacesDaemon() {
     // clean up.
   }
 
-  if (outcome === "browser-gone") {
+  // Keep the existing recovery for a normal panel. An opt-in warm daemon
+  // must not restart Chrome behind the user's back after a full browser quit.
+  if (outcome === "browser-gone" && !prewarm) {
     spawn(
       process.execPath,
       [fileURLToPath(import.meta.url), "--spaces-daemon"],
@@ -434,20 +445,24 @@ async function runSpacesDaemon() {
  * Spaces is a normal tab in the shared agent browser. Reusing one browser window
  * avoids a blank backing window plus a separate overview window.
  */
-async function openSpacesUnlocked() {
-  const buildId = await runtimeBuildId();
-  const running = await liveSpacesServer(buildId);
+async function openSpacesUnlocked(prewarm) {
+  const [buildId, running] = await Promise.all([
+    runtimeBuildId(),
+    liveSpacesServer(),
+  ]);
 
   // A running daemon already owns the panel; reconnect and raise its tab.
-  if (running?.current) {
-    const shim = await createEgoShim({ headless: false });
-    try {
-      await openPanelTab(
-        spacesPanelUrl(running.port, running.shutdownToken),
-        shim,
+  if (running?.health.buildId === buildId) {
+    if (prewarm) return 0;
+    const response = await fetch(`http://127.0.0.1:${running.port}/api/open`, {
+      method: "POST",
+      headers: { "x-ego-daemon-token": running.shutdownToken },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      throw new Error(
+        `Spaces daemon refused to open the panel (${response.status})`,
       );
-    } finally {
-      shim.close();
     }
     process.stderr.write(`Spaces panel: http://127.0.0.1:${running.port}/\n`);
     return 0;
@@ -460,7 +475,11 @@ async function openSpacesUnlocked() {
 
   spawn(
     process.execPath,
-    [fileURLToPath(import.meta.url), "--spaces-daemon"],
+    [
+      fileURLToPath(import.meta.url),
+      "--spaces-daemon",
+      ...(prewarm ? ["--prewarm-spaces"] : []),
+    ],
     detachedSpawnOptions(),
   ).unref();
 
@@ -476,15 +495,17 @@ async function openSpacesUnlocked() {
     return 1;
   }
 
-  process.stderr.write(`Spaces panel: http://127.0.0.1:${current.port}/\n`);
+  if (!prewarm) {
+    process.stderr.write(`Spaces panel: http://127.0.0.1:${current.port}/\n`);
+  }
   return 0;
 }
 
-async function openSpaces() {
+async function withSpacesLaunchLock(action) {
   await ensurePrivateStateDir();
   const release = await acquireLaunchLock(SPACES_LAUNCH_LOCK);
   try {
-    return await openSpacesUnlocked();
+    return await action();
   } finally {
     await release();
   }
@@ -608,7 +629,23 @@ async function main() {
   // The skill documents `ego-browser nodejs <<'EOF'`; accept it as a no-op prefix.
   if (argv[0] === "nodejs") argv.shift();
 
-  // Every CLI use is an opportunity to reap old screenshots, failure reports,
+  if (argv[0] === "--spaces-daemon") {
+    return runSpacesDaemon({ prewarm: argv[1] === "--prewarm-spaces" });
+  }
+  const launchUrls =
+    argv[0] === "--launch" ? launchTargets(argv.slice(1)) : null;
+  if (
+    argv[0] === "--spaces" ||
+    argv[0] === "--prewarm-spaces" ||
+    launchUrls?.length === 0
+  ) {
+    // The temp-directory sweep should not delay showing the desktop window.
+    return withSpacesLaunchLock(() =>
+      openSpacesUnlocked(argv[0] === "--prewarm-spaces"),
+    ).finally(() => cleanupExpiredArtifacts().catch(() => {}));
+  }
+
+  // CLI use is an opportunity to reap old screenshots, failure reports,
   // and completed download directories without a resident cleanup process.
   await cleanupExpiredArtifacts().catch(() => {});
 
@@ -683,7 +720,11 @@ async function main() {
     });
   }
   if (argv[0] === "--stop") {
-    const stopped = await stopBrowser();
+    const stopped = await withSpacesLaunchLock(async () => {
+      const spaces = await liveSpacesServer();
+      if (spaces?.prewarm) await stopSpacesDaemon(spaces);
+      return stopBrowser();
+    });
     process.stdout.write(
       stopped
         ? "backing browser stopped; the next run launches a fresh one\n"
@@ -697,17 +738,7 @@ async function main() {
   if (argv[0] === "--prune-spaces") {
     return pruneSpaces();
   }
-  if (argv[0] === "--spaces") {
-    return openSpaces();
-  }
-  if (argv[0] === "--launch") {
-    const urls = launchTargets(argv.slice(1));
-    if (!urls.length) return openSpaces();
-    return openPages(urls);
-  }
-  if (argv[0] === "--spaces-daemon") {
-    return runSpacesDaemon();
-  }
+  if (launchUrls) return openPages(launchUrls);
   if (argv[0] === "--install-desktop-entry") {
     const { entryPath, iconPath } = await installDesktopEntry();
     process.stdout.write(

@@ -387,7 +387,12 @@ export async function startSpacesServer(shim, options = {}) {
   const { ego, cdp } = shim;
   const collaborationStore =
     options.collaborationStore ?? shim.collaborationStore ?? null;
-  const { buildId = null, shutdownToken = null, onShutdown = null } = options;
+  const {
+    buildId = null,
+    shutdownToken = null,
+    onOpen = null,
+    onShutdown = null,
+  } = options;
   if (typeof shutdownToken !== "string" || shutdownToken.length === 0) {
     throw new Error("Spaces server requires a non-empty daemon token");
   }
@@ -472,6 +477,12 @@ export async function startSpacesServer(shim, options = {}) {
     if (request.method === "POST" && url.pathname === "/api/shutdown") {
       json(response, 202, { stopping: true });
       queueMicrotask(() => onShutdown?.());
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/open" && onOpen) {
+      await onOpen();
+      json(response, 200, { opened: true });
       return;
     }
 
