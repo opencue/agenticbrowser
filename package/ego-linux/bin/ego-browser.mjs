@@ -345,7 +345,7 @@ async function runSpacesDaemon({ prewarm = false } = {}) {
   const shutdownToken = randomBytes(24).toString("hex");
   let requestShutdown;
   const shutdown = new Promise((resolve) => {
-    requestShutdown = () => resolve("upgrade");
+    requestShutdown = resolve;
   });
   const shim = await createEgoShim({ headless: false });
   let url;
@@ -383,8 +383,8 @@ async function runSpacesDaemon({ prewarm = false } = {}) {
   );
 
   const signal = new Promise((resolve) => {
-    process.once("SIGINT", () => resolve("signal"));
-    process.once("SIGTERM", () => resolve("signal"));
+    process.once("SIGINT", resolve);
+    process.once("SIGTERM", resolve);
   });
 
   let timer;
@@ -402,10 +402,12 @@ async function runSpacesDaemon({ prewarm = false } = {}) {
           undefined,
           { timeoutMs: 3000 },
         ));
-      } catch {
-        // The browser went away, taking every window with it.
+      } catch (error) {
+        // A slow browser is still usable. If the connection is gone, stop
+        // serving without reopening a window behind the user's back.
+        if (error?.code === "EGO_CDP_TIMEOUT") return;
         clearInterval(timer);
-        resolve("browser-gone");
+        resolve();
         return;
       }
 
@@ -422,11 +424,11 @@ async function runSpacesDaemon({ prewarm = false } = {}) {
       // serving rather than reopening a window the user just dismissed.
       if (seenPanel || Date.now() - started > 20000) {
         clearInterval(timer);
-        resolve("panel-closed");
+        resolve();
       }
     }, 2500);
   });
-  const outcome = await Promise.race([shutdown, signal, browserOrPanel]);
+  await Promise.race([shutdown, signal, browserOrPanel]);
   clearInterval(timer);
 
   spaces.close();
@@ -443,15 +445,6 @@ async function runSpacesDaemon({ prewarm = false } = {}) {
     // clean up.
   }
 
-  // Keep the existing recovery for a normal panel. An opt-in warm daemon
-  // must not restart Chrome behind the user's back after a full browser quit.
-  if (outcome === "browser-gone" && !prewarm) {
-    spawn(
-      process.execPath,
-      [fileURLToPath(import.meta.url), "--spaces-daemon"],
-      detachedSpawnOptions(),
-    ).unref();
-  }
   return 0;
 }
 
