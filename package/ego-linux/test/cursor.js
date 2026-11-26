@@ -4,6 +4,8 @@ const page = task.page("p1");
 const HOST = "document.getElementById('ego-agent-cursor-overlay')";
 const SHADOW = `${HOST}.__egoShadow`;
 const probe = (expression) => page.evaluate(expression);
+const trailText = () =>
+  probe(`(${HOST}.__egoLog || []).map(e => e.text).join(' | ')`);
 
 await page.goto(fixture);
 await page.waitForLoadState();
@@ -47,6 +49,14 @@ console.log(
   "5. click still landed:   " +
     (await probe("document.getElementById('count').textContent")),
 );
+
+// Read this transition before later actions can evict it from the short trail.
+let clickTrail = await trailText();
+for (let attempt = 0; !clickTrail && attempt < 40; attempt += 1) {
+  await page.waitForTimeout(50);
+  clickTrail = await trailText();
+}
+console.log("5a. click trail:        " + clickTrail);
 
 const snap6 = await snapshotRaw({ scope: "full_page" });
 console.log(
@@ -192,10 +202,7 @@ console.log("25. input ends the read: " + sweepDone);
 
 // The trail the Spaces panel reads: transitions, not events, so a burst of
 // keystrokes is one entry rather than sixty.
-const trail = await probe(`(() => {
-  const log = document.getElementById('ego-agent-cursor-overlay').__egoLog || [];
-  return log.map(e => e.text).join(' | ');
-})()`);
+const trail = await trailText();
 console.log("26. trail:               " + trail);
 
 // The cursor marks the element it is working on, so a long scroll carries it

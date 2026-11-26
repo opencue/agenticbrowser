@@ -1,7 +1,7 @@
 import { after, before, describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,6 +46,20 @@ function alive(child) {
 
 /** Settle for `ms` so a delivered SIGTERM has actually landed. */
 const settle = (ms = 300) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForTitle(child, title) {
+  for (let i = 0; i < 100; i += 1) {
+    const argv = await readFile(`/proc/${child.pid}/cmdline`, "utf8").catch(
+      (error) => {
+        if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
+        return "";
+      },
+    );
+    if (argv.split("\0")[0] === title || !alive(child)) return;
+    await settle(20);
+  }
+  assert.fail("the stand-in did not rewrite its process title");
+}
 
 before(async () => {
   await mkdir(SANDBOX, { recursive: true });
@@ -138,14 +152,14 @@ describe("reapOrphanedBrowsers", () => {
 
   it("reaps Chromium's one-argument rewritten process title", async () => {
     const gone = join(SANDBOX, "rewritten-deleted-profile");
+    const title = [
+      process.execPath,
+      "--class=ego-lite-linux",
+      `--user-data-dir=${gone}`,
+    ];
     for (let attempt = 0; ; attempt += 1) {
-      const orphan = await standIn(
-        "--rewrite-title",
-        process.execPath,
-        "--class=ego-lite-linux",
-        `--user-data-dir=${gone}`,
-      );
-      await settle(50);
+      const orphan = await standIn("--rewrite-title", ...title);
+      await waitForTitle(orphan, title.join(" "));
 
       const reaped = await reapOrphanedBrowsers();
       await settle();
