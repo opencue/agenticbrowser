@@ -1,6 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  rm,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 
+import { APP_DIR } from "../src/platform.mjs";
 import { runtimeBuildId } from "../src/runtime-version.mjs";
 import { startSpacesServer } from "../src/spaces-server.mjs";
 
@@ -27,6 +42,65 @@ test("the runtime build id is stable for the loaded source tree", async () => {
   const second = await runtimeBuildId();
   assert.match(first, /^[a-f0-9]{16}$/);
   assert.equal(second, first);
+});
+
+test("the launcher opens a matching daemon and shuts down a stale one first", async () => {
+  const sandbox = await mkdtemp(join(tmpdir(), "ego-spaces-launch-test-"));
+  const stateDir = join(sandbox, APP_DIR);
+  const expired = join(sandbox, "ego-browser-shot-1-1-1.png");
+  const token = "secret-under-test";
+  let buildId = await runtimeBuildId();
+  const requests = [];
+  const server = createServer((request, response) => {
+    if (request.headers["x-ego-daemon-token"] !== token) {
+      response.writeHead(403).end();
+      return;
+    }
+    requests.push(`${request.method} ${request.url}`);
+    if (request.url === "/api/health")
+      response.end(JSON.stringify({ ok: true, buildId }));
+    else if (request.url === "/api/open") response.end();
+    // Refuse shutdown so we can check the upgrade order without starting Chrome.
+    else response.writeHead(503).end();
+  });
+  const bin = fileURLToPath(new URL("../bin/ego-browser.mjs", import.meta.url));
+  const launch = () =>
+    promisify(execFile)(process.execPath, [bin, "--launch"], {
+      timeout: 7000,
+      env: {
+        ...process.env,
+        XDG_STATE_HOME: sandbox,
+        EGO_LINUX_CDP_URL: "ws://127.0.0.1:1/spaces-launch-must-not-connect",
+        EGO_BROWSER_ARTIFACT_TTL_HOURS: "1",
+        TMPDIR: sandbox,
+        TMP: sandbox,
+        TEMP: sandbox,
+      },
+    });
+  try {
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    await mkdir(stateDir);
+    await writeFile(expired, "");
+    await utimes(expired, 1, 1);
+    await writeFile(
+      join(stateDir, "spaces-server.json"),
+      JSON.stringify({
+        port: server.address().port,
+        shutdownToken: token,
+      }),
+    );
+    const { stderr } = await launch();
+    assert.match(stderr, /Spaces panel:/);
+    await access(expired); // The desktop launch must not sweep temporary files.
+    assert.deepEqual(requests.splice(0), ["GET /api/health", "POST /api/open"]);
+
+    buildId = "stale-build";
+    await assert.rejects(launch(), /refused restart \(503\)/);
+    assert.deepEqual(requests, ["GET /api/health", "POST /api/shutdown"]);
+  } finally {
+    server.close();
+    await rm(sandbox, { recursive: true, force: true });
+  }
 });
 
 test("the Spaces health handshake identifies its build and authenticates shutdown", async () => {

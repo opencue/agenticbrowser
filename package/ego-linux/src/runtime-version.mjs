@@ -32,11 +32,13 @@ export function runtimeBuildId() {
         ...(await sourceFiles(join(PACKAGE_ROOT, "bin"))),
         ...(await sourceFiles(join(PACKAGE_ROOT, "src"))),
       ].sort();
+      // Read independently, but hash in the same deterministic path order.
+      const contents = await Promise.all(files.map((file) => readFile(file)));
       const hash = createHash("sha256");
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         hash.update(relative(PACKAGE_ROOT, file));
         hash.update("\0");
-        hash.update(await readFile(file));
+        hash.update(contents[index]);
         hash.update("\0");
       }
       return hash.digest("hex").slice(0, 16);
