@@ -52,7 +52,11 @@ console.log(
 
 // Read this transition before later actions can evict it from the short trail.
 let clickTrail = await trailText();
-for (let attempt = 0; !clickTrail && attempt < 40; attempt += 1) {
+for (
+  let attempt = 0;
+  !clickTrail.includes("clicked ") && attempt < 40;
+  attempt += 1
+) {
   await page.waitForTimeout(50);
   clickTrail = await trailText();
 }

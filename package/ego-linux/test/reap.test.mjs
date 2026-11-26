@@ -159,7 +159,10 @@ describe("reapOrphanedBrowsers", () => {
     ];
     for (let attempt = 0; ; attempt += 1) {
       const orphan = await standIn("--rewrite-title", ...title);
-      await waitForTitle(orphan, title.join(" "));
+      // Windows' process table keeps the original command line, not the title.
+      if (process.platform === "linux") {
+        await waitForTitle(orphan, title.join(" "));
+      }
 
       const reaped = await reapOrphanedBrowsers();
       await settle();
