@@ -207,11 +207,12 @@ Runtime control state is private even under a permissive shell umask:
 `~/.local/state/ego-lite-linux` is forced to mode `0700`, while `browser.json`,
 `task-spaces.json`, and `spaces-server.json` are forced to `0600`.
 
-Each CLI invocation also removes expired Ego-generated screenshots, failure
-artifacts, and download directories from the OS temp directory. The default TTL
-is 24 hours. Set `EGO_BROWSER_ARTIFACT_TTL_HOURS` to another non-negative number;
-`0` disables cleanup. Explicit screenshot paths, saved downloads, and custom
-failure-artifact directories are never included in this automatic sweep.
+CLI invocations remove expired Ego-generated screenshots, failure artifacts,
+and download directories from the OS temp directory. The `--launch` and
+`--spaces` commands skip the sweep so it doesn't compete with drawing the
+window. The default TTL is 24 hours. Set `EGO_BROWSER_ARTIFACT_TTL_HOURS` to
+another non-negative number; `0` disables cleanup. Explicit screenshot paths,
+saved downloads, and custom failure-artifact directories are never swept.
 
 Upstream draws this inside the browser's own chrome, replacing the tab strip.
 That is not reachable from outside a Chromium fork — Chrome 137 removed the

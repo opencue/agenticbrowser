@@ -12,14 +12,13 @@ import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { cp, readFile, rm } from "node:fs/promises";
+import { request } from "node:http";
 import { join } from "node:path";
+import { text } from "node:stream/consumers";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { browserStatus, stopBrowser } from "../src/chrome.mjs";
 import { agentIdentity } from "../src/agent-identity.mjs";
 import { cleanupExpiredArtifacts } from "../src/artifact-retention.mjs";
-import { installDesktopEntry, launchTargets } from "../src/desktop.mjs";
-import { runDoctor } from "../src/doctor.mjs";
 import { acquireLaunchLock } from "../src/launch-lock.mjs";
 import { availableMemoryMb, isLowMemory } from "../src/low-memory.mjs";
 import {
@@ -125,6 +124,7 @@ async function importChromeProfile() {
     process.stderr.write("no Chrome/Chromium profile found to import\n");
     return 1;
   }
+  const { browserStatus } = await import("../src/chrome.mjs");
   const status = await browserStatus();
   if (status.running) {
     process.stderr.write(
@@ -145,18 +145,41 @@ async function importChromeProfile() {
   return 0;
 }
 
+// The desktop launcher makes only short local requests. node:http avoids
+// initializing fetch's HTTP stack on every click and doesn't follow redirects.
+async function spacesRequest(state, path, method, timeoutMs) {
+  const response = await new Promise((resolve, reject) => {
+    const pending = request(
+      {
+        hostname: "127.0.0.1",
+        port: state.port,
+        path,
+        method,
+        headers: state.shutdownToken
+          ? { "x-ego-daemon-token": state.shutdownToken }
+          : {},
+        signal: AbortSignal.timeout(timeoutMs),
+      },
+      resolve,
+    );
+    pending.on("error", reject);
+    pending.end();
+  });
+  const status = response.statusCode;
+  const body = await text(response);
+  return { status, body, ok: status >= 200 && status < 300 };
+}
+
 /** Is a Spaces server already listening on the recorded port? */
 async function liveSpacesServer(expectedBuildId = null) {
   try {
     const state = JSON.parse(await readFile(SPACES_STATE_FILE, "utf8"));
-    const response = await fetch(`http://127.0.0.1:${state.port}/api/health`, {
-      headers: state.shutdownToken
-        ? { "x-ego-daemon-token": state.shutdownToken }
-        : {},
-      signal: AbortSignal.timeout(1500),
-    });
+    if (!Number.isInteger(state.port) || state.port < 1 || state.port > 65535)
+      return null;
+    const response = await spacesRequest(state, "/api/health", "GET", 1500);
     if (!response.ok) return null;
-    const health = await response.json();
+    const health = JSON.parse(response.body);
+    if (health?.ok !== true) return null;
     return {
       ...state,
       health,
@@ -170,14 +193,7 @@ async function liveSpacesServer(expectedBuildId = null) {
 /** Stop only the daemon that answered the state file's verified health probe. */
 async function stopSpacesDaemon(state) {
   if (state.shutdownToken) {
-    const response = await fetch(
-      `http://127.0.0.1:${state.port}/api/shutdown`,
-      {
-        method: "POST",
-        headers: { "x-ego-daemon-token": state.shutdownToken },
-        signal: AbortSignal.timeout(2000),
-      },
-    );
+    const response = await spacesRequest(state, "/api/shutdown", "POST", 2000);
     if (!response.ok) {
       throw new Error(`Spaces daemon refused restart (${response.status})`);
     }
@@ -454,11 +470,7 @@ async function openSpacesUnlocked(prewarm) {
   // A running daemon already owns the panel; reconnect and raise its tab.
   if (running?.health.buildId === buildId) {
     if (prewarm) return 0;
-    const response = await fetch(`http://127.0.0.1:${running.port}/api/open`, {
-      method: "POST",
-      headers: { "x-ego-daemon-token": running.shutdownToken },
-      signal: AbortSignal.timeout(5000),
-    });
+    const response = await spacesRequest(running, "/api/open", "POST", 5000);
     if (!response.ok) {
       throw new Error(
         `Spaces daemon refused to open the panel (${response.status})`,
@@ -468,7 +480,7 @@ async function openSpacesUnlocked(prewarm) {
     return 0;
   }
 
-  if (running && !running.current) {
+  if (running) {
     process.stderr.write("updating the Spaces daemon to the current build\n");
     await stopSpacesDaemon(running);
   }
@@ -523,6 +535,7 @@ async function pruneSpaces() {
   // Maintenance must never be the thing that opens a browser. Forcing a headed
   // launch here meant running the sweep on a quiet machine started a visible
   // window — producing exactly the empty windows it exists to clear.
+  const { browserStatus } = await import("../src/chrome.mjs");
   const status = await browserStatus();
   if (!status.running) {
     process.stdout.write("no backing browser is running; nothing to prune\n");
@@ -583,6 +596,7 @@ async function openPages(urls) {
   // Launched from a desktop icon there is no terminal to read an error in, so
   // this has to succeed rather than explain. A headless browser has no window
   // to show, so trade it for a visible one.
+  const { browserStatus, stopBrowser } = await import("../src/chrome.mjs");
   const status = await browserStatus();
   if (status.running && status.headless) {
     process.stderr.write("replacing the headless browser with a visible one\n");
@@ -632,18 +646,24 @@ async function main() {
   if (argv[0] === "--spaces-daemon") {
     return runSpacesDaemon({ prewarm: argv[1] === "--prewarm-spaces" });
   }
-  const launchUrls =
-    argv[0] === "--launch" ? launchTargets(argv.slice(1)) : null;
-  if (
-    argv[0] === "--spaces" ||
-    argv[0] === "--prewarm-spaces" ||
-    launchUrls?.length === 0
-  ) {
-    // The temp-directory sweep should not delay showing the desktop window.
-    return withSpacesLaunchLock(() =>
-      openSpacesUnlocked(argv[0] === "--prewarm-spaces"),
-    ).finally(() => cleanupExpiredArtifacts().catch(() => {}));
+  let launchUrls = null;
+  if (argv[0] === "--launch") {
+    launchUrls = [];
+    if (argv.length > 1) {
+      const { launchTargets } = await import("../src/desktop.mjs");
+      launchUrls = launchTargets(argv.slice(1));
+    }
   }
+  if (argv[0] === "--prewarm-spaces") {
+    return withSpacesLaunchLock(() => openSpacesUnlocked(true)).finally(() =>
+      cleanupExpiredArtifacts().catch(() => {}),
+    );
+  }
+  // Even a sweep after creating the window competes with its first render.
+  if (argv[0] === "--spaces" || launchUrls?.length === 0) {
+    return withSpacesLaunchLock(() => openSpacesUnlocked(false));
+  }
+  if (launchUrls) return openPages(launchUrls);
 
   // CLI use is an opportunity to reap old screenshots, failure reports,
   // and completed download directories without a resident cleanup process.
@@ -657,6 +677,7 @@ async function main() {
     process.stdout.write(await readSkillGuide());
     return 0;
   }
+  const { browserStatus, stopBrowser } = await import("../src/chrome.mjs");
   if (argv[0] === "--status") {
     process.stdout.write(`${JSON.stringify(await browserStatus(), null, 2)}\n`);
     return 0;
@@ -714,6 +735,7 @@ async function main() {
     return !spaceError && servers.remaining.length === 0 ? 0 : 1;
   }
   if (argv[0] === "--doctor") {
+    const { runDoctor } = await import("../src/doctor.mjs");
     return runDoctor({
       json: argv.includes("--json") || argv.includes("-j"),
       harnessPath: fileURLToPath(HARNESS_V2),
@@ -738,8 +760,8 @@ async function main() {
   if (argv[0] === "--prune-spaces") {
     return pruneSpaces();
   }
-  if (launchUrls) return openPages(launchUrls);
   if (argv[0] === "--install-desktop-entry") {
+    const { installDesktopEntry } = await import("../src/desktop.mjs");
     const { entryPath, iconPath } = await installDesktopEntry();
     process.stdout.write(
       iconPath
