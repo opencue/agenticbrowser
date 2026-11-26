@@ -710,31 +710,30 @@ export async function ensureBrowser({
     return { wsUrl: process.env.EGO_LINUX_CDP_URL, launched: false };
   }
 
-  async function runningBrowser() {
+  async function recordedBrowser() {
     const state = await readBrowserState();
-    if (state?.port && state?.pid) {
-      const argv = await processArgv(state.pid);
-      if (!argv || !isReusableProfileBrowser(argv)) return profileBrowser();
-      const wsUrl = await probe(state.port);
-      if (wsUrl) return { ...state, wsUrl, launched: false };
-    }
-    const discovered = await profileBrowser();
-    if (!discovered) return null;
-    await writeBrowserState(discovered);
-    return discovered;
+    if (!state?.port || !state?.pid) return null;
+    const argv = await processArgv(state.pid);
+    if (!argv || !isReusableProfileBrowser(argv)) return null;
+    const wsUrl = await probe(state.port);
+    return wsUrl ? { ...state, wsUrl, launched: false } : null;
   }
 
-  const existing = await runningBrowser();
+  const existing = await recordedBrowser();
   if (existing) return existing;
 
-  // Several agents commonly start together, and some redirect their state root
-  // while retaining the shared browser profile. The lock is therefore keyed by
-  // PROFILE_DIR, not STATE_DIR. Re-checking also discovers a live profile owner
-  // whose browser.json lives under another state root.
+  // Recheck state under the profile lock in case another agent just launched.
+  // Only scan processes here: discovery must also find a profile owner whose
+  // browser.json is in a different state root, but doing it twice slows startup.
   const release = await acquireDirectoryLock(BROWSER_LAUNCH_LOCK);
   try {
-    const winner = await runningBrowser();
+    const winner = await recordedBrowser();
     if (winner) return winner;
+    const discovered = await profileBrowser();
+    if (discovered) {
+      await writeBrowserState(discovered);
+      return discovered;
+    }
     return await launch({ headless, lowMemory });
   } finally {
     await release();
